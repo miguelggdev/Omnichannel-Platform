@@ -1,0 +1,64 @@
+{
+  "sprint": 4,
+  "name": "Webhook Receiver & MessagingProvider",
+  "contracts": [
+    {
+      "file": "app/models/contact.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "exports": ["Contact"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/models/conversation.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "exports": ["Conversation", "ConversationStatus"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/models/message.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "exports": ["Message", "MessageDirection"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/schemas/message.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "exports": ["NormalizedMessage", "MessageCreate", "MessageResponse"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/schemas/contact.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "exports": ["ContactCreate", "ContactResponse"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/schemas/conversation.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "exports": ["ConversationCreate", "ConversationResponse"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/services/messaging/base.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "description": "ABC para proveedores de mensajería",
+      "exports": ["MessagingProvider"],
+      "stability": "pending"
+    }
+  ],
+  "notes": "Dev A define los modelos y el ABC del provider. Dev B implementa YCloud, webhook endpoint y Celery task."
+}

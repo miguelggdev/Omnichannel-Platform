@@ -1,0 +1,88 @@
+{
+  "sprint": 3,
+  "name": "FastAPI Core & Auth",
+  "contracts": [
+    {
+      "file": "app/models/base.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "description": "TenantBaseModel — clase base con client_id para todos los modelos",
+      "exports": ["TenantBaseModel"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/models/client.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "description": "Modelo SQLAlchemy del tenant (Client)",
+      "exports": ["Client"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/models/user.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "description": "Modelo SQLAlchemy de usuarios del tenant",
+      "exports": ["User", "UserRole"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/schemas/user.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "description": "Schemas Pydantic v2 para User",
+      "exports": ["UserCreate", "UserResponse", "UserUpdate"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/core/config.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "description": "Settings con Pydantic BaseSettings",
+      "exports": ["Settings", "get_settings"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/core/database.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "description": "Async engine, sessionmaker, get_session dependency",
+      "exports": ["engine", "async_session", "get_session"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/core/security.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "description": "JWT decode, password hashing, token creation",
+      "exports": ["verify_token", "create_access_token", "hash_password", "verify_password"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/core/dependencies.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "description": "FastAPI dependencies para DI",
+      "exports": ["get_current_user", "get_tenant_session", "require_role"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/core/exceptions.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "description": "AppException y exception handlers",
+      "exports": ["AppException"],
+      "stability": "pending"
+    }
+  ],
+  "notes": "Sprint 3 es el más importante en contratos: define toda la base que Dev B consumirá en sprints 4-8."
+}

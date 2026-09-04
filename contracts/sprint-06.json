@@ -1,0 +1,33 @@
+{
+  "sprint": 6,
+  "name": "LangGraph — Grafo de Agentes",
+  "contracts": [
+    {
+      "file": "app/agents/state.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "description": "ConversationState TypedDict para LangGraph",
+      "exports": ["ConversationState"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/agents/graph.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "description": "build_conversation_graph() — definición del grafo",
+      "exports": ["build_conversation_graph"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/models/agent_config.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "exports": ["AgentConfig"],
+      "stability": "pending"
+    }
+  ],
+  "notes": "Dev A define state y grafo. Dev B implementa los 7 nodos y tools."
+}

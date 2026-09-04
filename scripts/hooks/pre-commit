@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# =============================================================================
+# PRE-COMMIT HOOK — Constraint Harness
+# =============================================================================
+# Detecta violaciones de las reglas absolutas de CLAUDE.md ANTES del commit.
+# Instalar: scripts/install-hooks.sh
+# =============================================================================
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+ERRORS=0
+
+fail() { echo -e "${RED}BLOCKED${NC} $1"; ERRORS=$((ERRORS + 1)); }
+warn() { echo -e "${YELLOW}WARNING${NC} $1"; }
+pass() { echo -e "${GREEN}OK${NC} $1"; }
+
+# Obtener archivos staged (solo .py)
+STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM | grep '\.py$' || true)
+# Obtener todos los archivos staged
+STAGED_ALL=$(git diff --cached --name-only --diff-filter=ACM || true)
+
+if [ -z "$STAGED_ALL" ]; then
+    exit 0
+fi
+
+echo "── Pre-commit: Constraint Harness ──"
+
+# ─── CHECK 1: SET sin LOCAL (Regla Absoluta #1) ─────────────────────────────
+# Busca "SET app.current" sin "LOCAL" — violación de RLS
+if [ -n "$STAGED_PY" ]; then
+    SET_VIOLATIONS=$(echo "$STAGED_PY" | xargs grep -n "SET app\." 2>/dev/null | grep -v "SET LOCAL" | grep -v "^#" | grep -v "# " || true)
+    if [ -n "$SET_VIOLATIONS" ]; then
+        fail "SET sin LOCAL detectado (usar SET LOCAL para pgBouncer compatibility):"
+        echo "$SET_VIOLATIONS" | head -5
+    else
+        pass "No hay SET sin LOCAL"
+    fi
+fi
+
+# ─── CHECK 2: Secretos hardcodeados ─────────────────────────────────────────
+SECRET_PATTERNS=(
+    'sk-[a-zA-Z0-9]{20,}'          # OpenAI API keys
+    'password\s*=\s*["\x27][^"\x27]{8,}'  # Passwords en strings (no variables)
+    'secret\s*=\s*["\x27][^"\x27]{8,}'    # Secrets en strings
+    'PRIVATE.KEY'                    # Private keys
+    'BEGIN RSA'                      # RSA keys
+    'BEGIN OPENSSH'                  # SSH keys
+)
+
+if [ -n "$STAGED_ALL" ]; then
+    for pattern in "${SECRET_PATTERNS[@]}"; do
+        FOUND=$(echo "$STAGED_ALL" | xargs grep -lnE "$pattern" 2>/dev/null | grep -v '.env.example' | grep -v 'test' | grep -v 'CLAUDE.md' | grep -v 'METHODOLOGY.md' | grep -v 'MEMORY.md' || true)
+        if [ -n "$FOUND" ]; then
+            fail "Posible secreto hardcodeado ($pattern):"
+            echo "$FOUND" | head -3
+        fi
+    done
+fi
+
+# ─── CHECK 3: Sync I/O en contexto async (Regla Absoluta #4) ────────────────
+if [ -n "$STAGED_PY" ]; then
+    # Busca funciones async que usen open(), requests., time.sleep()
+    SYNC_IN_ASYNC=$(echo "$STAGED_PY" | xargs grep -n "^\s*\(open(\|requests\.\|time\.sleep\|urllib\.\|subprocess\.\)" 2>/dev/null | grep -v "^#" | grep -v "aiofiles" | grep -v "asyncio" || true)
+    if [ -n "$SYNC_IN_ASYNC" ]; then
+        warn "Posible sync I/O detectado (verificar si está en contexto async):"
+        echo "$SYNC_IN_ASYNC" | head -5
+    fi
+fi
+
+# ─── CHECK 4: Archivos .env commiteados ─────────────────────────────────────
+ENV_FILES=$(echo "$STAGED_ALL" | grep '^\.env$' || true)
+if [ -n "$ENV_FILES" ]; then
+    fail ".env está staged — NUNCA commitear archivos .env"
+fi
+
+# ─── CHECK 5: Tracebacks expuestos (Regla Absoluta #3) ─────────────────────
+if [ -n "$STAGED_PY" ]; then
+    TRACEBACK_EXPOSURE=$(echo "$STAGED_PY" | xargs grep -n "traceback\.format_exc\|traceback\.print_exc\|raise Exception(" 2>/dev/null | grep -v "test" | grep -v "logging" || true)
+    if [ -n "$TRACEBACK_EXPOSURE" ]; then
+        warn "Posible traceback expuesto (usar AppException):"
+        echo "$TRACEBACK_EXPOSURE" | head -5
+    fi
+fi
+
+# ─── CHECK 6: Imports de modelos sin type hints ─────────────────────────────
+if [ -n "$STAGED_PY" ]; then
+    # Buscar funciones sin type hints (def sin ->)
+    NO_RETURN_TYPE=$(echo "$STAGED_PY" | xargs grep -n "^\s*def \|^\s*async def " 2>/dev/null | grep -v "\->" | grep -v "__init__\|__repr__\|__str__\|__hash__\|__eq__" | grep -v "test_\|fixture" || true)
+    if [ -n "$NO_RETURN_TYPE" ]; then
+        warn "Funciones sin return type hint detectadas:"
+        echo "$NO_RETURN_TYPE" | head -5
+    fi
+fi
+
+# ─── CHECK 7: Lint rápido ───────────────────────────────────────────────────
+if command -v ruff >/dev/null 2>&1 && [ -n "$STAGED_PY" ]; then
+    LINT_RESULT=$(echo "$STAGED_PY" | xargs ruff check --select E,W,F --no-fix 2>/dev/null || true)
+    if [ -n "$LINT_RESULT" ]; then
+        warn "Ruff encontró issues (no bloqueante en pre-commit):"
+        echo "$LINT_RESULT" | head -10
+    else
+        pass "Ruff check limpio"
+    fi
+fi
+
+# ─── CHECK 8: PROGRESS.md actualizado ───────────────────────────────────────
+PROGRESS_CHANGED=$(echo "$STAGED_ALL" | grep "PROGRESS.md" || true)
+PY_CHANGED=$(echo "$STAGED_PY" | wc -l)
+if [ "$PY_CHANGED" -gt 0 ] && [ -z "$PROGRESS_CHANGED" ]; then
+    warn "Archivos .py cambiados pero PROGRESS.md no actualizado"
+fi
+
+# ─── Resultado ───────────────────────────────────────────────────────────────
+echo "──────────────────────────────────"
+if [ "$ERRORS" -gt 0 ]; then
+    echo -e "${RED}COMMIT BLOQUEADO: $ERRORS violaciones de reglas absolutas${NC}"
+    echo "Corrige los errores y vuelve a intentar."
+    exit 1
+else
+    echo -e "${GREEN}Pre-commit: OK${NC}"
+    exit 0
+fi

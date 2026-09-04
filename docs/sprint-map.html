@@ -1,0 +1,839 @@
+<title>Omnichannel Sprint Map</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #F4F6FA;
+  --surface: #FFFFFF;
+  --text: #1A2332;
+  --text-2: #5A6577;
+  --text-3: #8E99A8;
+  --border: #DFE3EA;
+  --dev-a: #1A73A7;
+  --dev-a-bg: #E6F2FA;
+  --dev-a-border: #B3D7EE;
+  --dev-b: #7B4FBF;
+  --dev-b-bg: #F0EAFA;
+  --dev-b-border: #C9B5E8;
+  --done: #0F8A5F;
+  --done-bg: #E3F5ED;
+  --active: #B8700F;
+  --active-bg: #FEF3E0;
+  --pending: #8E99A8;
+  --pending-bg: #EEF0F4;
+  --mvp: #C03030;
+  --mvp-bg: #FDE8E8;
+  --phase-1: #1A73A7;
+  --phase-2: #7B4FBF;
+  --phase-3: #B8700F;
+  --sans: 'Outfit', system-ui, -apple-system, sans-serif;
+  --mono: 'IBM Plex Mono', 'Menlo', monospace;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0C1017;
+    --surface: #161C26;
+    --text: #DDE4EF;
+    --text-2: #8B95A5;
+    --text-3: #5C6576;
+    --border: #272E3A;
+    --dev-a: #4AABE0;
+    --dev-a-bg: #0E2235;
+    --dev-a-border: #1A3D5A;
+    --dev-b: #A98CDE;
+    --dev-b-bg: #1A1230;
+    --dev-b-border: #352660;
+    --done: #3CC98A;
+    --done-bg: #0A2218;
+    --active: #E5A54B;
+    --active-bg: #261C08;
+    --pending: #5C6576;
+    --pending-bg: #1A1E26;
+    --mvp: #EF6B6B;
+    --mvp-bg: #2D1010;
+    --phase-1: #4AABE0;
+    --phase-2: #A98CDE;
+    --phase-3: #E5A54B;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0C1017;
+  --surface: #161C26;
+  --text: #DDE4EF;
+  --text-2: #8B95A5;
+  --text-3: #5C6576;
+  --border: #272E3A;
+  --dev-a: #4AABE0;
+  --dev-a-bg: #0E2235;
+  --dev-a-border: #1A3D5A;
+  --dev-b: #A98CDE;
+  --dev-b-bg: #1A1230;
+  --dev-b-border: #352660;
+  --done: #3CC98A;
+  --done-bg: #0A2218;
+  --active: #E5A54B;
+  --active-bg: #261C08;
+  --pending: #5C6576;
+  --pending-bg: #1A1E26;
+  --mvp: #EF6B6B;
+  --mvp-bg: #2D1010;
+  --phase-1: #4AABE0;
+  --phase-2: #A98CDE;
+  --phase-3: #E5A54B;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1120px; margin: 0 auto; padding: 28px 20px 60px; }
+
+/* ── Header ── */
+.header { margin-bottom: 28px; }
+.header h1 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+  margin-bottom: 4px;
+}
+.header p { color: var(--text-2); font-size: 0.85rem; }
+
+/* ── Stats ── */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 28px;
+}
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.stat-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+.stat-value {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Legend ── */
+.legend {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.78rem;
+  color: var(--text-2);
+}
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ── Timeline ── */
+.timeline-section { margin-bottom: 32px; }
+.timeline-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.timeline-header h2 {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.phase-tag {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+.phase-tag--1 { color: var(--phase-1); background: var(--dev-a-bg); }
+.phase-tag--2 { color: var(--phase-2); background: var(--dev-b-bg); }
+.phase-tag--3 { color: var(--phase-3); background: var(--active-bg); }
+
+.timeline-lanes {
+  display: grid;
+  gap: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.lane {
+  display: grid;
+  align-items: stretch;
+}
+.lane + .lane { border-top: 1px solid var(--border); }
+.lane-label {
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  min-width: 70px;
+  border-right: 1px solid var(--border);
+}
+.lane-label--a { color: var(--dev-a); background: var(--dev-a-bg); }
+.lane-label--b { color: var(--dev-b); background: var(--dev-b-bg); }
+.lane-cells {
+  display: grid;
+  gap: 0;
+}
+.lane-cell {
+  padding: 10px 12px;
+  font-size: 0.73rem;
+  line-height: 1.45;
+  color: var(--text-2);
+  border-right: 1px solid var(--border);
+  min-height: 54px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.lane-cell:last-child { border-right: none; }
+.lane-cell strong {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.sprint-nums {
+  display: grid;
+  gap: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.sprint-num-row {
+  display: grid;
+  align-items: stretch;
+}
+.sprint-num-spacer {
+  min-width: 70px;
+  border-right: 1px solid var(--border);
+}
+.sprint-num-cells { display: grid; gap: 0; }
+.sprint-num-cell {
+  text-align: center;
+  padding: 5px 0;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--text-3);
+  border-right: 1px solid var(--border);
+}
+.sprint-num-cell:last-child { border-right: none; }
+.sprint-num-cell.mvp-cell {
+  color: var(--mvp);
+  font-weight: 600;
+  background: var(--mvp-bg);
+}
+
+/* ── Sprint detail cards ── */
+.sprints-detail { margin-top: 32px; }
+.sprints-detail h2 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+.sprint-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.sprint-card:hover { border-color: var(--text-3); }
+.sprint-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+.sprint-card-header:focus-visible {
+  outline: 2px solid var(--dev-a);
+  outline-offset: -2px;
+}
+.sprint-num {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-3);
+  min-width: 28px;
+}
+.sprint-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  flex: 1;
+}
+.sprint-status {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+.sprint-status--pending { color: var(--pending); background: var(--pending-bg); }
+.sprint-status--active { color: var(--active); background: var(--active-bg); }
+.sprint-status--done { color: var(--done); background: var(--done-bg); }
+.sprint-chevron {
+  color: var(--text-3);
+  transition: transform 0.2s;
+  font-size: 0.8rem;
+}
+.sprint-card.open .sprint-chevron { transform: rotate(90deg); }
+.sprint-card-body {
+  display: none;
+  border-top: 1px solid var(--border);
+  padding: 16px;
+}
+.sprint-card.open .sprint-card-body { display: block; }
+.dev-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.dev-col h4 {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid;
+}
+.dev-col--a h4 { color: var(--dev-a); border-color: var(--dev-a); }
+.dev-col--b h4 { color: var(--dev-b); border-color: var(--dev-b); }
+.dev-task {
+  font-size: 0.78rem;
+  color: var(--text-2);
+  padding: 4px 0;
+  line-height: 1.5;
+}
+.dev-files {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.dev-files span {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin: 2px 4px 2px 0;
+}
+.dev-col--a .dev-files span { background: var(--dev-a-bg); color: var(--dev-a); }
+.dev-col--b .dev-files span { background: var(--dev-b-bg); color: var(--dev-b); }
+.mvp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--mvp);
+  background: var(--mvp-bg);
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+.sprint-dep {
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: var(--pending-bg);
+  border-radius: 4px;
+  font-size: 0.73rem;
+  color: var(--text-2);
+}
+.sprint-dep strong { color: var(--text); }
+
+/* ── Loop Protocol ── */
+.protocol {
+  margin-top: 36px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+}
+.protocol h3 {
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+.protocol-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.protocol-step {
+  padding: 10px 14px;
+  border-radius: 4px;
+  border-left: 3px solid var(--border);
+}
+.protocol-step-num {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: var(--text-3);
+  margin-bottom: 2px;
+}
+.protocol-step-text {
+  font-size: 0.78rem;
+  color: var(--text);
+  font-weight: 500;
+}
+.protocol-step-desc {
+  font-size: 0.7rem;
+  color: var(--text-2);
+  margin-top: 2px;
+}
+.protocol-step--1 { border-color: var(--dev-a); }
+.protocol-step--2 { border-color: var(--dev-b); }
+.protocol-step--3 { border-color: var(--done); }
+.protocol-step--4 { border-color: var(--active); }
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .dev-columns { grid-template-columns: 1fr; }
+  .protocol-steps { grid-template-columns: 1fr; }
+  .lane-label { font-size: 0.65rem; min-width: 50px; padding: 0 8px; }
+  .lane-cell { padding: 8px 8px; font-size: 0.68rem; }
+}
+@media (max-width: 480px) {
+  .stats { grid-template-columns: 1fr 1fr; }
+  .legend { gap: 12px; }
+}
+</style>
+
+<div class="wrap">
+  <header class="header">
+    <h1>Omnichannel Platform &mdash; Sprint Map</h1>
+    <p>Loop Engineering para 2 devs &middot; 14 sprints &middot; 3 fases</p>
+  </header>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-label">Sprints</div>
+      <div class="stat-value">0<span style="color:var(--text-3);font-size:0.85rem">/14</span></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Semanas est.</div>
+      <div class="stat-value" style="color:var(--phase-1)">9-11</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Tablas DB</div>
+      <div class="stat-value">0<span style="color:var(--text-3);font-size:0.85rem">/24</span></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Fase actual</div>
+      <div class="stat-value" style="font-size:1.1rem;color:var(--phase-1)">1 &mdash; MVP</div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:var(--dev-a)"></div>Dev A &mdash; Foundations</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--dev-b)"></div>Dev B &mdash; Integration</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--pending)"></div>Pendiente</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--active)"></div>En progreso</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--done)"></div>Completado</div>
+  </div>
+
+  <!-- Phase 1 Timeline -->
+  <div class="timeline-section">
+    <div class="timeline-header">
+      <h2>Fase 1: MVP Core</h2>
+      <span class="phase-tag phase-tag--1">Sprints 1-8</span>
+    </div>
+    <div class="timeline-lanes">
+      <div class="lane" style="grid-template-columns: 70px 1fr">
+        <div class="lane-label lane-label--a">Dev A</div>
+        <div class="lane-cells" style="grid-template-columns: repeat(8, 1fr)">
+          <div class="lane-cell"><strong>S1</strong>DDL 18 tablas, RLS, idx</div>
+          <div class="lane-cell"><strong>S2</strong>Docker, Dockerfile</div>
+          <div class="lane-cell"><strong>S3</strong>Models, schemas, core</div>
+          <div class="lane-cell"><strong>S4</strong>Provider ABC, YCloud</div>
+          <div class="lane-cell"><strong>S5</strong>Doc pipeline, RAG</div>
+          <div class="lane-cell"><strong>S6</strong>State, graph</div>
+          <div class="lane-cell"><strong>S7</strong>Calendar, contact unifier</div>
+          <div class="lane-cell"><strong>S8</strong>OTel, Prometheus, Grafana</div>
+        </div>
+      </div>
+      <div class="lane" style="grid-template-columns: 70px 1fr">
+        <div class="lane-label lane-label--b">Dev B</div>
+        <div class="lane-cells" style="grid-template-columns: repeat(8, 1fr)">
+          <div class="lane-cell"><strong>S1</strong>Arch diagram, RLS test</div>
+          <div class="lane-cell"><strong>S2</strong>Traefik, Prometheus cfg</div>
+          <div class="lane-cell"><strong>S3</strong>Middleware, API, tests</div>
+          <div class="lane-cell"><strong>S4</strong>Webhook ep, Celery, dedup</div>
+          <div class="lane-cell"><strong>S5</strong>Doc API, ingestion task</div>
+          <div class="lane-cell"><strong>S6</strong>6 nodes, ai_processor</div>
+          <div class="lane-cell"><strong>S7</strong>CRM API, auto-close</div>
+          <div class="lane-cell"><strong>S8</strong>Audit, backup, e2e test</div>
+        </div>
+      </div>
+    </div>
+    <div class="sprint-nums">
+      <div class="sprint-num-row" style="display:grid;grid-template-columns:70px 1fr">
+        <div class="sprint-num-spacer"></div>
+        <div class="sprint-num-cells" style="grid-template-columns:repeat(8,1fr)">
+          <div class="sprint-num-cell">S1</div>
+          <div class="sprint-num-cell">S2</div>
+          <div class="sprint-num-cell">S3</div>
+          <div class="sprint-num-cell">S4</div>
+          <div class="sprint-num-cell">S5</div>
+          <div class="sprint-num-cell">S6</div>
+          <div class="sprint-num-cell">S7</div>
+          <div class="sprint-num-cell mvp-cell">S8 MVP</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 2 Timeline -->
+  <div class="timeline-section">
+    <div class="timeline-header">
+      <h2>Fase 2: Expansión</h2>
+      <span class="phase-tag phase-tag--2">Sprints 9-12</span>
+    </div>
+    <div class="timeline-lanes">
+      <div class="lane" style="grid-template-columns: 70px 1fr">
+        <div class="lane-label lane-label--a">Dev A</div>
+        <div class="lane-cells" style="grid-template-columns: repeat(4, 1fr)">
+          <div class="lane-cell"><strong>S9</strong>Telegram, Meta, Email providers</div>
+          <div class="lane-cell"><strong>S10</strong>Template cloning + re-embed</div>
+          <div class="lane-cell"><strong>S11</strong>Outgoing webhooks, HMAC</div>
+          <div class="lane-cell"><strong>S12</strong>Financial + Marketing agents</div>
+        </div>
+      </div>
+      <div class="lane" style="grid-template-columns: 70px 1fr">
+        <div class="lane-label lane-label--b">Dev B</div>
+        <div class="lane-cells" style="grid-template-columns: repeat(4, 1fr)">
+          <div class="lane-cell"><strong>S9</strong>Webchat WS, Whisper STT</div>
+          <div class="lane-cell"><strong>S10</strong>Sentiment node, CRUD</div>
+          <div class="lane-cell"><strong>S11</strong>CSAT surveys, retry logic</div>
+          <div class="lane-cell"><strong>S12</strong>CRM scoring, re-ranking</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 3 Timeline -->
+  <div class="timeline-section">
+    <div class="timeline-header">
+      <h2>Fase 3: Módulos Avanzados</h2>
+      <span class="phase-tag phase-tag--3">Sprints 13-14</span>
+    </div>
+    <div class="timeline-lanes">
+      <div class="lane" style="grid-template-columns: 70px 1fr">
+        <div class="lane-label lane-label--a">Dev A</div>
+        <div class="lane-cells" style="grid-template-columns: repeat(2, 1fr)">
+          <div class="lane-cell"><strong>S13</strong>Voice (Twilio/Vonage STT/TTS)</div>
+          <div class="lane-cell"><strong>S14</strong>Sandbox mode, feature flags</div>
+        </div>
+      </div>
+      <div class="lane" style="grid-template-columns: 70px 1fr">
+        <div class="lane-label lane-label--b">Dev B</div>
+        <div class="lane-cells" style="grid-template-columns: repeat(2, 1fr)">
+          <div class="lane-cell"><strong>S13</strong>Clinical agent (RIPS, CIE-10)</div>
+          <div class="lane-cell"><strong>S14</strong>Multi-lang, rollout %</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sprint Detail Cards -->
+  <div class="sprints-detail">
+    <h2>Detalle por Sprint</h2>
+    <div id="sprint-cards"></div>
+  </div>
+
+  <!-- Loop Protocol -->
+  <div class="protocol">
+    <h3>Loop Protocol &mdash; Semi-Autónomo</h3>
+    <div class="protocol-steps">
+      <div class="protocol-step protocol-step--1">
+        <div class="protocol-step-num">01</div>
+        <div class="protocol-step-text">Leer contexto</div>
+        <div class="protocol-step-desc">CLAUDE.md &rarr; METHODOLOGY.md &rarr; PROGRESS.md &rarr; MEMORY.md &rarr; spec</div>
+      </div>
+      <div class="protocol-step protocol-step--2">
+        <div class="protocol-step-num">02</div>
+        <div class="protocol-step-text">Implementar 1 módulo</div>
+        <div class="protocol-step-desc">Un archivo completo con types, docstrings, lógica</div>
+      </div>
+      <div class="protocol-step protocol-step--3">
+        <div class="protocol-step-num">03</div>
+        <div class="protocol-step-text">Validar</div>
+        <div class="protocol-step-desc">pytest &rarr; ruff check &rarr; commit atómico &rarr; PROGRESS.md</div>
+      </div>
+      <div class="protocol-step protocol-step--4">
+        <div class="protocol-step-num">04</div>
+        <div class="protocol-step-text">Checkpoint</div>
+        <div class="protocol-step-desc">Cada 3-5 módulos: pausa para revisión del dev</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const SPRINTS = [
+  {
+    num: 1, name: "Schema DDL & Arquitectura", phase: 1, status: "pending",
+    devA: {
+      tasks: ["DDL completo: extensiones, enums, 18 tablas MVP", "Constraints, FKs, CHECK constraints", "Políticas RLS con FORCE para cada tabla", "Índices: B-tree (FKs), GIN (JSONB), HNSW (embeddings)", "Tablas Fase 2 en archivo separado"],
+      files: ["supabase/init/init.sql", "supabase/init/phase2_tables.sql"]
+    },
+    devB: {
+      tasks: ["Diagrama de arquitectura Mermaid", "Test de aislamiento RLS (2 tenants, cross-check)"],
+      files: ["docs/architecture.mermaid", "tests/test_rls_isolation.sql"]
+    },
+    dep: "Dev B espera el DDL de Dev A para escribir el test RLS"
+  },
+  {
+    num: 2, name: "Infraestructura Docker", phase: 1, status: "pending",
+    devA: {
+      tasks: ["docker-compose.yml con 16 servicios", "Dockerfile multi-stage (builder + runner)", ".dockerignore", "Configs de Supabase self-hosted"],
+      files: ["docker-compose.yml", "Dockerfile", ".dockerignore", "supabase/docker/"]
+    },
+    devB: {
+      tasks: ["Traefik v3 config (entrypoints, rate limiting)", "Prometheus config", "Grafana provisioning base", "Scripts de healthcheck y wait-for-it"],
+      files: ["traefik/traefik.yml", "traefik/dynamic/", "prometheus/prometheus.yml", "grafana/", "scripts/"]
+    },
+    dep: "Independientes — pueden trabajar en paralelo total"
+  },
+  {
+    num: 3, name: "FastAPI Core & Auth", phase: 1, status: "pending",
+    devA: {
+      tasks: ["Pydantic Settings (config.py)", "Async SQLAlchemy engine + SET LOCAL helper", "JWT validation + password hashing", "AppException + error handlers", "DI: TenantSession, CurrentUser, require_role", "18 SQLAlchemy models (TenantBaseModel)", "Pydantic v2 schemas para todas las entidades"],
+      files: ["app/core/*.py", "app/models/*.py", "app/schemas/*.py"]
+    },
+    devB: {
+      tasks: ["App factory (main.py) con lifespan", "TenantContextMiddleware (JWT → SET LOCAL)", "TokenBudgetGuard placeholder", "Auth endpoints (login, refresh)", "Health check endpoint", "Test fixtures (conftest.py)", "Tests: RLS isolation, auth, security"],
+      files: ["app/main.py", "app/middleware/*.py", "app/api/", "tests/"]
+    },
+    dep: "Dev B necesita models/ y schemas/ de Dev A → usar stubs si no están listos"
+  },
+  {
+    num: 4, name: "Webhook Receiver & MessagingProvider", phase: 1, status: "pending",
+    devA: {
+      tasks: ["MessagingProvider ABC (5 métodos)", "YCloudProvider implementación completa", "ProviderFactory (resolve por channel)", "NormalizedMessage schema"],
+      files: ["app/services/messaging/base.py", "app/services/messaging/ycloud.py", "app/services/messaging/factory.py", "app/schemas/message.py"]
+    },
+    devB: {
+      tasks: ["Webhook endpoint POST /webhooks/{provider}/{channel}", "Deduplicación por (channel, external_message_id)", "Celery app config", "webhook_processor task", "Tests: idempotency, provider factory"],
+      files: ["app/api/v1/webhooks.py", "app/services/dedup.py", "app/tasks/celery_app.py", "app/tasks/webhook_processor.py", "tests/"]
+    },
+    dep: "Dev B necesita MessagingProvider ABC y NormalizedMessage de Dev A"
+  },
+  {
+    num: 5, name: "Pipeline de Documentos & RAG", phase: 1, status: "pending",
+    devA: {
+      tasks: ["Document pipeline: upload, extract, chunk, embed", "RAG retriever con pre-filtro client_id", "Cosine threshold 0.75, strict grounding", "OCR con pytesseract"],
+      files: ["app/services/document_pipeline.py", "app/services/rag.py", "app/services/ocr.py"]
+    },
+    devB: {
+      tasks: ["Document CRUD endpoints", "Celery task de ingestion", "Tests: chunking, embedding, retrieval, citations"],
+      files: ["app/api/v1/documents.py", "app/tasks/document_ingestion.py", "tests/"]
+    },
+    dep: "Dev B necesita document_pipeline y rag services de Dev A"
+  },
+  {
+    num: 6, name: "LangGraph: Grafo de Agentes", phase: 1, status: "pending",
+    devA: {
+      tasks: ["ConversationState TypedDict", "build_conversation_graph() — StateGraph completo", "Agent config schemas"],
+      files: ["app/agents/state.py", "app/agents/graph.py", "app/schemas/agent_config.py"]
+    },
+    devB: {
+      tasks: ["intent_router node (7 intents)", "rag_query node (strict grounding)", "token_budget node (3 umbrales)", "respond node (via MessagingProvider)", "human_handoff node", "training_approval node (few-shot)", "ai_processor Celery task", "Tests: intent routing, RAG node, graph flow"],
+      files: ["app/agents/nodes/*.py", "app/tasks/ai_processor.py", "tests/"]
+    },
+    dep: "Dev B necesita ConversationState y graph structure de Dev A"
+  },
+  {
+    num: 7, name: "Agendamiento & CRM API", phase: 1, status: "pending",
+    devA: {
+      tasks: ["Google Calendar tools (LangGraph)", "Scheduling node", "Contact unifier service"],
+      files: ["app/agents/tools/calendar_tools.py", "app/agents/nodes/scheduling.py", "app/services/contact_unifier.py"]
+    },
+    devB: {
+      tasks: ["Contacts CRUD endpoints", "Conversations CRUD + lifecycle (7 estados)", "Auto-close worker (Celery beat)", "Tests: scheduling, contact merge, lifecycle"],
+      files: ["app/api/v1/contacts.py", "app/api/v1/conversations.py", "app/tasks/auto_close.py", "tests/"]
+    },
+    dep: "Módulos independientes — paralelo total"
+  },
+  {
+    num: 8, name: "Observabilidad, Backup & Hardening", phase: 1, status: "pending", isMvp: true,
+    devA: {
+      tasks: ["OpenTelemetry instrumentation", "Prometheus custom metrics", "Grafana dashboards (JSON)", "pgcrypto: cifrado de columnas sensibles"],
+      files: ["app/core/telemetry.py", "app/core/metrics.py", "grafana/dashboards/", "app/core/encryption.py"]
+    },
+    devB: {
+      tasks: ["Audit log middleware", "Backup/restore scripts", "Quick replies CRUD", "E2E test: webhook → grafo → respuesta", "RGPD: export/delete datos personales"],
+      files: ["app/middleware/audit.py", "scripts/backup.sh", "scripts/restore_test.sh", "app/api/v1/quick_replies.py", "tests/e2e/", "app/api/v1/admin.py"]
+    },
+    dep: "Ambos devs pueden trabajar en paralelo — integración al final"
+  },
+  {
+    num: 9, name: "Canales Adicionales", phase: 2, status: "pending",
+    devA: {
+      tasks: ["TelegramProvider", "MetaProvider (Instagram/Facebook)", "EmailProvider (IMAP)"],
+      files: ["app/services/messaging/telegram.py", "app/services/messaging/meta.py", "app/services/messaging/email.py"]
+    },
+    devB: {
+      tasks: ["WebchatProvider (WebSocket)", "Whisper audio transcription", "Tests por canal"],
+      files: ["app/services/messaging/webchat.py", "app/services/audio.py", "tests/"]
+    },
+    dep: "Proveedores independientes — paralelo total"
+  },
+  {
+    num: 10, name: "Templates, Clonación & Sentimiento", phase: 2, status: "pending",
+    devA: {
+      tasks: ["Template cloning con re-embedding"],
+      files: ["app/services/template_cloner.py"]
+    },
+    devB: {
+      tasks: ["Sentiment analysis node", "Templates CRUD endpoints"],
+      files: ["app/agents/nodes/sentiment.py", "app/api/v1/templates.py", "tests/"]
+    },
+    dep: "Paralelo — sentiment node y cloning son independientes"
+  },
+  {
+    num: 11, name: "Webhooks Salientes & CSAT", phase: 2, status: "pending",
+    devA: {
+      tasks: ["Outgoing webhook engine", "HMAC-SHA256 signing", "Retry con exponential backoff"],
+      files: ["app/services/outgoing_webhooks.py"]
+    },
+    devB: {
+      tasks: ["CSAT surveys post-resolution", "Auto-disable en fallos consecutivos"],
+      files: ["app/services/csat.py", "app/tasks/csat_survey.py", "tests/"]
+    },
+    dep: "Paralelo — CSAT puede usar el engine de webhooks como dependencia tardía"
+  },
+  {
+    num: 12, name: "Agentes Financiero & Marketing", phase: 2, status: "pending",
+    devA: {
+      tasks: ["Financial agent (DIAN Colombia)", "Marketing agent"],
+      files: ["app/agents/nodes/financial.py", "app/agents/nodes/marketing.py"]
+    },
+    devB: {
+      tasks: ["CRM scoring system", "RAG re-ranking con cross-encoder"],
+      files: ["app/services/crm_scoring.py", "app/services/reranker.py", "tests/"]
+    },
+    dep: "Independientes — paralelo total"
+  },
+  {
+    num: 13, name: "Voz & Agente Clínico", phase: 3, status: "pending",
+    devA: {
+      tasks: ["Voice channel (Twilio/Vonage)", "STT/TTS pipeline"],
+      files: ["app/services/messaging/voice.py", "app/services/tts.py"]
+    },
+    devB: {
+      tasks: ["Clinical agent (RIPS, CIE-10, CUPS)", "Medical data handling"],
+      files: ["app/agents/nodes/clinical.py", "tests/"]
+    },
+    dep: "Independientes — dominios completamente separados"
+  },
+  {
+    num: 14, name: "Sandbox & Multi-Idioma", phase: 3, status: "pending",
+    devA: {
+      tasks: ["Sandbox mode per tenant", "Feature flags con Redis cache", "Percentage rollout"],
+      files: ["app/services/feature_flags.py", "app/middleware/sandbox.py"]
+    },
+    devB: {
+      tasks: ["Multi-language (langdetect + GPT fallback)", "i18n response formatting"],
+      files: ["app/services/language.py", "app/middleware/language.py", "tests/"]
+    },
+    dep: "Independientes — paralelo total"
+  }
+];
+
+function renderCards() {
+  const container = document.getElementById('sprint-cards');
+  container.innerHTML = SPRINTS.map(s => {
+    const phaseClass = `phase-tag--${s.phase}`;
+    const statusClass = `sprint-status--${s.status}`;
+    const statusLabel = s.status === 'done' ? 'Completado' : s.status === 'active' ? 'En progreso' : 'Pendiente';
+    return `
+      <div class="sprint-card" data-sprint="${s.num}">
+        <div class="sprint-card-header" tabindex="0" role="button" aria-expanded="false" onclick="toggleCard(this)">
+          <span class="sprint-num">S${String(s.num).padStart(2,'0')}</span>
+          <span class="sprint-name">${s.name}</span>
+          ${s.isMvp ? '<span class="mvp-badge">MVP</span>' : ''}
+          <span class="phase-tag ${phaseClass}">Fase ${s.phase}</span>
+          <span class="sprint-status ${statusClass}">${statusLabel}</span>
+          <span class="sprint-chevron">&#9654;</span>
+        </div>
+        <div class="sprint-card-body">
+          <div class="dev-columns">
+            <div class="dev-col dev-col--a">
+              <h4>Dev A &mdash; Foundations</h4>
+              ${s.devA.tasks.map(t => `<div class="dev-task">&bull; ${t}</div>`).join('')}
+              <div class="dev-files">${s.devA.files.map(f => `<span>${f}</span>`).join('')}</div>
+            </div>
+            <div class="dev-col dev-col--b">
+              <h4>Dev B &mdash; Integration</h4>
+              ${s.devB.tasks.map(t => `<div class="dev-task">&bull; ${t}</div>`).join('')}
+              <div class="dev-files">${s.devB.files.map(f => `<span>${f}</span>`).join('')}</div>
+            </div>
+          </div>
+          ${s.dep ? `<div class="sprint-dep"><strong>Dependencia:</strong> ${s.dep}</div>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function toggleCard(header) {
+  const card = header.closest('.sprint-card');
+  const isOpen = card.classList.toggle('open');
+  header.setAttribute('aria-expanded', isOpen);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    const focused = document.activeElement;
+    if (focused && focused.classList.contains('sprint-card-header')) {
+      e.preventDefault();
+      toggleCard(focused);
+    }
+  }
+});
+
+renderCards();
+</script>

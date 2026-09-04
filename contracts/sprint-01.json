@@ -1,0 +1,39 @@
+{
+  "sprint": 1,
+  "name": "Schema DDL & Arquitectura",
+  "contracts": [
+    {
+      "file": "supabase/init/init.sql",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "ddl",
+      "description": "DDL completo con tablas, RLS, índices y extensiones",
+      "exports": [
+        "tabla: clients",
+        "tabla: users",
+        "tabla: contacts",
+        "tabla: conversations",
+        "tabla: messages",
+        "tabla: documents",
+        "tabla: document_chunks",
+        "tabla: agent_configs",
+        "tabla: quick_replies",
+        "tabla: message_templates",
+        "tabla: csat_surveys",
+        "tabla: csat_responses",
+        "tabla: audit_logs",
+        "tabla: webhooks_incoming",
+        "tabla: webhooks_outgoing",
+        "tabla: scheduled_messages",
+        "tabla: contact_merge_history",
+        "tabla: token_usage_log",
+        "extension: pgvector",
+        "extension: pgcrypto",
+        "extension: uuid-ossp",
+        "policy: rls con SET LOCAL"
+      ],
+      "stability": "draft"
+    }
+  ],
+  "notes": "Sprint 1 es solo DDL. No hay modelos Python ni schemas aún."
+}

@@ -1,0 +1,32 @@
+{
+  "sprint": 5,
+  "name": "Pipeline de Documentos & RAG",
+  "contracts": [
+    {
+      "file": "app/models/document.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "exports": ["Document", "DocumentChunk"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/schemas/document.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "exports": ["DocumentCreate", "DocumentResponse", "ChunkResponse"],
+      "stability": "pending"
+    },
+    {
+      "file": "app/services/rag.py",
+      "owner": "dev-a",
+      "consumers": ["dev-b"],
+      "type": "python-module",
+      "description": "RAGService con búsqueda vectorial pre-filtrada por tenant",
+      "exports": ["RAGService"],
+      "stability": "pending"
+    }
+  ],
+  "notes": "Dev A crea modelos, RAGService. Dev B crea document_pipeline, ingestion task, API endpoints."
+}
