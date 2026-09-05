@@ -1,13 +1,15 @@
 # Sprint 4 — Webhook Receiver & MessagingProvider
 
 ## Objetivo
-Recepcion idempotente de mensajes entrantes desde cualquier canal, abstraccion de proveedor de mensajeria con patron ABC para desacoplamiento, y procesamiento asincrono via Celery. Al finalizar este sprint, un mensaje de WhatsApp (via YCloud) llega, se deduplica, se normaliza y se almacena correctamente.
+Recepcion idempotente de mensajes entrantes desde cualquier canal, abstraccion de proveedor de mensajeria con patron ABC para desacoplamiento, y procesamiento asincrono via Celery. Al finalizar este sprint, mensajes de WhatsApp (via YCloud), Facebook Messenger e Instagram DM (via Meta Graph API) llegan, se deduplican, se normalizan y se almacenan correctamente.
 
 ## Prerequisitos
 - Sprint 3 completado: FastAPI core, auth, middleware, modelos SQLAlchemy
 - Celery workers funcionando con sus 5 colas (verificar con `celery inspect active_queues`)
 - Redis accesible para cache de deduplicacion
 - Credenciales de YCloud configuradas en .env
+- App de Meta configurada con permisos de Instagram Messaging API y Facebook Messenger
+- Page Access Token y App Secret de Meta configurados en .env
 
 ## Archivos a Crear
 ```
@@ -17,10 +19,11 @@ app/
       __init__.py
       base.py                    # MessagingProvider ABC + tipos base
       ycloud.py                  # YCloudProvider implementation
+      meta.py                    # MetaProvider — Instagram DM + Facebook Messenger
       factory.py                 # Provider factory
   api/
     v1/
-      webhooks.py                # Endpoint publico de webhooks
+      webhooks.py                # Endpoint publico de webhooks (YCloud + Meta)
   schemas/
     message.py                   # NormalizedMessage, ChannelConstraints
   tasks/
@@ -32,11 +35,13 @@ tests/
   unit/
     test_webhook_dedup.py
     test_messaging_provider.py
+    test_meta_provider.py        # Tests unitarios MetaProvider
     test_contact_resolver.py
   integration/
     test_webhook_flow.py
   fixtures/
     ycloud_payloads.py           # Payloads de ejemplo de YCloud
+    meta_payloads.py             # Payloads de ejemplo de Meta (Instagram + Facebook)
 ```
 
 ## Tareas Detalladas
@@ -320,32 +325,249 @@ class YCloudProvider(MessagingProvider):
         )
 ```
 
-### 4. Provider Factory (`app/services/messaging/factory.py`)
+### 4. MetaProvider (`app/services/messaging/meta.py`)
+
+Proveedor unificado para Instagram DM y Facebook Messenger via Meta Graph API. Ambos canales comparten la misma API pero tienen restricciones diferentes.
+
+```python
+import hmac
+import hashlib
+import httpx
+from enum import Enum
+from datetime import timedelta
+
+class MetaChannel(str, Enum):
+    """Sub-canal de Meta: Instagram o Facebook Messenger."""
+    INSTAGRAM = "instagram"
+    FACEBOOK_MESSENGER = "facebook"
+
+class MetaProvider(MessagingProvider):
+    """
+    Implementacion para Instagram DM y Facebook Messenger via Meta Graph API.
+    Documentacion: https://developers.facebook.com/docs/messenger-platform/
+    Documentacion IG: https://developers.facebook.com/docs/instagram-messaging/
+    """
+
+    GRAPH_API_VERSION = "v18.0"
+    BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
+
+    def __init__(self, provider_config: dict):
+        self.page_access_token = provider_config["page_access_token"]
+        self.app_secret = provider_config["app_secret"]
+        self.channel = MetaChannel(provider_config.get("channel", "facebook"))
+
+    async def parse_webhook(self, raw_payload: dict) -> NormalizedMessage:
+        """
+        Parsea el payload de webhook de Meta (Instagram o Facebook Messenger).
+
+        Estructura esperada del payload de Meta:
+        {
+            "object": "instagram" | "page",
+            "entry": [{
+                "id": "<PAGE_OR_IG_ID>",
+                "time": 1700000000,
+                "messaging": [{
+                    "sender": {"id": "<SENDER_PSID>"},
+                    "recipient": {"id": "<PAGE_ID>"},
+                    "timestamp": 1700000000,
+                    "message": {
+                        "mid": "m_xxx",
+                        "text": "Hola",
+                        "attachments": [{"type": "image", "payload": {"url": "..."}}]
+                    }
+                }]
+            }]
+        }
+        """
+        entry = raw_payload.get("entry", [{}])[0]
+        messaging = entry.get("messaging", [{}])[0]
+        sender_id = messaging.get("sender", {}).get("id", "")
+        message = messaging.get("message", {})
+
+        text = message.get("text")
+        media_url = None
+        media_type = None
+
+        # Extraer attachments si existen
+        attachments = message.get("attachments", [])
+        if attachments:
+            attachment = attachments[0]
+            att_type = attachment.get("type", "")
+            if att_type in ("image", "audio", "video", "file"):
+                media_url = attachment.get("payload", {}).get("url")
+                media_type = MessageTypeEnum(att_type if att_type != "file" else "document")
+
+        # Detectar quick_reply
+        quick_reply = message.get("quick_reply")
+        interactive_response = None
+        if quick_reply:
+            interactive_response = {"type": "quick_reply", "payload": quick_reply.get("payload")}
+
+        # Determinar canal
+        channel = ChannelEnum.instagram if self.channel == MetaChannel.INSTAGRAM else ChannelEnum.facebook
+
+        return NormalizedMessage(
+            channel=channel,
+            sender_identifier=sender_id,
+            text=text,
+            media_url=media_url,
+            media_type=media_type,
+            timestamp=datetime.fromtimestamp(
+                messaging.get("timestamp", 0) / 1000, tz=timezone.utc
+            ),
+            external_message_id=message.get("mid", ""),
+            raw_payload=raw_payload,
+            interactive_response=interactive_response,
+        )
+
+    async def validate_signature(self, payload: bytes, signature: str, secret: str) -> bool:
+        """
+        Valida x-hub-signature-256 de Meta.
+        El header de firma es 'x-hub-signature-256' con formato 'sha256=<hex_digest>'.
+        """
+        if not signature.startswith("sha256="):
+            return False
+        expected = hmac.new(
+            secret.encode("utf-8"),
+            payload,
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(signature[7:], expected)
+
+    async def send_message(self, to: str, content: MessageContent, channel_config: dict) -> str:
+        """
+        Envia mensaje via Meta Send API (funciona para Instagram y Facebook Messenger).
+        POST https://graph.facebook.com/v18.0/me/messages
+        """
+        message_payload: dict = {"recipient": {"id": to}}
+
+        if content.text and not content.media_url:
+            message_payload["message"] = {"text": content.text}
+        elif content.media_url:
+            media_type = content.media_type or "image"
+            message_payload["message"] = {
+                "attachment": {
+                    "type": media_type,
+                    "payload": {"url": content.media_url, "is_reusable": True},
+                }
+            }
+            if content.caption:
+                # Meta no soporta caption en attachments, enviar como mensaje separado
+                pass
+
+        if content.buttons:
+            # Quick replies (soportado por ambos canales)
+            message_payload["message"]["quick_replies"] = [
+                {"content_type": "text", "title": btn.get("title", ""), "payload": btn.get("id", "")}
+                for btn in content.buttons
+            ]
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.BASE_URL}/me/messages",
+                params={"access_token": channel_config["page_access_token"]},
+                json=message_payload,
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("message_id", "")
+
+    async def send_template(self, to: str, template: TemplateMessage, channel_config: dict) -> str:
+        """
+        Envia mensaje de template.
+        - Facebook Messenger: soporta templates de boton y genericos.
+        - Instagram: NO soporta templates. Lanza TemplateNotSupportedError.
+        """
+        if self.channel == MetaChannel.INSTAGRAM:
+            raise NotImplementedError(
+                "Instagram no soporta templates. Usar send_message con quick_replies."
+            )
+
+        # Facebook Messenger — template de boton o generico
+        message_payload = {
+            "recipient": {"id": to},
+            "message": {
+                "attachment": {
+                    "type": "template",
+                    "payload": {
+                        "template_type": "button",
+                        "text": template.template_name,
+                        "buttons": template.components,
+                    },
+                }
+            },
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{self.BASE_URL}/me/messages",
+                params={"access_token": channel_config["page_access_token"]},
+                json=message_payload,
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("message_id", "")
+
+    def get_channel_constraints(self) -> ChannelConstraints:
+        if self.channel == MetaChannel.INSTAGRAM:
+            return ChannelConstraints(
+                max_text_length=1000,               # Instagram: max 1000 chars
+                supported_media_types=["image", "audio", "video"],
+                session_window_hours=24,             # Ventana estricta de 24h
+                requires_template_outside_window=False,  # No hay templates en IG
+                max_buttons=13,                      # Quick replies max 13
+                max_list_items=0,                    # No hay listas en IG
+            )
+        else:  # Facebook Messenger
+            return ChannelConstraints(
+                max_text_length=2000,               # Facebook: max 2000 chars
+                supported_media_types=["image", "audio", "video", "document"],
+                session_window_hours=24,             # Ventana de 24h (message_tags fuera)
+                requires_template_outside_window=False,  # Usa message_tags, no templates HSM
+                max_buttons=3,                       # Botones en templates
+                max_list_items=4,                    # Elementos en template generico
+            )
+```
+
+**Nota sobre ventanas de mensajes:**
+- **Instagram DM:** Ventana estricta de 24h. No se puede enviar mensajes fuera de ventana. No hay templates.
+- **Facebook Messenger:** Ventana de 24h para mensajes normales. Fuera de ventana, se pueden usar `message_tags` para casos especificos (CONFIRMED_EVENT_UPDATE, POST_PURCHASE_UPDATE, ACCOUNT_UPDATE).
+
+### 5. Provider Factory (`app/services/messaging/factory.py`)
 
 ```python
 from functools import lru_cache
 
 _PROVIDERS: dict[str, type[MessagingProvider]] = {
     "ycloud": YCloudProvider,
+    "meta": MetaProvider,       # Instagram DM + Facebook Messenger
     # Futuros proveedores:
     # "twilio": TwilioProvider,
-    # "meta_direct": MetaDirectProvider,
 }
 
-def get_messaging_provider(provider_name: str) -> MessagingProvider:
+def get_messaging_provider(provider_name: str, provider_config: dict | None = None) -> MessagingProvider:
     """
     Factory para obtener el provider adecuado.
 
     El nombre del provider se recibe de la URL del webhook:
     POST /api/v1/webhooks/{provider}/{channel}
+
+    Para MetaProvider, el channel (instagram/facebook) se pasa en provider_config
+    para diferenciar el sub-canal.
     """
     provider_class = _PROVIDERS.get(provider_name)
     if not provider_class:
         raise ValueError(f"Provider '{provider_name}' no registrado. Disponibles: {list(_PROVIDERS.keys())}")
+
+    if provider_name == "meta" and provider_config:
+        return provider_class(provider_config)
+
     return provider_class()
 ```
 
-### 5. Webhook Endpoint (`app/api/v1/webhooks.py`)
+### 6. Webhook Endpoint (`app/api/v1/webhooks.py`)
 
 ```python
 from fastapi import APIRouter, Request, Response, HTTPException
@@ -381,9 +603,15 @@ async def receive_webhook(
         raise HTTPException(status_code=400, detail=f"Provider '{provider}' no soportado")
 
     # 2. Validar firma del webhook
-    signature = request.headers.get("X-Ycloud-Signature", "")
-    # NOTA: En produccion, el secret se obtiene de la config del channel/tenant
-    webhook_secret = settings.YCLOUD_WEBHOOK_SECRET
+    # Cada provider usa un header diferente para la firma:
+    # - YCloud: X-Ycloud-Signature
+    # - Meta: x-hub-signature-256
+    if provider == "meta":
+        signature = request.headers.get("x-hub-signature-256", "")
+        webhook_secret = settings.META_APP_SECRET
+    else:
+        signature = request.headers.get("X-Ycloud-Signature", "")
+        webhook_secret = settings.YCLOUD_WEBHOOK_SECRET
 
     if not await messaging_provider.validate_signature(raw_body, signature, webhook_secret):
         raise HTTPException(status_code=401, detail="Firma de webhook invalida")
@@ -418,7 +646,7 @@ async def receive_webhook(
     return JSONResponse(status_code=200, content={"status": "queued"})
 ```
 
-### 6. Webhook Verification Endpoint
+### 7. Webhook Verification Endpoint
 
 Algunos proveedores requieren un GET para verificar la URL del webhook:
 
@@ -431,8 +659,22 @@ async def verify_webhook(
 ):
     """
     Verificacion de webhook (GET).
-    Algunos proveedores como Meta envian un challenge para verificar la URL.
+
+    - YCloud: envía un challenge simple como query param.
+    - Meta (Instagram/Facebook): envía hub.mode, hub.verify_token, hub.challenge.
+      Se debe verificar que hub.verify_token coincida con el token configurado
+      y responder con hub.challenge como texto plano.
     """
+    if provider == "meta":
+        # Meta Webhook Verification
+        mode = request.query_params.get("hub.mode")
+        token = request.query_params.get("hub.verify_token")
+        challenge = request.query_params.get("hub.challenge")
+
+        if mode == "subscribe" and token == settings.META_WEBHOOK_VERIFY_TOKEN:
+            return Response(content=challenge, media_type="text/plain")
+        raise HTTPException(status_code=403, detail="Verificacion de webhook fallida")
+
     # Para YCloud y similares
     challenge = request.query_params.get("challenge")
     if challenge:
@@ -440,7 +682,7 @@ async def verify_webhook(
     return JSONResponse(status_code=200, content={"status": "ok"})
 ```
 
-### 7. Worker: process_incoming_message (`app/tasks/webhook_processor.py`)
+### 8. Worker: process_incoming_message (`app/tasks/webhook_processor.py`)
 
 ```python
 from celery import shared_task
@@ -548,7 +790,7 @@ async def _process_message(provider: str, channel: str, message_data: dict):
     )
 ```
 
-### 8. Contact Resolver (`app/services/contact_resolver.py`)
+### 9. Contact Resolver (`app/services/contact_resolver.py`)
 
 ```python
 async def resolve_contact(
@@ -610,7 +852,7 @@ async def resolve_contact(
         return contact
 ```
 
-### 9. Conversation Resolver
+### 10. Conversation Resolver
 
 ```python
 async def resolve_conversation(
@@ -656,7 +898,7 @@ async def resolve_conversation(
         return conversation
 ```
 
-### 10. Dead Letter Queue
+### 11. Dead Letter Queue
 
 ```python
 async def _send_to_dlq(message_data: dict):
@@ -674,7 +916,7 @@ async def _send_to_dlq(message_data: dict):
     # Opcional: alertar via notificacion
 ```
 
-### 11. Tests
+### 12. Tests
 
 #### test_webhook_dedup.py
 
@@ -780,13 +1022,176 @@ async def test_merged_contact_resolves_to_target():
     ...
 ```
 
+#### test_meta_provider.py
+
+```python
+@pytest.mark.asyncio
+async def test_meta_parse_instagram_text_message():
+    """Payload de texto de Instagram DM se normaliza correctamente."""
+    provider = MetaProvider({
+        "page_access_token": "test_token",
+        "app_secret": "test_secret",
+        "channel": "instagram",
+    })
+    payload = {
+        "object": "instagram",
+        "entry": [{
+            "id": "ig_123",
+            "time": 1700000000,
+            "messaging": [{
+                "sender": {"id": "ig_user_456"},
+                "recipient": {"id": "ig_page_789"},
+                "timestamp": 1700000000000,
+                "message": {
+                    "mid": "m_abc123",
+                    "text": "Hola, quiero informacion",
+                },
+            }],
+        }],
+    }
+
+    normalized = await provider.parse_webhook(payload)
+
+    assert normalized.channel == ChannelEnum.instagram
+    assert normalized.sender_identifier == "ig_user_456"
+    assert normalized.text == "Hola, quiero informacion"
+    assert normalized.external_message_id == "m_abc123"
+    assert normalized.media_url is None
+
+@pytest.mark.asyncio
+async def test_meta_parse_facebook_text_message():
+    """Payload de texto de Facebook Messenger se normaliza correctamente."""
+    provider = MetaProvider({
+        "page_access_token": "test_token",
+        "app_secret": "test_secret",
+        "channel": "facebook",
+    })
+    payload = {
+        "object": "page",
+        "entry": [{
+            "id": "page_123",
+            "time": 1700000000,
+            "messaging": [{
+                "sender": {"id": "fb_user_456"},
+                "recipient": {"id": "page_789"},
+                "timestamp": 1700000000000,
+                "message": {
+                    "mid": "m_def456",
+                    "text": "Necesito ayuda con mi pedido",
+                },
+            }],
+        }],
+    }
+
+    normalized = await provider.parse_webhook(payload)
+
+    assert normalized.channel == ChannelEnum.facebook
+    assert normalized.sender_identifier == "fb_user_456"
+    assert normalized.text == "Necesito ayuda con mi pedido"
+    assert normalized.external_message_id == "m_def456"
+
+@pytest.mark.asyncio
+async def test_meta_parse_image_attachment():
+    """Payload con imagen de Meta se normaliza con media_url."""
+    provider = MetaProvider({
+        "page_access_token": "test_token",
+        "app_secret": "test_secret",
+        "channel": "instagram",
+    })
+    payload = {
+        "object": "instagram",
+        "entry": [{
+            "id": "ig_123",
+            "time": 1700000000,
+            "messaging": [{
+                "sender": {"id": "ig_user_456"},
+                "recipient": {"id": "ig_page_789"},
+                "timestamp": 1700000000000,
+                "message": {
+                    "mid": "m_img789",
+                    "attachments": [{
+                        "type": "image",
+                        "payload": {"url": "https://scontent.xx.fbcdn.net/image.jpg"},
+                    }],
+                },
+            }],
+        }],
+    }
+
+    normalized = await provider.parse_webhook(payload)
+    assert normalized.media_url == "https://scontent.xx.fbcdn.net/image.jpg"
+    assert normalized.media_type == MessageTypeEnum.image
+
+@pytest.mark.asyncio
+async def test_meta_validate_signature_valid():
+    """Firma x-hub-signature-256 valida pasa la validacion."""
+    provider = MetaProvider({
+        "page_access_token": "test_token",
+        "app_secret": "test_secret",
+        "channel": "facebook",
+    })
+    payload = b'{"test": "data"}'
+    secret = "my_app_secret"
+    valid_sig = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+
+    assert await provider.validate_signature(payload, valid_sig, secret)
+
+@pytest.mark.asyncio
+async def test_meta_validate_signature_invalid():
+    """Firma invalida falla la validacion."""
+    provider = MetaProvider({
+        "page_access_token": "test_token",
+        "app_secret": "test_secret",
+        "channel": "facebook",
+    })
+    assert not await provider.validate_signature(b"data", "sha256=invalid", "secret")
+    assert not await provider.validate_signature(b"data", "invalid_format", "secret")
+
+@pytest.mark.asyncio
+async def test_meta_instagram_constraints():
+    """Constraints de Instagram: 1000 chars, 24h window, sin templates."""
+    provider = MetaProvider({
+        "page_access_token": "t",
+        "app_secret": "s",
+        "channel": "instagram",
+    })
+    constraints = provider.get_channel_constraints()
+    assert constraints.max_text_length == 1000
+    assert constraints.session_window_hours == 24
+    assert constraints.requires_template_outside_window is False
+
+@pytest.mark.asyncio
+async def test_meta_facebook_constraints():
+    """Constraints de Facebook: 2000 chars, 24h window, con templates."""
+    provider = MetaProvider({
+        "page_access_token": "t",
+        "app_secret": "s",
+        "channel": "facebook",
+    })
+    constraints = provider.get_channel_constraints()
+    assert constraints.max_text_length == 2000
+    assert constraints.session_window_hours == 24
+    assert constraints.max_buttons == 3
+
+@pytest.mark.asyncio
+async def test_meta_instagram_send_template_raises():
+    """Instagram no soporta templates — debe lanzar NotImplementedError."""
+    provider = MetaProvider({
+        "page_access_token": "t",
+        "app_secret": "s",
+        "channel": "instagram",
+    })
+    with pytest.raises(NotImplementedError):
+        await provider.send_template("user_123", TemplateMessage(...), {})
+```
+
 #### test_webhook_flow.py (integracion)
 
 ```python
 @pytest.mark.asyncio
-async def test_full_webhook_to_db_flow():
+async def test_full_webhook_to_db_flow_ycloud():
     """
-    Test de integracion completo:
+    Test de integracion completo (YCloud/WhatsApp):
     1. Enviar webhook
     2. Verificar que se creo contacto
     3. Verificar que se creo conversacion (status: bot_active)
@@ -794,19 +1199,62 @@ async def test_full_webhook_to_db_flow():
     5. Verificar registro en webhook_dedup
     """
     ...
+
+@pytest.mark.asyncio
+async def test_full_webhook_to_db_flow_meta_instagram():
+    """
+    Test de integracion completo (Meta/Instagram):
+    1. Enviar webhook con firma x-hub-signature-256
+    2. Verificar normalizacion a NormalizedMessage con channel=instagram
+    3. Verificar contacto creado con sender_identifier del PSID
+    4. Verificar conversacion y mensaje en DB
+    """
+    ...
+
+@pytest.mark.asyncio
+async def test_full_webhook_to_db_flow_meta_facebook():
+    """
+    Test de integracion completo (Meta/Facebook Messenger):
+    Similar a Instagram pero con channel=facebook y constraints diferentes.
+    """
+    ...
+
+@pytest.mark.asyncio
+async def test_meta_webhook_verification_get():
+    """
+    GET /webhooks/meta/{channel} responde al challenge de Meta.
+    hub.mode=subscribe + hub.verify_token correcto → retorna hub.challenge.
+    """
+    ...
 ```
 
 ## Criterios de Aceptacion
+
+### YCloud (WhatsApp)
 - [ ] Webhook de YCloud recibido, normalizado y almacenado como NormalizedMessage
+- [ ] Firma HMAC-SHA256 de YCloud validada correctamente (header `X-Ycloud-Signature`)
 - [ ] Segundo envio del mismo external_message_id es ignorado (responde 200 con status "duplicate")
 - [ ] Firma invalida retorna HTTP 401
+
+### Meta (Instagram DM + Facebook Messenger)
+- [ ] Webhook de Instagram DM recibido y normalizado con `channel=instagram`
+- [ ] Webhook de Facebook Messenger recibido y normalizado con `channel=facebook`
+- [ ] Firma `x-hub-signature-256` de Meta validada correctamente
+- [ ] Webhook verification GET responde al challenge de Meta (`hub.mode=subscribe`)
+- [ ] Instagram: `get_channel_constraints()` retorna max 1000 chars, 24h window, sin templates
+- [ ] Facebook: `get_channel_constraints()` retorna max 2000 chars, 24h window, con templates
+- [ ] Instagram: `send_template()` lanza `NotImplementedError`
+- [ ] Attachments de imagen/audio/video parseados correctamente en ambos canales
+
+### Comunes (todos los proveedores)
 - [ ] Worker Celery procesa y guarda en DB correctamente (message, contact, conversation)
-- [ ] Contact unification funciona: mismo telefono en 2 mensajes crea 1 solo contacto con 1 identifier
+- [ ] Contact unification funciona: mismo identificador en 2 mensajes crea 1 solo contacto con 1 identifier
 - [ ] Conversacion nueva se crea con status "bot_active"
 - [ ] Mensaje existente en conversacion activa se vincula a la conversacion existente
 - [ ] Retry con backoff exponencial funciona (5s, 25s, 125s)
 - [ ] Dead Letter Queue recibe mensajes que fallaron despues de 3 intentos
 - [ ] El endpoint de webhook responde 200 en menos de 100ms (procesamiento es asincrono via Celery)
+- [ ] Factory resuelve correctamente: `ycloud` → YCloudProvider, `meta` → MetaProvider(instagram/facebook)
 
 ## Notas Tecnicas
 
@@ -817,6 +1265,13 @@ El endpoint de webhook NO usa `TenantContextMiddleware` porque:
 - El `client_id` se resuelve por la configuracion del canal, no por JWT
 
 En el futuro (Fase 2, tabla `channel_configs`), el `client_id` se resolvera por la configuracion del canal especifico. En el MVP, se puede resolver por configuracion global o por la URL del webhook.
+
+### Meta Graph API — Consideraciones
+- **App Review**: La app de Meta necesita pasar App Review para permisos de `instagram_messaging` y `pages_messaging`. Durante desarrollo, se puede usar en modo test con usuarios de prueba.
+- **Page Access Token**: Los tokens de pagina tienen expiración. Usar tokens de larga duración (60 dias) y renovarlos periodicamente. En produccion, considerar tokens que nunca expiran (System User tokens).
+- **Rate Limits**: Meta tiene rate limiting por pagina (~200 llamadas/hora para envio). Implementar throttling en el worker de envio.
+- **Webhook Fields**: Al registrar el webhook en Meta, suscribirse a `messages`, `messaging_postbacks`, `messaging_optins` para Messenger, y `messages` para Instagram.
+- **PSID vs User ID**: El `sender.id` es un Page-Scoped ID (PSID) unico por pagina, no el ID real del usuario de Facebook/Instagram.
 
 ### Deduplicacion en dos niveles
 1. **Redis** (rapido, TTL 24h): primera linea de defensa, O(1)
@@ -833,9 +1288,24 @@ La busqueda en `contact_identifiers` con valores cifrados puede ser costosa. Alt
 - Usar cifrado determinista (no recomendado para datos sensibles)
 - La implementacion preferida: hash_column para busqueda + valor cifrado para lectura
 
+## Variables de Entorno Nuevas
+
+```env
+# YCloud (existente)
+YCLOUD_API_KEY=your_ycloud_api_key
+YCLOUD_WEBHOOK_SECRET=your_ycloud_webhook_secret
+
+# Meta (Facebook + Instagram) — NUEVAS
+META_APP_SECRET=your_meta_app_secret
+META_PAGE_ACCESS_TOKEN=your_meta_page_access_token
+META_WEBHOOK_VERIFY_TOKEN=your_custom_verify_token
+```
+
 ## Dependencias para Sprint 5
 - `NormalizedMessage` schema disponible e importable
 - `MessagingProvider` ABC disponible para envio de respuestas (usado por el nodo `respond` del grafo)
+- `MetaProvider` funcional para envio de respuestas por Instagram DM y Facebook Messenger
 - Contact resolver funcional para vincular mensajes a contactos
 - Celery queues operativas (especialmente `webhooks` y `ai_inference`)
 - Conversacion creada con status `bot_active` lista para ser procesada por el grafo de agentes
+- Factory resuelve 2 proveedores: YCloud (WhatsApp) y Meta (Instagram + Facebook)

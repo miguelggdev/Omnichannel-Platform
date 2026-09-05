@@ -2,16 +2,17 @@
 
 ## Objetivo
 
-Agregar Telegram, Instagram DM, Facebook Messenger, Webchat (WebSocket) y Email como canales de comunicación, además de transcripción de audio con Whisper API. Todos los canales deben implementar la misma `MessagingProvider` ABC y ser intercambiables en el flujo del grafo LangGraph.
+Agregar Telegram, Webchat (WebSocket) y Email como canales de comunicación, además de transcripción de audio con Whisper API. Todos los canales deben implementar la misma `MessagingProvider` ABC y ser intercambiables en el flujo del grafo LangGraph.
+
+> **Nota:** Instagram DM y Facebook Messenger fueron promovidos a canales MVP y se implementan en Sprint 4 junto a WhatsApp (YCloud). Ver `specs/sprint-04-webhooks.md` para su especificación completa.
 
 ## Prerequisitos
 
 - Sprint 8 completado (MVP operativo en producción).
 - `MessagingProvider` ABC implementada en Sprint 4 con los 5 métodos obligatorios: `parse_webhook`, `validate_signature`, `send_message`, `send_template`, `get_channel_constraints`.
-- `WhatsAppProvider` funcional como referencia de implementación.
-- `ProviderFactory` existente (Sprint 4) con registro de `WhatsAppProvider`.
+- `YCloudProvider` (WhatsApp) y `MetaProvider` (Instagram + Facebook) funcionales como referencia de implementación.
+- `ProviderFactory` existente (Sprint 4) con registro de `YCloudProvider` y `MetaProvider`.
 - Cuenta de bot de Telegram con token de BotFather.
-- App de Meta configurada con permisos de Instagram Messaging API y Facebook Messenger.
 - Cuenta de SendGrid o Mailgun para email inbound parse (o servidor IMAP propio).
 - Whisper API key (OpenAI) para transcripción de audio.
 
@@ -20,20 +21,20 @@ Agregar Telegram, Instagram DM, Facebook Messenger, Webchat (WebSocket) y Email 
 | Archivo | Acción | Descripción |
 |---|---|---|
 | `app/services/messaging/telegram.py` | Crear | TelegramProvider — implementación completa |
-| `app/services/messaging/meta.py` | Crear | MetaProvider — Instagram DM + Facebook Messenger |
 | `app/services/messaging/webchat.py` | Crear | WebchatProvider — WebSocket bidireccional |
 | `app/services/messaging/email_provider.py` | Crear | EmailProvider — SMTP/IMAP |
-| `app/services/messaging/factory.py` | Modificar | Registrar nuevos proveedores |
-| `app/api/v1/webhooks.py` | Modificar | Agregar endpoints de webhook para Telegram y Meta |
+| `app/services/messaging/factory.py` | Modificar | Registrar nuevos proveedores (Telegram, Webchat, Email) |
+| `app/api/v1/webhooks.py` | Modificar | Agregar endpoints de webhook para Telegram y Email |
 | `app/api/v1/webchat.py` | Crear | WebSocket endpoint para webchat |
 | `app/tasks/audio_transcription.py` | Crear | Task Celery para Whisper API |
 | `app/schemas/webchat.py` | Crear | Schemas Pydantic para mensajes WebSocket |
 | `tests/unit/test_telegram_provider.py` | Crear | Tests unitarios TelegramProvider |
-| `tests/unit/test_meta_provider.py` | Crear | Tests unitarios MetaProvider |
 | `tests/unit/test_webchat_provider.py` | Crear | Tests unitarios WebchatProvider |
 | `tests/unit/test_email_provider.py` | Crear | Tests unitarios EmailProvider |
 | `tests/unit/test_audio_transcription.py` | Crear | Tests de transcripción |
 | `tests/integration/test_multichannel.py` | Crear | Test de flujo multichannel |
+
+> **Nota:** `app/services/messaging/meta.py` y `tests/unit/test_meta_provider.py` se crean en Sprint 4 (MVP).
 
 ## Tareas Detalladas
 
@@ -184,157 +185,12 @@ async def register_webhook(self, webhook_url: str, secret_token: str):
     return response.json()
 ```
 
-### 2. MetaProvider — `app/services/messaging/meta.py`
+### 2. WebchatProvider — `app/services/messaging/webchat.py`
 
-**2.1 Estructura — Proveedor compartido para Instagram y Facebook**
+> **Nota:** La sección de MetaProvider (Instagram DM + Facebook Messenger) fue movida a Sprint 4 como canal MVP.
+> Ver `specs/sprint-04-webhooks.md` sección 4 para la especificación completa.
 
-```python
-from enum import Enum
-
-class MetaChannel(str, Enum):
-    INSTAGRAM = "instagram"
-    FACEBOOK_MESSENGER = "facebook_messenger"
-
-class MetaProvider(MessagingProvider):
-    """Proveedor unificado para Instagram DM y Facebook Messenger via Meta Graph API."""
-
-    GRAPH_API_VERSION = "v18.0"
-    BASE_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
-
-    def __init__(self, provider_config: dict):
-        self.page_access_token = provider_config["page_access_token"]
-        self.app_secret = provider_config["app_secret"]
-        self.channel = MetaChannel(provider_config.get("channel", "facebook_messenger"))
-```
-
-**2.2 `validate_signature` — HMAC-SHA256 con app_secret**
-
-```python
-async def validate_signature(self, payload: bytes, headers: dict, secret: str) -> bool:
-    """Verificar x-hub-signature-256 de Meta."""
-    signature = headers.get("x-hub-signature-256", "")
-    if not signature.startswith("sha256="):
-        return False
-    expected = hmac.new(
-        secret.encode(), payload, hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(signature[7:], expected)
-```
-
-**2.3 `parse_webhook` — Diferenciar Instagram y Facebook**
-
-```python
-async def parse_webhook(self, payload: dict, headers: dict) -> NormalizedMessage:
-    entry = payload["entry"][0]
-
-    if self.channel == MetaChannel.INSTAGRAM:
-        messaging = entry["messaging"][0]
-        sender_id = messaging["sender"]["id"]
-        message = messaging.get("message", {})
-        # Instagram: text, attachments (image, video, audio, file, share, story_mention)
-    else:
-        messaging = entry["messaging"][0]
-        sender_id = messaging["sender"]["id"]
-        message = messaging.get("message", {})
-        # Facebook: text, attachments, quick_replies, postback
-
-    return NormalizedMessage(
-        sender_id=sender_id,
-        message_id=message.get("mid"),
-        content=message.get("text", ""),
-        media_type=self._extract_media_type(message),
-        media_url=self._extract_media_url(message),
-        timestamp=messaging.get("timestamp"),
-        channel=self.channel.value,
-        raw_payload=payload,
-    )
-```
-
-**2.4 `send_message` — Send API de Meta**
-
-```python
-async def send_message(self, recipient_id: str, content: str, **kwargs) -> dict:
-    message_payload = {"recipient": {"id": recipient_id}}
-
-    message_type = kwargs.get("type", "text")
-    if message_type == "text":
-        message_payload["message"] = {"text": content}
-    elif message_type == "image":
-        message_payload["message"] = {
-            "attachment": {
-                "type": "image",
-                "payload": {"url": kwargs["media_url"], "is_reusable": True}
-            }
-        }
-    elif message_type == "template":
-        message_payload["message"] = kwargs["template_payload"]
-
-    # Tag de mensaje para fuera de ventana (Facebook solo)
-    if kwargs.get("message_tag"):
-        message_payload["messaging_type"] = "MESSAGE_TAG"
-        message_payload["tag"] = kwargs["message_tag"]
-
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{self.BASE_URL}/me/messages",
-            params={"access_token": self.page_access_token},
-            json=message_payload,
-        )
-
-    result = response.json()
-    if "error" in result:
-        raise ProviderError(f"Meta API error: {result['error']['message']}")
-
-    return {"provider_message_id": result["message_id"]}
-```
-
-**2.5 Ventana de 24 horas de Instagram**
-
-```python
-def get_channel_constraints(self) -> ChannelConstraints:
-    if self.channel == MetaChannel.INSTAGRAM:
-        return ChannelConstraints(
-            messaging_window=timedelta(hours=24),  # Estricta
-            max_message_length=1000,
-            supports_templates=False,  # Instagram no soporta templates
-            supports_buttons=True,  # Quick replies
-            supports_media=True,
-            supports_location=False,
-            rate_limit_per_second=200,
-        )
-    else:  # Facebook Messenger
-        return ChannelConstraints(
-            messaging_window=timedelta(hours=24),
-            max_message_length=2000,
-            supports_templates=True,  # Templates de botón y genéricos
-            supports_buttons=True,
-            supports_media=True,
-            supports_location=True,
-            rate_limit_per_second=200,
-        )
-```
-
-**2.6 Webhook verification endpoint (GET)**
-
-Meta requiere un endpoint GET para verificar el webhook al registrarlo:
-```python
-# En app/api/v1/webhooks.py
-@router.get("/webhooks/meta/{channel_config_id}")
-async def verify_meta_webhook(
-    channel_config_id: UUID,
-    mode: str = Query(alias="hub.mode"),
-    token: str = Query(alias="hub.verify_token"),
-    challenge: str = Query(alias="hub.challenge"),
-):
-    channel_config = await get_channel_config(channel_config_id)
-    if mode == "subscribe" and token == channel_config.webhook_secret:
-        return Response(content=challenge, media_type="text/plain")
-    raise HTTPException(403, "Verification failed")
-```
-
-### 3. WebchatProvider — `app/services/messaging/webchat.py`
-
-**3.1 WebSocket endpoint — `app/api/v1/webchat.py`**
+**2.1 WebSocket endpoint — `app/api/v1/webchat.py`**
 
 ```python
 from fastapi import WebSocket, WebSocketDisconnect
@@ -388,7 +244,7 @@ async def webchat_endpoint(websocket: WebSocket, channel_token: str):
         manager.disconnect(websocket, session_id)
 ```
 
-**3.2 Connection Manager**
+**2.2 Connection Manager**
 
 ```python
 class WebchatConnectionManager:
@@ -418,7 +274,7 @@ class WebchatConnectionManager:
                 self.disconnect(websocket, session_id)
 ```
 
-**3.3 WebchatProvider**
+**2.3 WebchatProvider**
 
 ```python
 class WebchatProvider(MessagingProvider):
@@ -471,7 +327,7 @@ class WebchatProvider(MessagingProvider):
         )
 ```
 
-**3.4 Schema WebSocket**
+**2.4 Schema WebSocket**
 
 ```python
 # app/schemas/webchat.py
@@ -495,9 +351,9 @@ class WebchatResponse(BaseModel):
     session_id: Optional[str] = None
 ```
 
-### 4. EmailProvider — `app/services/messaging/email_provider.py`
+### 3. EmailProvider — `app/services/messaging/email_provider.py`
 
-**4.1 Estructura**
+**3.1 Estructura**
 
 ```python
 class EmailProvider(MessagingProvider):
@@ -513,7 +369,7 @@ class EmailProvider(MessagingProvider):
         self.inbound_method = provider_config.get("inbound_method", "webhook")  # "webhook" o "imap"
 ```
 
-**4.2 Recepción — Inbound Parse (webhook de SendGrid/Mailgun)**
+**3.2 Recepción — Inbound Parse (webhook de SendGrid/Mailgun)**
 
 ```python
 async def parse_webhook(self, payload: dict, headers: dict) -> NormalizedMessage:
@@ -549,7 +405,7 @@ async def parse_webhook(self, payload: dict, headers: dict) -> NormalizedMessage
     )
 ```
 
-**4.3 Threading de email**
+**3.3 Threading de email**
 
 ```python
 async def _find_existing_conversation(self, db, client_id: UUID, message: NormalizedMessage) -> Optional[Conversation]:
@@ -578,7 +434,7 @@ async def _find_existing_conversation(self, db, client_id: UUID, message: Normal
     # ... buscar conversación reciente con mismo subject y sender
 ```
 
-**4.4 Envío — SMTP con template HTML**
+**3.4 Envío — SMTP con template HTML**
 
 ```python
 async def send_message(self, recipient_id: str, content: str, **kwargs) -> dict:
@@ -622,7 +478,7 @@ async def send_message(self, recipient_id: str, content: str, **kwargs) -> dict:
     return {"provider_message_id": message_id}
 ```
 
-**4.5 Constraints**
+**3.5 Constraints**
 
 ```python
 def get_channel_constraints(self) -> ChannelConstraints:
@@ -637,9 +493,9 @@ def get_channel_constraints(self) -> ChannelConstraints:
     )
 ```
 
-### 5. Audio Transcription — `app/tasks/audio_transcription.py`
+### 4. Audio Transcription — `app/tasks/audio_transcription.py`
 
-**5.1 Task Celery**
+**4.1 Task Celery**
 
 ```python
 # app/tasks/audio_transcription.py
@@ -717,14 +573,14 @@ async def whisper_transcribe(audio_data: bytes) -> str:
         return response.json()["text"]
 ```
 
-**5.2 Integración en el pipeline**
+**4.2 Integración en el pipeline**
 
 - En el handler de webhook, después de normalización:
   - Si `message.media_type == "audio"`: enviar a `transcribe_audio.delay()` en vez de `process_incoming_message.delay()`
   - `transcribe_audio` actualiza el mensaje y luego llama a `process_transcribed_message`
   - El resto del pipeline (intent routing, RAG, etc.) recibe texto normal
 
-**5.3 Batch processing (optimización)**
+**4.3 Batch processing (optimización)**
 
 ```python
 @celery_app.task(queue="media")
@@ -743,25 +599,34 @@ async def batch_transcribe(message_ids: list[str]):
             )
 ```
 
-### 6. Actualizar Factory — `app/services/messaging/factory.py`
+### 5. Actualizar Factory — `app/services/messaging/factory.py`
+
+Agregar los nuevos proveedores de Fase 2 al factory existente (que ya incluye `ycloud` y `meta` del Sprint 4):
 
 ```python
-# app/services/messaging/factory.py
-from app.services.messaging.base import MessagingProvider
-from app.services.messaging.whatsapp import WhatsAppProvider
+# Agregar a app/services/messaging/factory.py (existente del Sprint 4)
 from app.services.messaging.telegram import TelegramProvider
-from app.services.messaging.meta import MetaProvider
 from app.services.messaging.webchat import WebchatProvider
 from app.services.messaging.email_provider import EmailProvider
+
+# Agregar al dict _PROVIDERS:
+_PROVIDERS.update({
+    "telegram": TelegramProvider,
+    "webchat": WebchatProvider,
+    "email": EmailProvider,
+})
+
+# O alternativamente, refactorizar a clase ProviderFactory con registro dinámico:
 
 class ProviderFactory:
     """Factory para crear instancias de MessagingProvider."""
 
     _providers: dict[str, type[MessagingProvider]] = {
-        "whatsapp": WhatsAppProvider,
+        # Sprint 4 (MVP)
+        "ycloud": YCloudProvider,
+        "meta": MetaProvider,       # Instagram DM + Facebook Messenger
+        # Sprint 9 (Fase 2)
         "telegram": TelegramProvider,
-        "instagram": MetaProvider,
-        "facebook_messenger": MetaProvider,
         "webchat": WebchatProvider,
         "email": EmailProvider,
     }
@@ -781,10 +646,6 @@ class ProviderFactory:
         if not provider_class:
             raise ValueError(f"Canal no soportado: {channel}")
 
-        # MetaProvider necesita el channel en config
-        if channel in ("instagram", "facebook_messenger"):
-            provider_config = {**provider_config, "channel": channel}
-
         # WebchatProvider necesita el connection_manager
         if channel == "webchat":
             return provider_class(provider_config, kwargs.get("connection_manager"))
@@ -797,7 +658,9 @@ class ProviderFactory:
         return list(cls._providers.keys())
 ```
 
-### 7. Endpoints de Webhook — Actualizar `app/api/v1/webhooks.py`
+### 6. Endpoints de Webhook — Actualizar `app/api/v1/webhooks.py`
+
+> **Nota:** Los endpoints de Meta (Instagram/Facebook) ya están definidos en Sprint 4.
 
 ```python
 # Agregar a app/api/v1/webhooks.py
@@ -830,34 +693,6 @@ async def telegram_webhook(
 
     return {"status": "ok"}
 
-@router.post("/webhooks/meta/{channel_config_id}")
-async def meta_webhook(
-    channel_config_id: UUID,
-    request: Request,
-):
-    """Webhook para Instagram DM y Facebook Messenger."""
-    payload = await request.json()
-    raw_body = await request.body()
-    headers = dict(request.headers)
-
-    channel_config = await get_channel_config(channel_config_id)
-    channel = channel_config.channel  # "instagram" o "facebook_messenger"
-    provider = ProviderFactory.get_provider(channel, channel_config.provider_config)
-
-    if not await provider.validate_signature(raw_body, headers, channel_config.provider_config["app_secret"]):
-        raise HTTPException(403, "Invalid signature")
-
-    message = await provider.parse_webhook(payload, headers)
-
-    process_incoming_message.delay(
-        channel=channel,
-        client_id=str(channel_config.client_id),
-        payload=message.dict(),
-        channel_config_id=str(channel_config_id),
-    )
-
-    return {"status": "ok"}
-
 @router.post("/webhooks/email/{channel_config_id}")
 async def email_inbound_webhook(
     channel_config_id: UUID,
@@ -883,9 +718,9 @@ async def email_inbound_webhook(
     return {"status": "ok"}
 ```
 
-### 8. Tests
+### 7. Tests
 
-**8.1 Test TelegramProvider**
+**7.1 Test TelegramProvider**
 
 ```python
 # tests/unit/test_telegram_provider.py
@@ -928,7 +763,7 @@ class TestTelegramProvider:
         assert constraints.max_message_length == 4096
 ```
 
-**8.2 Test multichannel**
+**7.2 Test multichannel**
 
 ```python
 # tests/integration/test_multichannel.py
@@ -955,24 +790,24 @@ class TestMultichannel:
 | # | Criterio | Verificación |
 |---|---|---|
 | 1 | Telegram: mensaje enviado y recibido | Enviar texto al bot → recibir respuesta del agente |
-| 2 | Instagram DM: mensaje procesado | Webhook de Instagram → respuesta por Instagram |
-| 3 | Facebook Messenger: mensaje procesado | Webhook de Messenger → respuesta por Messenger |
-| 4 | Webchat: WebSocket bidireccional | Conectar WS → enviar mensaje → recibir respuesta |
-| 5 | Email: threading correcto | Enviar email → respuesta como reply en mismo hilo |
-| 6 | Audio → texto | Enviar audio en WhatsApp → transcripción → respuesta como texto |
-| 7 | Contact unification cross-canal | Mismo teléfono en 2 canales → 1 contacto |
-| 8 | Reconexión webchat | WebSocket se desconecta → reconecta → recibe mensajes perdidos |
-| 9 | Factory registra todos los canales | `ProviderFactory.get_supported_channels()` devuelve los 6 canales |
-| 10 | Cada provider pasa la misma suite de tests base | ABC contract test para los 5 métodos |
+| 2 | Webchat: WebSocket bidireccional | Conectar WS → enviar mensaje → recibir respuesta |
+| 3 | Email: threading correcto | Enviar email → respuesta como reply en mismo hilo |
+| 4 | Audio → texto | Enviar audio en WhatsApp → transcripción → respuesta como texto |
+| 5 | Contact unification cross-canal | Mismo teléfono en 2+ canales → 1 contacto |
+| 6 | Reconexión webchat | WebSocket se desconecta → reconecta → recibe mensajes perdidos |
+| 7 | Factory registra todos los canales | `ProviderFactory.get_supported_channels()` devuelve los 5 proveedores (ycloud, meta, telegram, webchat, email) |
+| 8 | Cada provider pasa la misma suite de tests base | ABC contract test para los 5 métodos |
+
+> **Nota:** Los criterios de Instagram DM y Facebook Messenger están en Sprint 4.
 
 ## Notas Técnicas
 
 - **ABC de 5 métodos**: Todo provider DEBE implementar `parse_webhook`, `validate_signature`, `send_message`, `send_template`, `get_channel_constraints`. Si un canal no soporta templates, `send_template` debe lanzar `TemplateNotSupportedError`.
-- **Ventanas de mensajes**: WhatsApp e Instagram tienen ventana de 24h. Facebook Messenger tiene 24h para mensajes normales pero permite message_tags fuera de ventana. Telegram y Webchat NO tienen ventana. Email NO tiene ventana. La lógica de ventana se maneja en `get_channel_constraints()` y se verifica ANTES de enviar en el nodo `respond` del grafo.
+- **Ventanas de mensajes**: WhatsApp, Instagram y Facebook (ventana de 24h) ya están implementados en Sprint 4. Telegram y Webchat NO tienen ventana. Email NO tiene ventana. La lógica de ventana se maneja en `get_channel_constraints()` y se verifica ANTES de enviar en el nodo `respond` del grafo.
 - **Webchat NO tiene restricciones de ventana**: Esto es una ventaja clave — el agente puede iniciar conversación en cualquier momento.
 - **Email threading es CRÍTICO**: Un email sin `In-Reply-To` correcto creará una conversación nueva en el mail client del usuario. Siempre incluir `In-Reply-To` y `References` en las respuestas.
 - **Audio batch**: Considerar un endpoint admin para re-procesar audios fallidos en batch.
-- **Rate limits**: Telegram tiene 30 msg/s por bot. Meta tiene ~200 msg/s. WhatsApp tiene límites por nivel de calidad. Implementar throttling en el envío.
+- **Rate limits**: Telegram tiene 30 msg/s por bot. WhatsApp y Meta (Sprint 4) tienen sus propios rate limits. Implementar throttling en el envío.
 
 ## Dependencias
 

@@ -84,8 +84,9 @@ Detección automática del idioma del mensaje entrante:
 
 - **Método primario**: biblioteca `langdetect` (Python) — rápida, sin costo de API.
 - **Fallback**: GPT-4o-mini con prompt de clasificación (para textos cortos o ambiguos).
-- Idiomas soportados iniciales: español (`es`), inglés (`en`), portugués (`pt`).
+- Idiomas soportados: español (`es`), inglés (`en`), portugués (`pt`), italiano (`it`), alemán (`de`), francés (`fr`).
 - Fallback si no se detecta: idioma configurado por tenant (default: `es`).
+- Configuración por tenant: el admin selecciona el idioma de la interfaz en `/api/v1/settings/preferences`.
 
 Almacenamiento:
 - `conversation.metadata.detected_language` — idioma detectado al inicio.
@@ -112,7 +113,7 @@ async def language_detect_node(state: ConversationState) -> dict:
     
     try:
         detected = detect(text)  # langdetect
-        if detected in SUPPORTED_LANGUAGES:
+        if detected in SUPPORTED_LANGUAGES:  # {"es","en","pt","it","de","fr"}
             return {"detected_language": detected}
     except LangDetectException:
         pass
@@ -120,6 +121,155 @@ async def language_detect_node(state: ConversationState) -> dict:
     # Fallback: GPT-4o-mini
     detected = await detect_with_llm(text)
     return {"detected_language": detected or "es"}
+```
+
+### 4b. API de Preferencia de Idioma de Interfaz
+
+```python
+# Agregar en app/api/v1/settings.py (o preferences.py)
+
+SUPPORTED_UI_LANGUAGES = {"es", "en", "pt", "it", "de", "fr"}
+
+class UserPreferencesUpdate(BaseModel):
+    """Actualización de preferencias del usuario."""
+    ui_language: str | None = Field(
+        None,
+        pattern="^(es|en|pt|it|de|fr)$",
+        description="Idioma de la interfaz: es, en, pt, it, de, fr"
+    )
+    theme: str | None = Field(
+        None,
+        pattern="^(light|dark|system)$",
+        description="Tema visual: light, dark, system"
+    )
+
+@router.put("/api/v1/settings/preferences")
+async def update_user_preferences(
+    data: UserPreferencesUpdate,
+    db: TenantSession,
+    user: CurrentUser,
+) -> dict:
+    """Actualizar preferencias de idioma y tema del usuario."""
+    updates = {}
+    if data.ui_language:
+        updates["ui_language"] = data.ui_language
+    if data.theme:
+        updates["theme"] = data.theme
+    
+    # Guardar en users.settings JSONB
+    await db.execute(
+        text("""
+            UPDATE users 
+            SET settings = COALESCE(settings, '{}'::jsonb) || :updates
+            WHERE id = :user_id
+        """),
+        {"updates": json.dumps(updates), "user_id": str(user.id)},
+    )
+    await db.commit()
+    return {"updated": updates}
+
+
+@router.get("/api/v1/settings/preferences")
+async def get_user_preferences(
+    db: TenantSession,
+    user: CurrentUser,
+) -> dict:
+    """Obtener preferencias actuales del usuario."""
+    result = await db.execute(
+        text("SELECT settings FROM users WHERE id = :user_id"),
+        {"user_id": str(user.id)},
+    )
+    row = result.first()
+    settings = row.settings if row and row.settings else {}
+    return {
+        "ui_language": settings.get("ui_language", "es"),
+        "theme": settings.get("theme", "system"),
+    }
+```
+
+### 4c. Traducciones Backend (Mensajes del Sistema)
+
+Los mensajes del sistema (errores, notificaciones, alertas) también deben estar traducidos:
+
+```python
+# app/services/i18n.py
+
+SYSTEM_MESSAGES = {
+    "es": {
+        "budget_exceeded": "Su presupuesto de tokens se ha agotado. Contacte a su administrador.",
+        "service_suspended": "El servicio ha sido suspendido. Contacte al administrador.",
+        "handoff_message": "Le transfiero con un agente humano. Por favor espere un momento.",
+        "out_of_hours": "Estamos fuera de horario de atención. Nuestro horario es {hours}.",
+        "welcome": "¡Hola! Soy el asistente virtual de {business_name}. ¿En qué puedo ayudarle?",
+        "farewell": "¡Gracias por contactarnos! Si necesita algo más, no dude en escribirnos.",
+        "csat_prompt": "¿Cómo calificaría su experiencia? (1-5 estrellas)",
+    },
+    "en": {
+        "budget_exceeded": "Your token budget has been exceeded. Please contact your administrator.",
+        "service_suspended": "The service has been suspended. Please contact the administrator.",
+        "handoff_message": "I'm transferring you to a human agent. Please wait a moment.",
+        "out_of_hours": "We are outside business hours. Our schedule is {hours}.",
+        "welcome": "Hello! I'm the virtual assistant for {business_name}. How can I help you?",
+        "farewell": "Thank you for contacting us! If you need anything else, don't hesitate to write.",
+        "csat_prompt": "How would you rate your experience? (1-5 stars)",
+    },
+    "pt": {
+        "budget_exceeded": "Seu orçamento de tokens foi excedido. Entre em contato com o administrador.",
+        "service_suspended": "O serviço foi suspenso. Entre em contato com o administrador.",
+        "handoff_message": "Estou transferindo você para um agente humano. Aguarde um momento.",
+        "out_of_hours": "Estamos fora do horário de atendimento. Nosso horário é {hours}.",
+        "welcome": "Olá! Sou o assistente virtual de {business_name}. Como posso ajudá-lo?",
+        "farewell": "Obrigado por nos contatar! Se precisar de mais alguma coisa, não hesite em escrever.",
+        "csat_prompt": "Como você avaliaria sua experiência? (1-5 estrelas)",
+    },
+    "it": {
+        "budget_exceeded": "Il budget di token è stato superato. Contattare l'amministratore.",
+        "service_suspended": "Il servizio è stato sospeso. Contattare l'amministratore.",
+        "handoff_message": "La trasferisco a un agente umano. Attenda un momento.",
+        "out_of_hours": "Siamo fuori dall'orario di lavoro. Il nostro orario è {hours}.",
+        "welcome": "Ciao! Sono l'assistente virtuale di {business_name}. Come posso aiutarla?",
+        "farewell": "Grazie per averci contattato! Se ha bisogno di altro, non esiti a scriverci.",
+        "csat_prompt": "Come valuterebbe la sua esperienza? (1-5 stelle)",
+    },
+    "de": {
+        "budget_exceeded": "Ihr Token-Budget wurde überschritten. Bitte kontaktieren Sie Ihren Administrator.",
+        "service_suspended": "Der Service wurde ausgesetzt. Bitte kontaktieren Sie den Administrator.",
+        "handoff_message": "Ich verbinde Sie mit einem menschlichen Agenten. Bitte warten Sie einen Moment.",
+        "out_of_hours": "Wir sind außerhalb der Geschäftszeiten. Unsere Öffnungszeiten sind {hours}.",
+        "welcome": "Hallo! Ich bin der virtuelle Assistent von {business_name}. Wie kann ich Ihnen helfen?",
+        "farewell": "Vielen Dank für Ihre Kontaktaufnahme! Wenn Sie weitere Fragen haben, schreiben Sie uns.",
+        "csat_prompt": "Wie würden Sie Ihre Erfahrung bewerten? (1-5 Sterne)",
+    },
+    "fr": {
+        "budget_exceeded": "Votre budget de tokens a été dépassé. Veuillez contacter votre administrateur.",
+        "service_suspended": "Le service a été suspendu. Veuillez contacter l'administrateur.",
+        "handoff_message": "Je vous transfère à un agent humain. Veuillez patienter un instant.",
+        "out_of_hours": "Nous sommes en dehors des heures d'ouverture. Nos horaires sont {hours}.",
+        "welcome": "Bonjour ! Je suis l'assistant virtuel de {business_name}. Comment puis-je vous aider ?",
+        "farewell": "Merci de nous avoir contactés ! Si vous avez besoin d'autre chose, n'hésitez pas.",
+        "csat_prompt": "Comment évalueriez-vous votre expérience ? (1-5 étoiles)",
+    },
+}
+
+
+def get_system_message(
+    key: str,
+    language: str = "es",
+    **kwargs: str,
+) -> str:
+    """Obtener mensaje del sistema en el idioma indicado.
+    
+    Args:
+        key: Clave del mensaje (ej: 'welcome', 'farewell').
+        language: Código de idioma ISO 639-1.
+        **kwargs: Variables para interpolación (ej: business_name, hours).
+        
+    Returns:
+        Mensaje traducido con variables interpoladas.
+    """
+    lang_msgs = SYSTEM_MESSAGES.get(language, SYSTEM_MESSAGES["es"])
+    msg = lang_msgs.get(key, SYSTEM_MESSAGES["es"].get(key, key))
+    return msg.format(**kwargs) if kwargs else msg
 ```
 
 ### 5. Feature Flags
@@ -235,20 +385,25 @@ async def intent_routing_node(state: ConversationState) -> dict:
 - Rollback: restaura versión anterior de production
 - Datos de sandbox aislados (RLS por environment)
 
-**Multi-idioma:**
+**Multi-idioma (6 idiomas):**
 - Texto en español → `detected_language = "es"`
 - Texto en inglés → `detected_language = "en"`
 - Texto en portugués → `detected_language = "pt"`
+- Texto en italiano → `detected_language = "it"`
+- Texto en alemán → `detected_language = "de"`
+- Texto en francés → `detected_language = "fr"`
 - Texto ambiguo → fallback a idioma del tenant
 - Respuesta del agente en el idioma detectado
+- Interfaz del frontend traducida completamente (ver Sprint 15)
 
 ## Criterios de Aceptación
 
 - Sandbox aislado de production por RLS
 - Publicación atómica funciona sin pérdida de datos ni downtime
 - Rollback restaura el estado anterior correctamente
-- Detección de idioma correcta para español, inglés y portugués
+- Detección de idioma correcta para los 6 idiomas soportados (es, en, pt, it, de, fr)
 - El agente responde en el idioma del contacto
+- El admin puede seleccionar idioma de interfaz en configuración
 - Feature flags controlan activación/desactivación de cada agente
 - Rollout gradual distribuye correctamente según porcentaje
 - Cache Redis se invalida al cambiar un flag
@@ -259,6 +414,8 @@ async def intent_routing_node(state: ConversationState) -> dict:
 - La publicación atómica es una transacción PostgreSQL: backup → delete → copy en un solo `BEGIN...COMMIT`.
 - Feature flags en Redis con TTL de 5 minutos balancean performance vs. freshness.
 - La detección de idioma con `langdetect` es prácticamente gratis (local, sin API call). Solo usar GPT como fallback para textos muy cortos (<10 caracteres).
+- Los 6 idiomas soportados (es, en, pt, it, de, fr) cubren la mayoría de mercados LATAM, Europa y Norteamérica. `langdetect` soporta los 6 nativamente.
+- La traducción completa de la interfaz de usuario se implementa en el Sprint 15 (Frontend) usando next-intl con archivos JSON por idioma.
 - Los feature flags son el mecanismo central para activar módulos de Fase 2 y Fase 3 de forma granular por tenant.
 - El hash determinístico para rollout gradual garantiza que la misma entidad siempre obtiene el mismo resultado (consistencia).
 
