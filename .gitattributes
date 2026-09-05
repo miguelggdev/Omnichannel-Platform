@@ -1,0 +1,9 @@
+# Forzar LF en todos los archivos de texto (el proyecto corre en Linux/Docker)
+* text=auto eol=lf
+
+# Archivos binarios — no tocar line endings
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
+*.ttf binary

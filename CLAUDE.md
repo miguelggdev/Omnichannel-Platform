@@ -20,11 +20,16 @@ Eres un Senior AI Engineer & Azure Solutions Architect construyendo una platafor
 | Tareas Async | Celery | 5+ |
 | Orquestación IA | LangGraph (estado y flujo) + LangChain (componentes) | Latest stable |
 | LLM Principal | OpenAI GPT-4o / GPT-4o-mini (configurable por tenant) | — |
-| Mensajería | Abstracción `MessagingProvider` (impl. inicial: YCloud) | — |
+| Mensajería | Abstracción `MessagingProvider` (MVP: YCloud + Meta/Instagram + Meta/Facebook) | — |
 | Despliegue | Docker Compose (migración futura a K8s) | — |
 | API Gateway | Traefik v3 | 3.x |
 | Observabilidad | OpenTelemetry + Loguru + Prometheus + Grafana | — |
 | STT | OpenAI Whisper API | — |
+| Frontend | Next.js 14+ (App Router) + TypeScript + shadcn/ui + Tailwind CSS | 14.2+ |
+| State Management | Zustand + TanStack Query (React Query) | — |
+| i18n | next-intl (6 idiomas: es, en, pt, it, de, fr) | — |
+| Seguridad | Cloudflare (WAF + DDoS) + Traefik mTLS + fail2ban | — |
+| Monitoreo Ops | Telegram Bot (python-telegram-bot) para super admin | — |
 
 ---
 
@@ -78,6 +83,10 @@ omnichannel-platform/
 ├── specs/                       # Especificaciones por sprint
 │   ├── sprint-01-schema.md
 │   ├── sprint-02-docker.md
+│   ├── sprint-03-addendum-onboarding.md  # Onboarding, personalización, client mgmt
+│   ├── sprint-06-addendum-agent-logging.md  # Agent activity logging
+│   ├── sprint-08-addendum-ops.md  # Celery admin, Telegram bot, backup, security
+│   ├── sprint-15-frontend.md     # Frontend Foundation (Fase 4)
 │   └── ...
 ├── docker-compose.yml
 ├── .env.example
@@ -135,7 +144,8 @@ omnichannel-platform/
 │   │   ├── messaging/
 │   │   │   ├── __init__.py
 │   │   │   ├── base.py          # MessagingProvider ABC
-│   │   │   ├── ycloud.py
+│   │   │   ├── ycloud.py        # WhatsApp via YCloud
+│   │   │   ├── meta.py          # Instagram DM + Facebook Messenger via Meta Graph API
 │   │   │   └── factory.py
 │   │   ├── document_pipeline.py
 │   │   ├── rag.py
@@ -250,7 +260,7 @@ Este proyecto se desarrolla con **2 devs** trabajando en paralelo con sesiones d
 - **Dev A (Foundations):** DDL, models, schemas, core, infra, graph state
 - **Dev B (Integration):** middleware, API, services, Celery tasks, agent nodes, tests
 - **Loop:** implementar → pytest → ruff → commit → PROGRESS.md → checkpoint cada 3-5 módulos
-- **Branches:** `feature/sprint-{NN}-{descripcion}` → PR a `develop` → review cruzado → merge
+- **Branches:** `feature/sprint-{NN}-{descripcion}` → PR a `main` → review cruzado → merge
 
 ### Inicio de sesión obligatorio
 1. Leer: `CLAUDE.md` → `METHODOLOGY.md` → `PROGRESS.md` → `MEMORY.md`

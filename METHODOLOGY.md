@@ -60,24 +60,23 @@ Este proyecto se desarrolla con **Loop Engineering**: cada desarrollador trabaja
 ### Branch Strategy
 
 ```
-main (protegida — solo merge de develop con PR aprobado)
-  └── develop (rama de integración — PRs de feature branches)
-       ├── feature/sprint-01-ddl          (Dev A)
-       ├── feature/sprint-01-tests-rls    (Dev B)
-       ├── feature/sprint-02-docker       (Dev A)
-       ├── feature/sprint-02-traefik      (Dev B)
-       ├── feature/sprint-03-models       (Dev A)
-       ├── feature/sprint-03-api          (Dev B)
-       └── ...
+main (protegida — PR aprobado + CI verde)
+  ├── feature/sprint-01-ddl          (Dev A)
+  ├── feature/sprint-01-tests-rls    (Dev B)
+  ├── feature/sprint-02-docker       (Dev A)
+  ├── feature/sprint-02-traefik      (Dev B)
+  ├── feature/sprint-03-models       (Dev A)
+  ├── feature/sprint-03-api          (Dev B)
+  └── ...
 ```
 
 ### Convenciones de branches
 - Formato: `feature/sprint-{NN}-{descripción-corta}`
 - Cada dev crea su branch ANTES de iniciar el loop
-- Nunca push directo a `develop` ni a `main`
+- Nunca push directo a `main`
 
 ### PR Protocol
-1. Dev completa su slice del sprint → crea PR a `develop`
+1. Dev completa su slice del sprint → crea PR a `main`
 2. El OTRO dev (o su Claude) hace code review
 3. CI debe pasar: `ruff check`, `mypy`, `pytest`
 4. Aprobación requerida: 1 reviewer
@@ -85,18 +84,14 @@ main (protegida — solo merge de develop con PR aprobado)
 
 ### Branch Protection Rules (configurar en GitHub)
 ```yaml
-# develop
+# main
 - Require PR before merging
 - Require 1 approval
 - Require status checks: [lint, typecheck, test]
-- No force pushes
-
-# main
-- Require PR before merging
-- Require 1 approval from code owners
-- Require all status checks
+- Require branches up to date before merge
 - No force pushes
 - No deletions
+- Sin excepciones para admins (bypass list vacía)
 ```
 
 ### CI Pipeline (GitHub Actions)
@@ -106,7 +101,7 @@ main (protegida — solo merge de develop con PR aprobado)
 name: CI
 on:
   pull_request:
-    branches: [develop, main]
+    branches: [main]
 
 jobs:
   lint:
@@ -208,7 +203,7 @@ Branch de trabajo: feature/sprint-{NN}-{descripcion}
 │  8. Al completar el slice del sprint:                │
 │     a. Ejecutar test suite completo                  │
 │     b. git push origin feature/sprint-XX-desc        │
-│     c. Crear PR a develop                            │
+│     c. Crear PR a main                            │
 │     d. Notificar al otro dev para review             │
 │                                                      │
 └─────────────────────────────────────────────────────┘
@@ -275,7 +270,7 @@ Día 1:    Dev B prepara tests de integración, stubs, conftest
 Día 2-3:  Dev B implementa Integration (services, API, tasks)
           (consume los modelos/schemas que Dev A ya commiteó)
 Día 3-4:  Ambos: PRs, code review cruzado, fix de issues
-Día 4:    Merge a develop, integration tests, cerrar sprint
+Día 4:    Merge a main, integration tests, cerrar sprint
 ```
 
 **Overlap:** Dev B puede empezar su slice en cuanto Dev A pushee los archivos de `models/` y `schemas/`. No necesita esperar al PR completo. Dev A pushea incrementalmente.
@@ -350,12 +345,14 @@ El stub se reemplaza por el import real en cuanto Dev A pushee el modelo. Claude
 |---|---|---|
 | **A** | MessagingProvider ABC (5 métodos) | `app/services/messaging/base.py` |
 | **A** | YCloudProvider (implementación completa) | `app/services/messaging/ycloud.py` |
+| **A** | MetaProvider (Instagram DM + Facebook Messenger) | `app/services/messaging/meta.py` |
 | **A** | ProviderFactory (resolve por channel + config) | `app/services/messaging/factory.py` |
 | **A** | NormalizedMessage schema | `app/schemas/message.py` |
-| **B** | Webhook endpoint (POST /webhooks/{provider}/{channel}) | `app/api/v1/webhooks.py` |
+| **B** | Webhook endpoint (POST /webhooks/{provider}/{channel}) — YCloud + Meta | `app/api/v1/webhooks.py` |
+| **B** | Meta webhook verification (GET hub.challenge) | `app/api/v1/webhooks.py` |
 | **B** | Deduplicación por (channel, external_message_id) | `app/services/dedup.py` |
 | **B** | Celery app config + webhook_processor task | `app/tasks/celery_app.py`, `app/tasks/webhook_processor.py` |
-| **B** | Tests: webhook idempotency, provider factory | `tests/unit/test_webhooks.py`, `tests/integration/test_webhook_flow.py` |
+| **B** | Tests: webhook idempotency, provider factory, MetaProvider | `tests/unit/test_webhooks.py`, `tests/unit/test_meta_provider.py`, `tests/integration/test_webhook_flow.py` |
 
 ### Sprint 5 — Pipeline de Documentos & RAG
 | Dev | Tareas | Archivos |
@@ -409,7 +406,7 @@ El stub se reemplaza por el import real en cuanto Dev A pushee el modelo. Claude
 ### Sprints 9-12 — Fase 2: Expansión
 | Sprint | Dev A | Dev B |
 |---|---|---|
-| 9 (Canales adicionales) | TelegramProvider, MetaProvider, EmailProvider | WebchatProvider (WebSocket), Whisper integration, tests |
+| 9 (Canales adicionales) | TelegramProvider, EmailProvider | WebchatProvider (WebSocket), Whisper integration, tests (Meta movido a Sprint 4) |
 | 10 (Templates & Sentimiento) | Template cloning con re-embedding | Sentiment analysis node, CRUD templates |
 | 11 (Webhooks salientes & CSAT) | Outgoing webhook engine (HMAC-SHA256) | CSAT surveys post-resolution, retry/auto-disable |
 | 12 (Agentes Financiero & Marketing) | Financial agent (DIAN), Marketing agent | CRM scoring, RAG re-ranking cross-encoder |
@@ -418,7 +415,25 @@ El stub se reemplaza por el import real en cuanto Dev A pushee el modelo. Claude
 | Sprint | Dev A | Dev B |
 |---|---|---|
 | 13 (Canal de Voz & Agente Clínico) | Voice channel (Twilio/Vonage STT/TTS) | Clinical agent (RIPS, CIE-10, CUPS) |
-| 14 (Sandbox, Multi-idioma & Feature Flags) | Sandbox mode per tenant, feature flags | Multi-language (langdetect + GPT), percentage rollout |
+| 14 (Sandbox, Multi-idioma & Feature Flags) | Sandbox mode per tenant, feature flags | Multi-language 6 idiomas (langdetect + GPT), API preferencias UI |
+
+### Sprint 15 — Fase 4: Frontend Foundation & Panel Admin
+| Dev | Tareas | Archivos |
+|---|---|---|
+| **A** | Next.js 14+ project scaffolding, App Router, TypeScript config | `frontend/`, `frontend/next.config.ts`, `frontend/tsconfig.json` |
+| **A** | shadcn/ui + Tailwind CSS setup, design tokens | `frontend/tailwind.config.ts`, `frontend/components/ui/` |
+| **A** | next-themes (dark/light/system toggle) | `frontend/components/theme-provider.tsx`, `frontend/components/theme-toggle.tsx` |
+| **A** | next-intl (6 idiomas: es, en, pt, it, de, fr) | `frontend/i18n/`, `frontend/messages/*.json` |
+| **A** | Auth context + Zustand stores | `frontend/stores/`, `frontend/lib/auth.ts` |
+| **A** | Supabase Realtime client para conversaciones | `frontend/lib/supabase.ts`, `frontend/hooks/use-realtime.ts` |
+| **A** | Dockerfile multi-stage para Next.js (standalone) | `frontend/Dockerfile` |
+| **B** | Onboarding UI: multi-step form (`/onboarding`) | `frontend/app/onboarding/` |
+| **B** | Admin Dashboard: stats, charts (Recharts), activity feed | `frontend/app/dashboard/` |
+| **B** | Conversations view con mensajes real-time | `frontend/app/conversations/` |
+| **B** | Business personalization UI (logo, colors, hours) | `frontend/app/settings/` |
+| **B** | Super Admin: client management, Celery/Redis dashboard | `frontend/app/admin/` |
+| **B** | Responsive layout (mobile-first, Tailwind breakpoints) | `frontend/components/layout/` |
+| **B** | Tests: Vitest + React Testing Library | `frontend/__tests__/` |
 
 ---
 
@@ -437,7 +452,7 @@ El stub se reemplaza por el import real en cuanto Dev A pushee el modelo. Claude
 - [ ] Cobertura de tests > 70% para archivos nuevos
 - [ ] PROGRESS.md actualizado
 - [ ] MEMORY.md actualizado si hay decisiones nuevas
-- [ ] Branch rebased sobre develop (sin conflictos)
+- [ ] Branch rebased sobre main (sin conflictos)
 
 ### Gate 3: PR Review (por el otro dev o su Claude)
 - [ ] Cumple spec de `specs/sprint-XX-*.md`
@@ -449,8 +464,8 @@ El stub se reemplaza por el import real en cuanto Dev A pushee el modelo. Claude
 - [ ] Tests cubren happy path + 2 edge cases mínimo
 
 ### Gate 4: Sprint Milestone (ambos devs)
-- [ ] Ambos PRs del sprint mergeados a develop
-- [ ] Integration tests pasan en develop
+- [ ] Ambos PRs del sprint mergeados a main
+- [ ] Integration tests pasan en main
 - [ ] PROGRESS.md muestra sprint como completado
 - [ ] Demo funcional (solo para Sprint 8 = MVP)
 
@@ -464,7 +479,7 @@ El stub se reemplaza por el import real en cuanto Dev A pushee el modelo. Claude
 - **PROGRESS.md**: Estado compartido entre sesiones de Claude
 
 ### Protocolo de sincronización diario
-1. **Antes de empezar**: `git pull origin develop` en tu feature branch
+1. **Antes de empezar**: `git pull origin main` en tu feature branch
 2. **Cada commit**: Push a tu feature branch (el otro dev puede ver progreso)
 3. **Al terminar el día**: Actualizar PROGRESS.md con lo completado
 4. **Bloqueadores**: Crear GitHub Issue con label `blocker` e informar al otro dev
@@ -551,7 +566,7 @@ PR: #{número} — feature/sprint-{NN}-{descripcion}
 
 1. Lee CLAUDE.md para las reglas del proyecto
 2. Lee specs/sprint-{NN}-*.md para verificar cumplimiento
-3. Haz git diff develop...feature/sprint-{NN}-{descripcion}
+3. Haz git diff main...feature/sprint-{NN}-{descripcion}
 4. Verifica los Quality Gates de la sección 7 de METHODOLOGY.md
 5. Reporta: ✅ Aprobado, 🔄 Cambios requeridos, o ❌ Rechazado
 ```
@@ -584,7 +599,8 @@ Con Loop Engineering semi-autónomo para 2 devs:
 | **Total MVP** | **1-8** | **~4-5 semanas** | **Hito: demo end-to-end** |
 | Expansión | 9-12 | 3-4 semanas | Módulos independientes, alta paralelización |
 | Avanzados | 13-14 | 2 semanas | Requiere APIs externas (Twilio, etc.) |
-| **Total Proyecto** | **1-14** | **~9-11 semanas** | Con 2 devs + Claude semi-autónomo |
+| Frontend | 15 | 1.5-2 semanas | Next.js, i18n, theme, responsive, admin panels |
+| **Total Proyecto** | **1-15** | **~10-13 semanas** | Con 2 devs + Claude semi-autónomo |
 
 ---
 
@@ -599,7 +615,7 @@ Antes de empezar el Sprint 1, ambos devs deben:
 - [ ] Configurar su sesión de Claude con acceso al repo
 - [ ] Leer CLAUDE.md + METHODOLOGY.md completos
 - [ ] Configurar branch protection en GitHub
-- [ ] Crear labels en GitHub: `sprint-1` a `sprint-14`, `blocker`, `bug`, `dev-a`, `dev-b`
+- [ ] Crear labels en GitHub: `sprint-1` a `sprint-15`, `blocker`, `bug`, `dev-a`, `dev-b`
 - [ ] Crear GitHub Actions CI (copiar el YAML de la sección 3)
 - [ ] Instalar git hooks: `bash scripts/install-hooks.sh`
 - [ ] Ejecutar pre-flight check: `bash scripts/preflight.sh --dev-{a|b}`
@@ -676,7 +692,7 @@ Coordinación determinística entre 2 sesiones de Claude trabajando en paralelo.
 - **Contract files:** interfaces explícitas entre devs (`contracts/sprint-*.json`)
 - **Stubs temporales:** patrón para desbloquear a Dev B cuando Dev A no ha pusheado
 - **Checkpoints:** pausas obligatorias cada 3-5 módulos para revisión humana
-- **Quality Gates:** 4 niveles de validación (§7) antes de que código llegue a `develop`
+- **Quality Gates:** 4 niveles de validación (§7) antes de que código llegue a `main`
 
 ### Uso práctico
 

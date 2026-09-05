@@ -57,6 +57,59 @@
   - `bulk` (baja): operaciones masivas, reportes.
 - **Consecuencia:** Cada cola puede escalar workers independientemente. Docker Compose define un servicio por cola.
 
+### ADR-008: Facebook Messenger e Instagram DM como canales MVP (no Fase 2)
+- **Fecha:** 2026-09-05
+- **Contexto:** Originalmente, Instagram DM y Facebook Messenger estaban planificados para Sprint 9 (Fase 2). Durante la revisión del pitch deck, se decidió incluirlos como canales MVP desde Fase 1 para maximizar el alcance de mercado desde el lanzamiento. Facebook tiene ~3B usuarios y Instagram ~2B usuarios — ambos representan canales críticos para la captación de clientes.
+- **Decisión:** Mover la implementación de MetaProvider (que cubre Instagram DM y Facebook Messenger via Meta Graph API unificada) de Sprint 9 a Sprint 4. Ambos canales comparten la misma clase `MetaProvider` con un `MetaChannel` enum que diferencia el sub-canal, minimizando el esfuerzo adicional.
+- **Consecuencia:**
+  - Sprint 4 ahora implementa 2 proveedores: `YCloudProvider` (WhatsApp) y `MetaProvider` (Instagram + Facebook).
+  - Sprint 9 se reduce a Telegram, Webchat, Email y Audio Transcription.
+  - El MVP lanza con 3 canales de mensajería (WhatsApp, Instagram DM, Facebook Messenger) cubriendo las plataformas más utilizadas en LATAM.
+  - Se requieren credenciales adicionales de Meta (App Secret, Page Access Token, Webhook Verify Token) en .env.
+  - El schema DDL no requiere cambios (el ENUM `channel_type` ya incluía 'facebook' e 'instagram').
+
+### ADR-009: Agent Activity Logging con Decorator Middleware
+- **Fecha:** 2026-09-05
+- **Contexto:** Se necesita auditoría completa de las acciones de cada nodo del grafo LangGraph para debugging, compliance y análisis de rendimiento.
+- **Decisión:** Implementar un decorator `@logged_node(node_name, action_type)` que wrappea cada nodo del grafo. El decorator mide duración, captura input/output, registra tokens y errores, y escribe en la tabla `agent_action_logs`.
+- **Consecuencia:** Cada ejecución de nodo genera un registro. La sesión DB se inyecta como campo efímero `_db_session` en ConversationState (no se persiste en checkpointer). Los logs se retienen 30 días (detallados) y 1 año (agregados).
+
+### ADR-010: Onboarding como endpoint público con rate limiting
+- **Fecha:** 2026-09-05
+- **Contexto:** Nuevos clientes necesitan auto-registrarse sin intervención manual del super admin.
+- **Decisión:** Crear `POST /api/v1/onboarding/register` como endpoint público (sin auth), protegido por rate limiting (5 req/IP/hora) y verificación de email. El endpoint crea client + admin user + default agent_config + token_budget en una sola transacción.
+- **Consecuencia:** El super admin no necesita crear clientes manualmente. Se requiere servicio de email (Celery task) para verificación. El free tier otorga 50,000 tokens/mes.
+
+### ADR-011: Cloudflare como capa de seguridad frente a Traefik
+- **Fecha:** 2026-09-05
+- **Contexto:** La aplicación necesita protección DDoS, WAF y CDN sin complejidad operativa propia.
+- **Decisión:** Usar Cloudflare como proxy reverso frente a Traefik. Cloudflare maneja DNS, DDoS, WAF managed rules y certificados. Traefik confía las IPs de Cloudflare para X-Forwarded-For. Como alternativa, Cloudflare Tunnel evita exponer puertos del servidor.
+- **Consecuencia:** Las reglas de firewall del servidor solo abren 80/443 y SSH. La comunicación Cloudflare ↔ Traefik usa mTLS (authenticated origin pulls).
+
+### ADR-012: PostgreSQL Streaming Replication a VPS secundario
+- **Fecha:** 2026-09-05
+- **Contexto:** Un solo servidor con backups diarios tiene RPO de hasta 24 horas. Para SaaS multi-tenant esto es inaceptable.
+- **Decisión:** Configurar streaming replication asíncrona a un VPS secundario. El primario envía WAL logs continuamente. RPO se reduce a < 1 minuto. En caso de fallo del primario, el secundario se promueve manualmente.
+- **Consecuencia:** Requiere VPS secundario con PostgreSQL. Monitoreo de replication lag en Prometheus (alerta si > 30s). El backup diario pg_dump sigue ejecutándose como safety net.
+
+### ADR-013: Telegram Bot para monitoreo de super admin
+- **Fecha:** 2026-09-05
+- **Contexto:** El super admin necesita visibilidad del estado del sistema desde dispositivos móviles, sin acceder al servidor.
+- **Decisión:** Implementar un bot de Telegram (python-telegram-bot) que responde a comandos (/status, /docker, /db, /redis, /celery, /backup, /logs). Además, envía alertas proactivas (CPU, RAM, disco, crashes, queue depth, backup failures).
+- **Consecuencia:** El bot es un servicio Docker independiente. Solo responde al chat_id configurado (whitelist). Las alertas se deduplicar con Redis (cooldown 15 min). Requiere TELEGRAM_BOT_TOKEN y TELEGRAM_ADMIN_CHAT_ID en .env.
+
+### ADR-014: Frontend con Next.js 14 + shadcn/ui (Sprint 15)
+- **Fecha:** 2026-09-05
+- **Contexto:** La plataforma necesita una interfaz de administración web con theme toggle, responsive design e i18n completo.
+- **Decisión:** Usar Next.js 14 (App Router) con TypeScript, shadcn/ui (Radix UI + Tailwind CSS), Zustand, TanStack Query, next-intl (6 idiomas), next-themes, y Recharts. Dockerizado con output standalone.
+- **Consecuencia:** Se agrega Sprint 15 (Fase 4) al plan. El frontend se sirve como servicio Docker adicional vía Traefik. La autenticación usa JWT con httpOnly cookies.
+
+### ADR-015: Suspensión de clientes con alertas de pago automatizadas
+- **Fecha:** 2026-09-05
+- **Contexto:** Clientes que no pagan necesitan ser notificados progresivamente antes de suspender el servicio.
+- **Decisión:** Implementar sistema de alertas escalonadas: el super admin configura `alert_days_before_suspension` (ej: [7, 3, 1]) y `suspension_date`. Un Celery Beat task diario envía alertas y auto-suspende en la fecha configurada. El cliente suspendido recibe un `alert_message` configurable en lugar de respuestas del agente.
+- **Consecuencia:** Requiere campos adicionales en `clients` (suspension_date, payment_alert_config JSONB, alert_message, suspended_at). El middleware `verify_client_is_active` bloquea mensajes salientes excepto el alert_message.
+
 ### ADR-007: Supabase self-hosted en lugar de cloud
 - **Fecha:** 2026-09-01
 - **Contexto:** Supabase Cloud tiene limitaciones de extensiones (pgvector, pgcrypto) y no permite configuración avanzada de PostgreSQL.
@@ -149,6 +202,11 @@
 | 23 | `satisfaction_surveys` | Encuestas CSAT post-conversación |
 | 24 | `channel_configs` | Configuración multi-canal por tenant |
 
+### Feature Enhancement Tables (Sesión 5)
+| # | Tabla | Propósito |
+|---|---|---|
+| 25 | `agent_action_logs` | Log de acciones de cada nodo LangGraph por conversación |
+
 ### Enums importantes
 - **conversation_status:** `new`, `bot_active`, `human_active`, `waiting_human`, `waiting_client`, `resolved`, `archived`
 - **message_direction:** `inbound`, `outbound`
@@ -185,6 +243,15 @@
 - `YCLOUD_API_KEY` — API key de YCloud
 - `JWT_SECRET` — Secreto para tokens JWT
 - `ENCRYPTION_KEY` — Clave para pgcrypto
+- `TELEGRAM_BOT_TOKEN` — Token del bot de Telegram para monitoreo
+- `TELEGRAM_ADMIN_CHAT_ID` — Chat ID del super admin para alertas
+- `CLOUDFLARE_API_TOKEN` — Token de Cloudflare para WAF/Tunnel
+- `CLOUDFLARE_ZONE_ID` — Zone ID de Cloudflare
+- `REPLICA_HOST` — Host del servidor VPS de replicación
+- `REPLICA_PORT` — Puerto PostgreSQL en réplica
+- `META_APP_SECRET` — App Secret de Meta (Facebook/Instagram)
+- `META_PAGE_ACCESS_TOKEN` — Page Access Token de Meta
+- `META_WEBHOOK_VERIFY_TOKEN` — Token de verificación de webhooks Meta
 
 ---
 
@@ -195,3 +262,5 @@
 | 2026-09-01 | Sesión 1 | Análisis y mejora del prompt maestro, adición de features |
 | 2026-09-02 | Sesión 2 | Investigación de plugins/skills, generación del SDD |
 | 2026-09-03 | Sesión 3 | Documento Word para devs, creación de archivos repo (CLAUDE.md, PROGRESS.md, MEMORY.md, specs) |
+| 2026-09-05 | Sesión 4 | Pitch deck investor (pptx), inclusión de Facebook e Instagram como canales MVP, actualización de specs (sprint-04, sprint-09) y docs del proyecto |
+| 2026-09-05 | Sesión 5 | Integración de 11 nuevas features en specs: onboarding, personalización, theme toggle, responsive, i18n (6 idiomas), Celery admin, Telegram bot, agent logging, client mgmt, backup/replicación, seguridad. Creación de Sprint 15 (Frontend). Addendums para Sprints 3, 6, 8, 14 |

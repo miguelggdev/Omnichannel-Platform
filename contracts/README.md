@@ -17,7 +17,7 @@ entre ambos devs. Estos archivos están listados abajo y en cada
 
 ## Reglas
 
-- Un contrato se considera **estable** cuando está en `develop`
+- Un contrato se considera **estable** cuando está en `main`
 - Dev A puede cambiar un contrato solo si:
   1. Avisa en el issue del sprint
   2. Actualiza el contrato aquí

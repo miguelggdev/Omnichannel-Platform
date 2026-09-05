@@ -25,6 +25,7 @@
   --phase-1: #1A73A7;
   --phase-2: #7B4FBF;
   --phase-3: #B8700F;
+  --phase-4: #0F8A5F;
   --sans: 'Outfit', system-ui, -apple-system, sans-serif;
   --mono: 'IBM Plex Mono', 'Menlo', monospace;
   --radius: 6px;
@@ -54,6 +55,7 @@
     --phase-1: #4AABE0;
     --phase-2: #A98CDE;
     --phase-3: #E5A54B;
+    --phase-4: #3CC98A;
   }
 }
 :root[data-theme="dark"] {
@@ -80,6 +82,7 @@
   --phase-1: #4AABE0;
   --phase-2: #A98CDE;
   --phase-3: #E5A54B;
+  --phase-4: #3CC98A;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -175,6 +178,7 @@ body {
 .phase-tag--1 { color: var(--phase-1); background: var(--dev-a-bg); }
 .phase-tag--2 { color: var(--phase-2); background: var(--dev-b-bg); }
 .phase-tag--3 { color: var(--phase-3); background: var(--active-bg); }
+.phase-tag--4 { color: var(--phase-4); background: var(--done-bg); }
 
 .timeline-lanes {
   display: grid;
@@ -444,21 +448,21 @@ body {
 <div class="wrap">
   <header class="header">
     <h1>Omnichannel Platform &mdash; Sprint Map</h1>
-    <p>Loop Engineering para 2 devs &middot; 14 sprints &middot; 3 fases</p>
+    <p>Loop Engineering para 2 devs &middot; 15 sprints &middot; 4 fases &middot; 11 features integradas</p>
   </header>
 
   <div class="stats">
     <div class="stat">
       <div class="stat-label">Sprints</div>
-      <div class="stat-value">0<span style="color:var(--text-3);font-size:0.85rem">/14</span></div>
+      <div class="stat-value">0<span style="color:var(--text-3);font-size:0.85rem">/15</span></div>
     </div>
     <div class="stat">
       <div class="stat-label">Semanas est.</div>
-      <div class="stat-value" style="color:var(--phase-1)">9-11</div>
+      <div class="stat-value" style="color:var(--phase-1)">10-13</div>
     </div>
     <div class="stat">
       <div class="stat-label">Tablas DB</div>
-      <div class="stat-value">0<span style="color:var(--text-3);font-size:0.85rem">/24</span></div>
+      <div class="stat-value">0<span style="color:var(--text-3);font-size:0.85rem">/25</span></div>
     </div>
     <div class="stat">
       <div class="stat-label">Fase actual</div>
@@ -486,12 +490,12 @@ body {
         <div class="lane-cells" style="grid-template-columns: repeat(8, 1fr)">
           <div class="lane-cell"><strong>S1</strong>DDL 18 tablas, RLS, idx</div>
           <div class="lane-cell"><strong>S2</strong>Docker, Dockerfile</div>
-          <div class="lane-cell"><strong>S3</strong>Models, schemas, core</div>
-          <div class="lane-cell"><strong>S4</strong>Provider ABC, YCloud</div>
+          <div class="lane-cell"><strong>S3</strong>Models, schemas, core, onboarding svc</div>
+          <div class="lane-cell"><strong>S4</strong>Provider ABC, YCloud, Meta</div>
           <div class="lane-cell"><strong>S5</strong>Doc pipeline, RAG</div>
-          <div class="lane-cell"><strong>S6</strong>State, graph</div>
+          <div class="lane-cell"><strong>S6</strong>State, graph, agent logging</div>
           <div class="lane-cell"><strong>S7</strong>Calendar, contact unifier</div>
-          <div class="lane-cell"><strong>S8</strong>OTel, Prometheus, Grafana</div>
+          <div class="lane-cell"><strong>S8</strong>OTel, Grafana, Celery admin, Telegram bot</div>
         </div>
       </div>
       <div class="lane" style="grid-template-columns: 70px 1fr">
@@ -499,12 +503,12 @@ body {
         <div class="lane-cells" style="grid-template-columns: repeat(8, 1fr)">
           <div class="lane-cell"><strong>S1</strong>Arch diagram, RLS test</div>
           <div class="lane-cell"><strong>S2</strong>Traefik, Prometheus cfg</div>
-          <div class="lane-cell"><strong>S3</strong>Middleware, API, tests</div>
+          <div class="lane-cell"><strong>S3</strong>Middleware, API, onboarding, client mgmt</div>
           <div class="lane-cell"><strong>S4</strong>Webhook ep, Celery, dedup</div>
           <div class="lane-cell"><strong>S5</strong>Doc API, ingestion task</div>
-          <div class="lane-cell"><strong>S6</strong>6 nodes, ai_processor</div>
+          <div class="lane-cell"><strong>S6</strong>6 nodes, @logged_node, ai_processor</div>
           <div class="lane-cell"><strong>S7</strong>CRM API, auto-close</div>
-          <div class="lane-cell"><strong>S8</strong>Audit, backup, e2e test</div>
+          <div class="lane-cell"><strong>S8</strong>Audit, backup, security, Cloudflare, e2e</div>
         </div>
       </div>
     </div>
@@ -535,7 +539,7 @@ body {
       <div class="lane" style="grid-template-columns: 70px 1fr">
         <div class="lane-label lane-label--a">Dev A</div>
         <div class="lane-cells" style="grid-template-columns: repeat(4, 1fr)">
-          <div class="lane-cell"><strong>S9</strong>Telegram, Meta, Email providers</div>
+          <div class="lane-cell"><strong>S9</strong>Telegram, Email providers</div>
           <div class="lane-cell"><strong>S10</strong>Template cloning + re-embed</div>
           <div class="lane-cell"><strong>S11</strong>Outgoing webhooks, HMAC</div>
           <div class="lane-cell"><strong>S12</strong>Financial + Marketing agents</div>
@@ -571,7 +575,29 @@ body {
         <div class="lane-label lane-label--b">Dev B</div>
         <div class="lane-cells" style="grid-template-columns: repeat(2, 1fr)">
           <div class="lane-cell"><strong>S13</strong>Clinical agent (RIPS, CIE-10)</div>
-          <div class="lane-cell"><strong>S14</strong>Multi-lang, rollout %</div>
+          <div class="lane-cell"><strong>S14</strong>Multi-lang 6 idiomas, UI prefs API</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 4 Timeline -->
+  <div class="timeline-section">
+    <div class="timeline-header">
+      <h2>Fase 4: Frontend Foundation</h2>
+      <span class="phase-tag phase-tag--4">Sprint 15</span>
+    </div>
+    <div class="timeline-lanes">
+      <div class="lane" style="grid-template-columns: 70px 1fr">
+        <div class="lane-label lane-label--a">Dev A</div>
+        <div class="lane-cells" style="grid-template-columns: 1fr">
+          <div class="lane-cell"><strong>S15</strong>Next.js scaffold, shadcn/ui, themes, i18n 6 langs, auth stores, Realtime, Dockerfile</div>
+        </div>
+      </div>
+      <div class="lane" style="grid-template-columns: 70px 1fr">
+        <div class="lane-label lane-label--b">Dev B</div>
+        <div class="lane-cells" style="grid-template-columns: 1fr">
+          <div class="lane-cell"><strong>S15</strong>Onboarding UI, dashboard, conversations, settings, admin panels, responsive, tests</div>
         </div>
       </div>
     </div>
@@ -638,13 +664,13 @@ const SPRINTS = [
     dep: "Independientes — pueden trabajar en paralelo total"
   },
   {
-    num: 3, name: "FastAPI Core & Auth", phase: 1, status: "pending",
+    num: 3, name: "FastAPI Core, Auth & Onboarding", phase: 1, status: "pending",
     devA: {
-      tasks: ["Pydantic Settings (config.py)", "Async SQLAlchemy engine + SET LOCAL helper", "JWT validation + password hashing", "AppException + error handlers", "DI: TenantSession, CurrentUser, require_role", "18 SQLAlchemy models (TenantBaseModel)", "Pydantic v2 schemas para todas las entidades"],
-      files: ["app/core/*.py", "app/models/*.py", "app/schemas/*.py"]
+      tasks: ["Pydantic Settings (config.py)", "Async SQLAlchemy engine + SET LOCAL helper", "JWT validation + password hashing", "AppException + error handlers", "DI: TenantSession, CurrentUser, require_role", "18 SQLAlchemy models (TenantBaseModel)", "Pydantic v2 schemas para todas las entidades", "OnboardingService (create client + admin user + defaults)"],
+      files: ["app/core/*.py", "app/models/*.py", "app/schemas/*.py", "app/services/onboarding.py"]
     },
     devB: {
-      tasks: ["App factory (main.py) con lifespan", "TenantContextMiddleware (JWT → SET LOCAL)", "TokenBudgetGuard placeholder", "Auth endpoints (login, refresh)", "Health check endpoint", "Test fixtures (conftest.py)", "Tests: RLS isolation, auth, security"],
+      tasks: ["App factory (main.py) con lifespan", "TenantContextMiddleware (JWT → SET LOCAL)", "TokenBudgetGuard placeholder", "Auth endpoints (login, refresh)", "Health check endpoint", "POST /onboarding/register (public, rate-limited)", "Business profile endpoints (GET/PUT)", "Client management: deactivation, payment alerts", "verify_client_is_active middleware", "Test fixtures (conftest.py)", "Tests: RLS isolation, auth, onboarding, client mgmt"],
       files: ["app/main.py", "app/middleware/*.py", "app/api/", "tests/"]
     },
     dep: "Dev B necesita models/ y schemas/ de Dev A → usar stubs si no están listos"
@@ -652,8 +678,8 @@ const SPRINTS = [
   {
     num: 4, name: "Webhook Receiver & MessagingProvider", phase: 1, status: "pending",
     devA: {
-      tasks: ["MessagingProvider ABC (5 métodos)", "YCloudProvider implementación completa", "ProviderFactory (resolve por channel)", "NormalizedMessage schema"],
-      files: ["app/services/messaging/base.py", "app/services/messaging/ycloud.py", "app/services/messaging/factory.py", "app/schemas/message.py"]
+      tasks: ["MessagingProvider ABC (5 métodos)", "YCloudProvider implementación completa", "MetaProvider (Instagram DM + Facebook Messenger)", "ProviderFactory (resolve por channel)", "NormalizedMessage schema"],
+      files: ["app/services/messaging/base.py", "app/services/messaging/ycloud.py", "app/services/messaging/meta.py", "app/services/messaging/factory.py", "app/schemas/message.py"]
     },
     devB: {
       tasks: ["Webhook endpoint POST /webhooks/{provider}/{channel}", "Deduplicación por (channel, external_message_id)", "Celery app config", "webhook_processor task", "Tests: idempotency, provider factory"],
@@ -674,14 +700,14 @@ const SPRINTS = [
     dep: "Dev B necesita document_pipeline y rag services de Dev A"
   },
   {
-    num: 6, name: "LangGraph: Grafo de Agentes", phase: 1, status: "pending",
+    num: 6, name: "LangGraph: Grafo de Agentes & Logging", phase: 1, status: "pending",
     devA: {
-      tasks: ["ConversationState TypedDict", "build_conversation_graph() — StateGraph completo", "Agent config schemas"],
-      files: ["app/agents/state.py", "app/agents/graph.py", "app/schemas/agent_config.py"]
+      tasks: ["ConversationState TypedDict", "build_conversation_graph() — StateGraph completo", "Agent config schemas", "AgentActionLog model + agent_action_logs table DDL", "AgentLogger service (log_action, get_stats)"],
+      files: ["app/agents/state.py", "app/agents/graph.py", "app/schemas/agent_config.py", "app/models/agent_action_log.py", "app/services/agent_logger.py"]
     },
     devB: {
-      tasks: ["intent_router node (7 intents)", "rag_query node (strict grounding)", "token_budget node (3 umbrales)", "respond node (via MessagingProvider)", "human_handoff node", "training_approval node (few-shot)", "ai_processor Celery task", "Tests: intent routing, RAG node, graph flow"],
-      files: ["app/agents/nodes/*.py", "app/tasks/ai_processor.py", "tests/"]
+      tasks: ["intent_router node (7 intents)", "rag_query node (strict grounding)", "token_budget node (3 umbrales)", "respond node (via MessagingProvider)", "human_handoff node", "training_approval node (few-shot)", "@logged_node decorator middleware", "Agent logs API (GET /agent-logs/*)", "Prometheus metrics para agent nodes", "ai_processor Celery task", "Tests: intent routing, RAG node, agent logging, graph flow"],
+      files: ["app/agents/nodes/*.py", "app/agents/middleware/logging.py", "app/api/v1/agent_logs.py", "app/tasks/ai_processor.py", "tests/"]
     },
     dep: "Dev B necesita ConversationState y graph structure de Dev A"
   },
@@ -698,22 +724,22 @@ const SPRINTS = [
     dep: "Módulos independientes — paralelo total"
   },
   {
-    num: 8, name: "Observabilidad, Backup & Hardening", phase: 1, status: "pending", isMvp: true,
+    num: 8, name: "Observabilidad, Ops, Backup, Security & Hardening", phase: 1, status: "pending", isMvp: true,
     devA: {
-      tasks: ["OpenTelemetry instrumentation", "Prometheus custom metrics", "Grafana dashboards (JSON)", "pgcrypto: cifrado de columnas sensibles"],
-      files: ["app/core/telemetry.py", "app/core/metrics.py", "grafana/dashboards/", "app/core/encryption.py"]
+      tasks: ["OpenTelemetry instrumentation", "Prometheus custom metrics", "Grafana dashboards (JSON)", "pgcrypto: cifrado de columnas sensibles", "Celery/Redis admin API (workers, queues, tasks)", "Super Admin Telegram Bot (server monitoring, /status, /docker, /backup)", "PostgreSQL streaming replication config"],
+      files: ["app/core/telemetry.py", "app/core/metrics.py", "grafana/dashboards/", "app/core/encryption.py", "app/api/v1/celery_admin.py", "app/services/telegram_bot.py", "scripts/replication/"]
     },
     devB: {
-      tasks: ["Audit log middleware", "Backup/restore scripts", "Quick replies CRUD", "E2E test: webhook → grafo → respuesta", "RGPD: export/delete datos personales"],
-      files: ["app/middleware/audit.py", "scripts/backup.sh", "scripts/restore_test.sh", "app/api/v1/quick_replies.py", "tests/e2e/", "app/api/v1/admin.py"]
+      tasks: ["Audit log middleware", "Enhanced backup/restore scripts (daily, retention, VPS replication)", "Quick replies CRUD", "E2E test: webhook → grafo → respuesta", "RGPD: export/delete datos personales", "Server security: SSH hardening, UFW, fail2ban", "Cloudflare WAF/DDoS + Traefik mTLS config", "Docker security: non-root, read-only rootfs, resource limits", "Automated weekly restoration testing"],
+      files: ["app/middleware/audit.py", "scripts/backup.sh", "scripts/restore_test.sh", "scripts/security/", "app/api/v1/quick_replies.py", "tests/e2e/", "app/api/v1/admin.py"]
     },
     dep: "Ambos devs pueden trabajar en paralelo — integración al final"
   },
   {
-    num: 9, name: "Canales Adicionales", phase: 2, status: "pending",
+    num: 9, name: "Canales Adicionales (Telegram, Webchat, Email, Audio)", phase: 2, status: "pending",
     devA: {
-      tasks: ["TelegramProvider", "MetaProvider (Instagram/Facebook)", "EmailProvider (IMAP)"],
-      files: ["app/services/messaging/telegram.py", "app/services/messaging/meta.py", "app/services/messaging/email.py"]
+      tasks: ["TelegramProvider", "EmailProvider (IMAP)"],
+      files: ["app/services/messaging/telegram.py", "app/services/messaging/email.py"]
     },
     devB: {
       tasks: ["WebchatProvider (WebSocket)", "Whisper audio transcription", "Tests por canal"],
@@ -770,16 +796,28 @@ const SPRINTS = [
     dep: "Independientes — dominios completamente separados"
   },
   {
-    num: 14, name: "Sandbox & Multi-Idioma", phase: 3, status: "pending",
+    num: 14, name: "Sandbox, Multi-Idioma (6 langs) & Feature Flags", phase: 3, status: "pending",
     devA: {
       tasks: ["Sandbox mode per tenant", "Feature flags con Redis cache", "Percentage rollout"],
       files: ["app/services/feature_flags.py", "app/middleware/sandbox.py"]
     },
     devB: {
-      tasks: ["Multi-language (langdetect + GPT fallback)", "i18n response formatting"],
-      files: ["app/services/language.py", "app/middleware/language.py", "tests/"]
+      tasks: ["Multi-language 6 idiomas (es, en, pt, it, de, fr)", "langdetect + GPT fallback", "API preferencias UI (idioma + tema)", "Backend system messages (42 traducciones)"],
+      files: ["app/services/language.py", "app/middleware/language.py", "app/api/v1/preferences.py", "tests/"]
     },
     dep: "Independientes — paralelo total"
+  },
+  {
+    num: 15, name: "Frontend Foundation & Panel Admin", phase: 4, status: "pending",
+    devA: {
+      tasks: ["Next.js 14+ App Router + TypeScript scaffolding", "shadcn/ui + Tailwind CSS + design tokens", "next-themes (dark/light/system toggle)", "next-intl (6 idiomas: es, en, pt, it, de, fr)", "Auth context + Zustand stores", "Supabase Realtime client", "Dockerfile multi-stage (standalone)"],
+      files: ["frontend/", "frontend/next.config.ts", "frontend/components/ui/", "frontend/i18n/", "frontend/stores/", "frontend/Dockerfile"]
+    },
+    devB: {
+      tasks: ["Onboarding UI: multi-step form (/onboarding)", "Admin Dashboard: stats, charts (Recharts)", "Conversations view con mensajes real-time", "Business personalization UI (logo, colors, hours)", "Super Admin: client management + Celery/Redis dashboard", "Responsive layout (mobile-first)", "Tests: Vitest + React Testing Library"],
+      files: ["frontend/app/onboarding/", "frontend/app/dashboard/", "frontend/app/conversations/", "frontend/app/settings/", "frontend/app/admin/", "frontend/__tests__/"]
+    },
+    dep: "Requiere APIs de Sprints 3 (auth, onboarding), 6 (agent logs), 8 (Celery admin)"
   }
 ];
 

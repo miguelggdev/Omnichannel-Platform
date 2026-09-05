@@ -9,8 +9,8 @@
 
 - **Fase:** 1 — MVP Core
 - **Sprint Activo:** Sprint 1 — Schema DDL & Arquitectura
-- **Última actualización:** 2026-09-04
-- **Última sesión:** Sprint 1 — DDL generado y verificado contra PostgreSQL 16
+- **Última actualización:** 2026-09-05
+- **Última sesión:** Sesión 5 — Integración de 11 nuevas features, creación Sprint 15, addendums para Sprints 3, 6, 8, 14
 
 ---
 
@@ -42,7 +42,7 @@ _(nada en progreso)_
 ### Pendiente
 - [ ] Diagrama Mermaid de arquitectura en repo
 - [ ] Commit inicial y push a GitHub (usuario debe ejecutar manualmente)
-- [ ] Crear ramas `develop` y `feature/sprint-01-ddl`
+- [ ] Crear rama `feature/sprint-01-ddl` desde `main`
 
 ### Bloqueadores
 - Push a GitHub requiere ejecución manual desde terminal del usuario (credenciales no disponibles en sesión cloud)
@@ -62,27 +62,50 @@ _(nada en progreso)_
 | 1 | Schema DDL & Arquitectura | ✅ Completado | 24 tablas, RLS verificado, DDL idempotente |
 | 2 | Infraestructura Docker | ⬜ Pendiente | Depende de Sprint 1 |
 | 3 | FastAPI Core & Auth | ⬜ Pendiente | |
-| 4 | Webhook Receiver & MessagingProvider | ⬜ Pendiente | |
+| 4 | Webhook Receiver & MessagingProvider | ⬜ Pendiente | YCloud (WhatsApp) + Meta (Instagram DM + Facebook Messenger) |
 | 5 | Pipeline de Documentos & RAG | ⬜ Pendiente | |
 | 6 | LangGraph — Grafo de Agentes | ⬜ Pendiente | |
 | 7 | Agente de Agendamiento & CRM API | ⬜ Pendiente | |
 | 8 | Observabilidad, Backup & Hardening | ⬜ Pendiente | **Hito MVP** |
-| 9 | Canales Adicionales | ⬜ Pendiente | Fase 2 |
+| 9 | Canales Adicionales | ⬜ Pendiente | Fase 2 — Telegram, Webchat, Email, Audio (Instagram/Facebook movidos a Sprint 4) |
 | 10 | Templates, Clonación & Sentimiento | ⬜ Pendiente | Fase 2 |
 | 11 | Webhooks Salientes & CSAT | ⬜ Pendiente | Fase 2 |
 | 12 | Agentes Financiero & Marketing | ⬜ Pendiente | Fase 2 |
 | 13 | Canal de Voz & Agente Clínico | ⬜ Pendiente | Fase 3 |
-| 14 | Sandbox, Multi-idioma & Feature Flags | ⬜ Pendiente | Fase 3 |
+| 14 | Sandbox, Multi-idioma & Feature Flags | ⬜ Pendiente | Fase 3 — i18n expandido a 6 idiomas |
+| 15 | Frontend Foundation & Panel Admin | ⬜ Pendiente | Fase 4 — Next.js, theme toggle, responsive, i18n UI |
+
+---
+
+## Features Integradas (Sesión 5)
+
+Las siguientes 11 features fueron diseñadas e integradas en los sprints existentes:
+
+| # | Feature | Sprint(s) | Spec File |
+|---|---|---|---|
+| 1 | Client Onboarding Flow | Sprint 3 | `specs/sprint-03-addendum-onboarding.md` |
+| 2 | Business Personalization | Sprint 3 | `specs/sprint-03-addendum-onboarding.md` |
+| 3 | Dark/Light Theme Toggle | Sprint 15 | `specs/sprint-15-frontend.md` |
+| 4 | Responsive Design | Sprint 15 | `specs/sprint-15-frontend.md` |
+| 5 | Multi-idioma (6 idiomas) | Sprint 14 + 15 | `specs/sprint-14-sandbox-i18n.md` (backend) + `specs/sprint-15-frontend.md` (UI) |
+| 6 | Celery/Redis Admin Panel | Sprint 8 | `specs/sprint-08-addendum-ops.md` |
+| 7 | Super Admin Telegram Bot | Sprint 8 | `specs/sprint-08-addendum-ops.md` |
+| 8 | Agent Activity Logging | Sprint 6 | `specs/sprint-06-addendum-agent-logging.md` |
+| 9 | Client Management (deactivation/alerts) | Sprint 3 | `specs/sprint-03-addendum-onboarding.md` |
+| 10 | Backup & Replication (VPS) | Sprint 8 | `specs/sprint-08-addendum-ops.md` |
+| 11 | Security Policies (Cloudflare, firewall) | Sprint 8 | `specs/sprint-08-addendum-ops.md` |
 
 ---
 
 ## Métricas de Progreso
 
 - **Tests pasando:** 0 / 9 (RLS tests skip hasta Sprint 2 DB)
-- **Tablas creadas:** 24 / 24 (18 MVP + 6 Fase 2)
+- **Tablas creadas:** 25 / 25 (18 MVP + 6 Fase 2 + 1 agent_action_logs)
 - **Endpoints implementados:** 0
 - **Agentes LangGraph:** 0 / 7 (nodos)
-- **Proveedores de mensajería:** 0 / 1 (YCloud MVP)
+- **Proveedores de mensajería:** 0 / 2 (YCloud MVP + Meta MVP: Instagram DM + Facebook Messenger)
 - **Cobertura de tests:** N/A
 - **DDL verificado:** ✅ PostgreSQL 16 + pgvector 0.6.0
 - **RLS verificado:** ✅ 24 tablas con aislamiento confirmado
+- **Sprints especificados:** 15 / 15 (14 originales + 1 Frontend)
+- **Features nuevas integradas:** 11 / 11
