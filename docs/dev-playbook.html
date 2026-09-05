@@ -1,0 +1,1237 @@
+<title>Omnichannel Dev Playbook</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+:root {
+  --bg: #F8FAFC;
+  --surface: #FFFFFF;
+  --surface-2: #F1F5F9;
+  --text: #0F172A;
+  --text-2: #475569;
+  --text-3: #94A3B8;
+  --border: #E2E8F0;
+  --accent: #0369A1;
+  --accent-bg: #E0F2FE;
+  --accent-2: #0EA5E9;
+  --success: #059669;
+  --success-bg: #D1FAE5;
+  --warn: #D97706;
+  --warn-bg: #FEF3C7;
+  --critical: #DC2626;
+  --critical-bg: #FEE2E2;
+  --opus: #7C3AED;
+  --opus-bg: #EDE9FE;
+  --sonnet: #0369A1;
+  --sonnet-bg: #E0F2FE;
+  --haiku: #059669;
+  --haiku-bg: #D1FAE5;
+  --code-bg: #1E293B;
+  --code-text: #E2E8F0;
+  --code-accent: #38BDF8;
+  --code-comment: #64748B;
+  --sans: 'Outfit', system-ui, -apple-system, sans-serif;
+  --mono: 'JetBrains Mono', 'Menlo', 'Consolas', monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0B1120;
+    --surface: #151D2E;
+    --surface-2: #1C2640;
+    --text: #E2E8F0;
+    --text-2: #94A3B8;
+    --text-3: #64748B;
+    --border: #1E293B;
+    --accent: #38BDF8;
+    --accent-bg: #0C2D48;
+    --accent-2: #0EA5E9;
+    --success: #34D399;
+    --success-bg: #052E1C;
+    --warn: #FBBF24;
+    --warn-bg: #2D1F04;
+    --critical: #F87171;
+    --critical-bg: #2D0A0A;
+    --opus: #A78BFA;
+    --opus-bg: #1E1145;
+    --sonnet: #38BDF8;
+    --sonnet-bg: #0C2D48;
+    --haiku: #34D399;
+    --haiku-bg: #052E1C;
+    --code-bg: #0D1525;
+    --code-text: #CBD5E1;
+    --code-accent: #38BDF8;
+    --code-comment: #475569;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0B1120;
+  --surface: #151D2E;
+  --surface-2: #1C2640;
+  --text: #E2E8F0;
+  --text-2: #94A3B8;
+  --text-3: #64748B;
+  --border: #1E293B;
+  --accent: #38BDF8;
+  --accent-bg: #0C2D48;
+  --accent-2: #0EA5E9;
+  --success: #34D399;
+  --success-bg: #052E1C;
+  --warn: #FBBF24;
+  --warn-bg: #2D1F04;
+  --critical: #F87171;
+  --critical-bg: #2D0A0A;
+  --opus: #A78BFA;
+  --opus-bg: #1E1145;
+  --sonnet: #38BDF8;
+  --sonnet-bg: #0C2D48;
+  --haiku: #34D399;
+  --haiku-bg: #052E1C;
+  --code-bg: #0D1525;
+  --code-text: #CBD5E1;
+  --code-accent: #38BDF8;
+  --code-comment: #475569;
+}
+
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 920px; margin: 0 auto; padding: 32px 24px 80px; }
+
+h1 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+  margin-bottom: 4px;
+}
+.subtitle { color: var(--text-2); font-size: 0.88rem; margin-bottom: 36px; }
+
+h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-top: 48px;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-top: 28px;
+  margin-bottom: 10px;
+  color: var(--text);
+}
+
+p { color: var(--text-2); font-size: 0.88rem; margin-bottom: 14px; max-width: 68ch; }
+strong { color: var(--text); font-weight: 600; }
+
+/* Tables */
+.tbl-wrap { overflow-x: auto; margin-bottom: 20px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+th, td {
+  text-align: left;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+}
+th {
+  font-weight: 600;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  background: var(--surface-2);
+}
+td { color: var(--text-2); }
+tr:last-child td { border-bottom: none; }
+.tbl-surface {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+td.num { text-align: right; font-family: var(--mono); font-size: 0.78rem; }
+.row-total { background: var(--surface-2); }
+.row-total td { color: var(--text); font-weight: 600; }
+.row-mvp td { color: var(--accent); font-weight: 600; }
+
+/* Badges */
+.badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+.badge--opus { color: var(--opus); background: var(--opus-bg); }
+.badge--sonnet { color: var(--sonnet); background: var(--sonnet-bg); }
+.badge--haiku { color: var(--haiku); background: var(--haiku-bg); }
+.badge--mvp { color: var(--critical); background: var(--critical-bg); }
+.badge--phase { color: var(--accent); background: var(--accent-bg); }
+
+/* Agent cards */
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.agent-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.agent-name {
+  font-weight: 700;
+  font-size: 0.88rem;
+  letter-spacing: -0.01em;
+}
+.agent-role {
+  font-size: 0.78rem;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.agent-scope {
+  font-size: 0.73rem;
+  color: var(--text-3);
+}
+.agent-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.agent-file {
+  font-family: var(--mono);
+  font-size: 0.63rem;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.agent-sprints {
+  font-size: 0.72rem;
+  color: var(--text-3);
+  font-style: italic;
+  margin-top: auto;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+
+/* Code blocks */
+pre {
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  line-height: 1.65;
+  padding: 14px 18px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin-bottom: 16px;
+}
+pre .cm { color: var(--code-comment); }
+pre .kw { color: var(--code-accent); }
+pre .str { color: #A5D6A7; }
+
+/* Callout */
+.callout {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  margin-bottom: 16px;
+  align-items: flex-start;
+}
+.callout--info { background: var(--accent-bg); color: var(--accent); border-left: 3px solid var(--accent); }
+.callout--warn { background: var(--warn-bg); color: var(--warn); border-left: 3px solid var(--warn); }
+.callout--success { background: var(--success-bg); color: var(--success); border-left: 3px solid var(--success); }
+.callout p { color: inherit; margin: 0; max-width: none; }
+
+/* Sections nav */
+.sections-nav {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 32px;
+}
+.sections-nav a {
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 4px 12px;
+  border-radius: 4px;
+  background: var(--accent-bg);
+  transition: opacity 0.15s;
+}
+.sections-nav a:hover { opacity: 0.8; }
+
+/* Gantt-like timeline */
+.gantt { margin-bottom: 24px; }
+.gantt-row {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 0;
+  align-items: center;
+  min-height: 32px;
+}
+.gantt-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-2);
+  padding-right: 8px;
+  text-align: right;
+}
+.gantt-track {
+  position: relative;
+  height: 22px;
+  border-radius: 3px;
+}
+.gantt-bar {
+  position: absolute;
+  height: 100%;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.gantt-weeks {
+  display: grid;
+  font-size: 0.6rem;
+  color: var(--text-3);
+  font-family: var(--mono);
+  margin-top: 4px;
+}
+.gantt-weeks span { text-align: center; }
+
+/* Prompt boxes */
+.prompt-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 18px;
+  margin-bottom: 14px;
+}
+.prompt-box-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.prompt-box-title {
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+.prompt-box pre {
+  margin-bottom: 0;
+  font-size: 0.72rem;
+}
+
+/* Strategy phases */
+.strategy-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.strategy-step {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px;
+}
+.strategy-step-num {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.strategy-step h4 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.strategy-step p { font-size: 0.78rem; margin-bottom: 0; }
+
+@media (max-width: 640px) {
+  .agents-grid { grid-template-columns: 1fr; }
+  .strategy-steps { grid-template-columns: 1fr; }
+  .gantt-row { grid-template-columns: 60px 1fr; }
+  h1 { font-size: 1.3rem; }
+}
+</style>
+
+<div class="wrap">
+  <h1>Omnichannel Dev Playbook</h1>
+  <p class="subtitle">Plataforma SaaS multi-tenant &middot; 2 devs + Claude Code &middot; 15 sprints &middot; 4 fases</p>
+
+  <nav class="sections-nav">
+    <a href="#timeline">Timeline</a>
+    <a href="#supabase">Supabase</a>
+    <a href="#agents">Agentes</a>
+    <a href="#parallel">Parallelism</a>
+    <a href="#commands">Comandos</a>
+    <a href="#prompts">Prompts</a>
+    <a href="#costs">Costos</a>
+  </nav>
+
+  <!-- ═══ TIMELINE ═══ -->
+  <h2 id="timeline">Timeline de Desarrollo</h2>
+
+  <p>Estimación con <strong>2 desarrolladores humanos</strong>, cada uno usando Claude Code/Cowork como copiloto semi-autónomo. Los sprints se ejecutan secuencialmente pero cada sprint tiene máxima paralelización interna entre Dev A y Dev B.</p>
+
+  <div class="tbl-wrap">
+    <div class="tbl-surface">
+      <table>
+        <thead>
+          <tr><th>Fase</th><th>Sprints</th><th>Descripción</th><th style="text-align:right">Días</th><th style="text-align:right">Semanas</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td rowspan="4"><span class="badge badge--phase">Fase 1</span></td>
+            <td>1-2</td><td>DDL (ya completo) + Docker Compose</td>
+            <td class="num">3</td><td class="num">0.5</td>
+          </tr>
+          <tr>
+            <td>3-4</td><td>FastAPI Core, Auth, Onboarding + Webhooks, MessagingProvider</td>
+            <td class="num">7</td><td class="num">1.5</td>
+          </tr>
+          <tr>
+            <td>5-6</td><td>Pipeline RAG + LangGraph + Agent Logging</td>
+            <td class="num">9</td><td class="num">2</td>
+          </tr>
+          <tr>
+            <td>7-8</td><td>CRM/Scheduling + Ops, Security, Telegram Bot</td>
+            <td class="num">8</td><td class="num">1.5</td>
+          </tr>
+          <tr class="row-mvp">
+            <td colspan="3">Hito MVP (demo end-to-end funcional)</td>
+            <td class="num">27</td><td class="num">5.5</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge--phase">Fase 2</span></td>
+            <td>9-12</td><td>Telegram, Email, Webchat, Templates, CSAT, Agentes Fin/Mkt</td>
+            <td class="num">12</td><td class="num">2.5</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge--phase">Fase 3</span></td>
+            <td>13-14</td><td>Canal de Voz, Agente Clínico, Sandbox, i18n 6 langs</td>
+            <td class="num">8</td><td class="num">1.5</td>
+          </tr>
+          <tr>
+            <td><span class="badge badge--phase">Fase 4</span></td>
+            <td>15</td><td>Next.js Frontend, Dashboard, Admin Panels, Responsive, Themes</td>
+            <td class="num">8</td><td class="num">1.5</td>
+          </tr>
+          <tr class="row-total">
+            <td colspan="3">Total del proyecto</td>
+            <td class="num">~55</td><td class="num">~11</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="callout callout--info">
+    <p><strong>Rango realista: 9-13 semanas.</strong> El optimista (9 sem) asume que Claude Code genera el 80% del boilerplate y los tests pasan al primer intento. El conservador (13 sem) incluye debugging, APIs externas lentas y revisiones de PR con cambios. Sprint 1 ya está 90% completado.</p>
+  </div>
+
+  <!-- ═══ SUPABASE ═══ -->
+  <h2 id="supabase">Estrategia Supabase: Cloud → VPS</h2>
+
+  <div class="strategy-steps">
+    <div class="strategy-step">
+      <div class="strategy-step-num">Fase A — Sprints 1-4</div>
+      <h4>Supabase Cloud (Desarrollo)</h4>
+      <p>Usar plan Free o Pro ($25/mes) para validar DDL, RLS y desarrollo de API. Ventajas: setup instantáneo, GoTrue listo, dashboard SQL integrado. Correr <code>init.sql</code> directo contra la instancia cloud.</p>
+    </div>
+    <div class="strategy-step">
+      <div class="strategy-step-num">Fase B — Sprint 5-6</div>
+      <h4>Preparar VPS Self-hosted</h4>
+      <p>Montar PostgreSQL 16 + pgvector + pgBouncer (transaction mode) en VPS. Instalar GoTrue, PostgREST, Realtime, Storage vía Docker Compose. Migrar: <code>pg_dump</code> → <code>pg_restore</code> con roles y RLS.</p>
+    </div>
+    <div class="strategy-step">
+      <div class="strategy-step-num">Fase C — Sprint 7+</div>
+      <h4>Producción Self-hosted</h4>
+      <p>Toda la operación en VPS propio. Streaming replication al VPS de backup. Backups diarios automatizados. Cloudflare Tunnel para seguridad. Supabase Cloud queda como staging/QA.</p>
+    </div>
+  </div>
+
+<pre><span class="cm"># Migración Cloud → VPS</span>
+<span class="kw">pg_dump</span> -h db.xxxx.supabase.co -U postgres -d postgres \
+  --schema=public --no-owner --no-acl > backup.sql
+
+<span class="cm"># Restaurar en VPS (previamente crear DB + extensiones)</span>
+<span class="kw">psql</span> -h vps-ip -U postgres -d omnichannel < backup.sql
+
+<span class="cm"># Verificar RLS</span>
+<span class="kw">psql</span> -h vps-ip -U app_user -d omnichannel -c <span class="str">"
+  SET LOCAL app.current_client_id = 'test-tenant-id';
+  SELECT count(*) FROM contacts;
+"</span></pre>
+
+  <!-- ═══ AGENTS ═══ -->
+  <h2 id="agents">Arquitectura de Agentes</h2>
+
+  <p>El proyecto requiere <strong>8 agentes base</strong> operando en sesiones de Claude Code/Cowork independientes, más <strong>roles secundarios</strong> que los agentes existentes asumen en momentos clave. En la práctica, <strong>3 sesiones corren simultáneamente</strong> (Dev A + Dev B + 1 on-demand). Los restantes se activan por sprint o bajo demanda.</p>
+
+  <div class="agents-grid">
+    <div class="agent-card" style="border-left: 3px solid var(--opus)">
+      <div class="agent-header">
+        <span class="agent-name">Orquestador</span>
+        <span class="badge badge--opus">Opus</span>
+      </div>
+      <div class="agent-role">Arquitectura, decisiones de diseño, PR review cruzado, resolución de conflictos, planificación de sprint. <strong>Tú (Miguel)</strong> ejecutas esta sesión.</div>
+      <div class="agent-scope">Responsabilidades: ADRs en MEMORY.md, merge a main, code review con checklist de METHODOLOGY.md §7, deploy al VPS.</div>
+      <div class="agent-files">
+        <span class="agent-file">CLAUDE.md</span>
+        <span class="agent-file">METHODOLOGY.md</span>
+        <span class="agent-file">PROGRESS.md</span>
+        <span class="agent-file">MEMORY.md</span>
+      </div>
+      <div class="agent-sprints">Activo: todos los sprints. Dedicado: revisiones de PR y decisiones clave.</div>
+    </div>
+
+    <div class="agent-card" style="border-left: 3px solid var(--sonnet)">
+      <div class="agent-header">
+        <span class="agent-name">Dev A — Foundations</span>
+        <span class="badge badge--sonnet">Sonnet</span>
+      </div>
+      <div class="agent-role">Capa de datos, modelos SQLAlchemy, schemas Pydantic, core services, infraestructura, AI state/graph, servicios fundacionales (RAG, providers, onboarding).</div>
+      <div class="agent-scope">Loop semi-autónomo: implementar → pytest → ruff → commit → PROGRESS.md. Checkpoint cada 3-5 módulos.</div>
+      <div class="agent-files">
+        <span class="agent-file">app/models/*</span>
+        <span class="agent-file">app/schemas/*</span>
+        <span class="agent-file">app/core/*</span>
+        <span class="agent-file">app/services/*</span>
+        <span class="agent-file">app/agents/state.py</span>
+        <span class="agent-file">app/agents/graph.py</span>
+      </div>
+      <div class="agent-sprints">Activo: Sprints 1-14. Siempre en paralelo con Dev B.</div>
+    </div>
+
+    <div class="agent-card" style="border-left: 3px solid var(--sonnet)">
+      <div class="agent-header">
+        <span class="agent-name">Dev B — Integration</span>
+        <span class="badge badge--sonnet">Sonnet</span>
+      </div>
+      <div class="agent-role">Middleware, endpoints API, Celery tasks, agent nodes, tests unitarios e integración. Consume los modelos/schemas de Dev A.</div>
+      <div class="agent-scope">Usa stubs/mocks si Dev A no ha pusheado. Escribe tests para cada módulo. Loop idéntico a Dev A.</div>
+      <div class="agent-files">
+        <span class="agent-file">app/api/v1/*</span>
+        <span class="agent-file">app/middleware/*</span>
+        <span class="agent-file">app/tasks/*</span>
+        <span class="agent-file">app/agents/nodes/*</span>
+        <span class="agent-file">tests/*</span>
+      </div>
+      <div class="agent-sprints">Activo: Sprints 1-14. Empieza cuando Dev A pushea models/ y schemas/.</div>
+    </div>
+
+    <div class="agent-card" style="border-left: 3px solid var(--sonnet)">
+      <div class="agent-header">
+        <span class="agent-name">DevOps & Infra</span>
+        <span class="badge badge--sonnet">Sonnet</span>
+      </div>
+      <div class="agent-role">Docker Compose, Dockerfile, Traefik, CI/CD (GitHub Actions), scripts de deployment, Cloudflare config, monitoreo (Prometheus/Grafana).</div>
+      <div class="agent-scope">Configura infraestructura. Mantiene docker-compose.yml. Actualiza CI pipeline. Prepara el VPS.</div>
+      <div class="agent-files">
+        <span class="agent-file">docker-compose.yml</span>
+        <span class="agent-file">Dockerfile</span>
+        <span class="agent-file">traefik/*</span>
+        <span class="agent-file">.github/workflows/*</span>
+        <span class="agent-file">scripts/*</span>
+      </div>
+      <div class="agent-sprints">Intensivo: Sprints 2, 8. On-demand: resto.</div>
+    </div>
+
+    <div class="agent-card" style="border-left: 3px solid var(--sonnet)">
+      <div class="agent-header">
+        <span class="agent-name">QA & Testing</span>
+        <span class="badge badge--sonnet">Sonnet</span>
+      </div>
+      <div class="agent-role">Test suites completos: unit, integration, e2e. Playwright para frontend (Sprint 15). Cobertura > 70%. Tests de aislamiento RLS en cada sprint.</div>
+      <div class="agent-scope">Ejecuta pytest con coverage. Crea fixtures en conftest.py. Playwright codegen para e2e del frontend. Valida RLS cross-tenant.</div>
+      <div class="agent-files">
+        <span class="agent-file">tests/unit/*</span>
+        <span class="agent-file">tests/integration/*</span>
+        <span class="agent-file">tests/e2e/*</span>
+        <span class="agent-file">tests/conftest.py</span>
+        <span class="agent-file">playwright.config.ts</span>
+      </div>
+      <div class="agent-sprints">Al final de cada sprint. Intensivo: Sprints 8 (MVP e2e), 15 (Playwright).</div>
+    </div>
+
+    <div class="agent-card" style="border-left: 3px solid var(--sonnet)">
+      <div class="agent-header">
+        <span class="agent-name">Frontend</span>
+        <span class="badge badge--sonnet">Sonnet</span>
+      </div>
+      <div class="agent-role">Next.js 14+ App Router, TypeScript, shadcn/ui, Tailwind CSS, next-themes, next-intl (6 idiomas), Zustand stores, Supabase Realtime.</div>
+      <div class="agent-scope">Scaffold del proyecto, componentes UI, páginas de admin, onboarding wizard, dashboard con Recharts, responsive mobile-first.</div>
+      <div class="agent-files">
+        <span class="agent-file">frontend/*</span>
+        <span class="agent-file">frontend/app/*</span>
+        <span class="agent-file">frontend/components/*</span>
+        <span class="agent-file">frontend/stores/*</span>
+        <span class="agent-file">frontend/i18n/*</span>
+      </div>
+      <div class="agent-sprints">Activo: Sprint 15 exclusivamente. Se puede dividir en 2 (scaffold + UI).</div>
+    </div>
+
+    <div class="agent-card" style="border-left: 3px solid var(--haiku)">
+      <div class="agent-header">
+        <span class="agent-name">Documentación</span>
+        <span class="badge badge--haiku">Haiku</span>
+      </div>
+      <div class="agent-role">Actualización de PROGRESS.md, generación de API docs (OpenAPI), docstrings, diagramas Mermaid, changelog por sprint.</div>
+      <div class="agent-scope">Al cierre de cada sprint: actualiza progreso, genera docs del API, verifica docstrings Google-style, crea changelog.</div>
+      <div class="agent-files">
+        <span class="agent-file">PROGRESS.md</span>
+        <span class="agent-file">MEMORY.md</span>
+        <span class="agent-file">docs/*</span>
+        <span class="agent-file">CHANGELOG.md</span>
+      </div>
+      <div class="agent-sprints">Al cierre de cada sprint. Haiku por eficiencia de costo en tareas repetitivas.</div>
+    </div>
+
+    <div class="agent-card" style="border-left: 3px solid var(--sonnet)">
+      <div class="agent-header">
+        <span class="agent-name">DB & SQL</span>
+        <span class="badge badge--sonnet">Sonnet</span>
+      </div>
+      <div class="agent-role">DDL, migraciones Alembic, optimización de queries, políticas RLS, configuración pgBouncer, índices, streaming replication.</div>
+      <div class="agent-scope">Valida que toda tabla tenga client_id + RLS con FORCE. Revisa planes de ejecución (EXPLAIN ANALYZE). Crea migraciones Alembic.</div>
+      <div class="agent-files">
+        <span class="agent-file">supabase/init/*</span>
+        <span class="agent-file">migrations/versions/*</span>
+        <span class="agent-file">scripts/backup.sh</span>
+        <span class="agent-file">scripts/replication/*</span>
+      </div>
+      <div class="agent-sprints">Intensivo: Sprints 1, 3, 5, 8. On-demand para migraciones.</div>
+    </div>
+  </div>
+
+  <div class="callout callout--warn">
+    <p><strong>En la práctica ejecuta máximo 3 sesiones simultáneas.</strong> Dos sesiones principales (Dev A + Dev B) y una rotativa entre DevOps, QA, DB o Docs según la etapa del sprint. Más sesiones simultáneas generan conflictos de merge y desperdician tokens en coordinación.</p>
+  </div>
+
+  <!-- ═══ SECONDARY ROLES ═══ -->
+  <h3 style="margin-top:2.5rem; color: var(--text); font-size: 1.25rem;">Roles Secundarios por Momento</h3>
+  <p>En lugar de crear más agentes simultáneos, los agentes existentes asumen roles especializados en momentos clave del sprint:</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Momento</th>
+          <th>Agente Base</th>
+          <th>Rol Secundario</th>
+          <th>Qué hace</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Pre-merge</strong></td>
+          <td>Dev A o B <span class="badge badge--sonnet" style="font-size:0.65rem">Sonnet</span></td>
+          <td>Security Auditor</td>
+          <td>Revisar SET LOCAL, RLS policies, filtro pre-vectorial, pgcrypto en columnas sensibles. Usar skill <code>engineering:code-review</code></td>
+        </tr>
+        <tr>
+          <td><strong>Post-sprint 8+</strong></td>
+          <td>QA Agent <span class="badge badge--sonnet" style="font-size:0.65rem">Sonnet</span></td>
+          <td>Performance Tester</td>
+          <td>Generar scripts con <code>locust</code> o <code>k6</code>. Identificar N+1 queries. Validar token budget bajo concurrencia</td>
+        </tr>
+        <tr>
+          <td><strong>Pre-deploy VPS</strong></td>
+          <td>Orquestador <span class="badge badge--opus" style="font-size:0.65rem">Opus</span></td>
+          <td>Deploy Reviewer</td>
+          <td>Usar skill <code>engineering:deploy-checklist</code>. Verificar env vars, TLS, Cloudflare Tunnel, fail2ban, Docker secrets</td>
+        </tr>
+        <tr>
+          <td><strong>Migración Supabase→VPS</strong></td>
+          <td>DB Agent <span class="badge badge--sonnet" style="font-size:0.65rem">Sonnet</span></td>
+          <td>Migration Reviewer</td>
+          <td>Verificar pg_dump/pg_restore, migraciones reversibles, DDL no-destructivo, índices sin bloqueo de tabla</td>
+        </tr>
+        <tr>
+          <td><strong>Inicio de fase</strong></td>
+          <td>Orquestador <span class="badge badge--opus" style="font-size:0.65rem">Opus</span></td>
+          <td>Architect</td>
+          <td>Usar skill <code>engineering:architecture</code>. Revisar que ADRs en MEMORY.md estén actualizados. Validar contratos entre devs</td>
+        </tr>
+        <tr>
+          <td><strong>Cierre de sprint</strong></td>
+          <td>QA Agent <span class="badge badge--sonnet" style="font-size:0.65rem">Sonnet</span></td>
+          <td>RLS Isolation Tester</td>
+          <td>Ejecutar <code>tests/test_rls_isolation.sql</code> con 2+ tenants. Verificar SELECT/UPDATE/DELETE bloqueados cross-tenant</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 style="margin-top:2rem; color: var(--text); font-size: 1.25rem;">Prompts para Roles Secundarios</h3>
+
+  <div class="code-block">
+    <div class="code-label">Security Auditor (pre-merge)</div>
+    <pre><span class="cm"># Ejecutar en la sesión de Dev A o Dev B (el que NO es author del PR)</span>
+
+Actúa como Security Auditor para este PR.
+Sprint activo: {NN}
+
+1. Lee CLAUDE.md (reglas de seguridad absolutas)
+2. Haz git diff main...feature/sprint-{NN}-{desc}
+3. Verifica en CADA archivo cambiado:
+   - SET LOCAL en todas las queries (nunca SET)
+   - RLS policies con FORCE en tablas nuevas
+   - Filtro pre-vectorial por client_id (nunca post-ranking)
+   - pgcrypto en columnas sensibles (teléfonos, emails)
+   - Sin secretos hardcodeados
+   - AppException para errores (nunca tracebacks)
+   - Sin sync I/O en contexto async
+4. Reporta: <span class="str">PASS</span> o lista de violaciones con archivo:línea</pre>
+  </div>
+
+  <div class="code-block">
+    <div class="code-label">Performance Tester (post-sprint 8)</div>
+    <pre><span class="cm"># Ejecutar en la sesión de QA Agent</span>
+
+Actúa como Performance Tester.
+Sprint completado: {NN}
+
+1. Lee los endpoints nuevos en app/api/v1/
+2. Genera un script locust (locustfile.py) que simule:
+   - 50 usuarios concurrentes, 5 tenants distintos
+   - Flujo: login → crear contacto → enviar mensaje → consultar RAG
+3. Identifica queries N+1 con EXPLAIN ANALYZE
+4. Valida que el token_budget node degrade correctamente
+   bajo carga (ok → degraded → exceeded)
+5. Reporta: latencia p50/p95/p99, queries lentas, bottlenecks</pre>
+  </div>
+
+  <div class="code-block">
+    <div class="code-label">Migration Reviewer (Supabase → VPS)</div>
+    <pre><span class="cm"># Ejecutar en la sesión de DB Agent</span>
+
+Actúa como Migration Reviewer para la migración Supabase Cloud → VPS.
+
+1. Verifica el dump: pg_dump -Fc --no-owner -h supabase-host
+2. Revisa que todas las extensiones existan en el VPS target:
+   pgvector, pgcrypto, pg_trgm, uuid-ossp
+3. Valida RLS policies post-restore con 2 tenants de prueba
+4. Verifica índices HNSW y GIN post-restore
+5. Compara row counts entre source y target
+6. Valida streaming replication si está configurada
+7. Reporta: <span class="str">READY</span> o lista de diferencias con fix</pre>
+  </div>
+
+  <!-- ═══ PARALLEL ═══ -->
+  <h2 id="parallel">Plan de Ejecución Paralela</h2>
+
+  <p>Cada sprint sigue este patrón de 3-5 días. Dev A arranca primero con los cimientos, Dev B empieza con stubs y transiciona a código real cuando Dev A pushea.</p>
+
+  <div class="tbl-wrap">
+    <div class="tbl-surface">
+      <table>
+        <thead>
+          <tr><th>Día</th><th>Dev A (Foundations)</th><th>Dev B (Integration)</th><th>On-Demand</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>1</strong></td>
+            <td>Models, schemas, core services</td>
+            <td>conftest.py, stubs, fixtures</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td><strong>2</strong></td>
+            <td>Servicios fundacionales → push</td>
+            <td>Middleware, API endpoints (con stubs)</td>
+            <td>DB: migraciones Alembic</td>
+          </tr>
+          <tr>
+            <td><strong>3</strong></td>
+            <td>Refinamiento, edge cases</td>
+            <td>Celery tasks, agent nodes, reemplazar stubs</td>
+            <td>QA: test suite inicial</td>
+          </tr>
+          <tr>
+            <td><strong>4</strong></td>
+            <td>PR → code review del PR de B</td>
+            <td>Tests completos → PR → review del PR de A</td>
+            <td>Docs: PROGRESS.md, changelog</td>
+          </tr>
+          <tr>
+            <td><strong>5</strong></td>
+            <td colspan="2" style="text-align:center">Fix issues de review → merge a main → integration tests</td>
+            <td>DevOps: actualizar Docker/CI</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══ COMMANDS ═══ -->
+  <h2 id="commands">Referencia de Comandos</h2>
+
+  <h3>Setup Inicial del Proyecto</h3>
+<pre><span class="cm"># Clonar y configurar</span>
+<span class="kw">git clone</span> git@github.com:tu-usuario/omnichannel-platform.git
+<span class="kw">cd</span> omnichannel-platform
+<span class="kw">cp</span> .env.example .env
+<span class="kw">python</span> -m venv venv
+<span class="kw">source</span> venv/bin/activate
+<span class="kw">pip install</span> -r requirements.txt
+
+<span class="cm"># Verificar herramientas</span>
+<span class="kw">ruff</span> --version
+<span class="kw">mypy</span> --version
+<span class="kw">pytest</span> --version
+
+<span class="cm"># Instalar git hooks</span>
+<span class="kw">bash</span> scripts/install-hooks.sh
+
+<span class="cm"># Pre-flight check</span>
+<span class="kw">bash</span> scripts/preflight.sh --dev-a   <span class="cm"># o --dev-b</span></pre>
+
+  <h3>Git Workflow (cada sprint)</h3>
+<pre><span class="cm"># Crear branch</span>
+<span class="kw">git checkout</span> main
+<span class="kw">git pull</span> origin main
+<span class="kw">git checkout</span> -b feature/sprint-03-fastapi-core
+
+<span class="cm"># Loop de desarrollo (repetir por módulo)</span>
+<span class="cm"># ... implementar ...</span>
+<span class="kw">pytest</span> tests/ -v --tb=short
+<span class="kw">ruff check</span> app/
+<span class="kw">git add</span> app/models/contact.py app/schemas/contact.py
+<span class="kw">git commit</span> -m <span class="str">"feat(models): agregar modelo Contact con RLS"</span>
+
+<span class="cm"># Push y PR</span>
+<span class="kw">git push</span> -u origin feature/sprint-03-fastapi-core
+<span class="kw">gh pr create</span> --title <span class="str">"Sprint 3: FastAPI Core & Auth"</span> \
+  --body <span class="str">"## Resumen\n- Models, schemas, core services\n- Tests RLS\n\n## Test plan\n- pytest tests/ -v"</span>
+
+<span class="cm"># Review del PR del otro dev</span>
+<span class="kw">gh pr diff</span> 42
+<span class="kw">gh pr review</span> 42 --approve  <span class="cm"># o --request-changes</span></pre>
+
+  <h3>Docker Compose</h3>
+<pre><span class="cm"># Levantar todos los servicios</span>
+<span class="kw">docker compose</span> up -d
+
+<span class="cm"># Ver logs en tiempo real</span>
+<span class="kw">docker compose</span> logs -f app
+<span class="kw">docker compose</span> logs -f postgres redis celery-worker
+
+<span class="cm"># Acceso directo a PostgreSQL</span>
+<span class="kw">docker compose</span> exec postgres psql -U postgres -d omnichannel
+
+<span class="cm"># Rebuild después de cambios en Dockerfile</span>
+<span class="kw">docker compose</span> build --no-cache app
+<span class="kw">docker compose</span> up -d --force-recreate app
+
+<span class="cm"># Detener todo</span>
+<span class="kw">docker compose</span> down
+<span class="kw">docker compose</span> down -v   <span class="cm"># incluye volúmenes (CUIDADO: borra datos)</span></pre>
+
+  <h3>Base de Datos & Migraciones</h3>
+<pre><span class="cm"># Ejecutar DDL inicial</span>
+<span class="kw">psql</span> -h localhost -U postgres -d omnichannel -f supabase/init/init.sql
+<span class="kw">psql</span> -h localhost -U postgres -d omnichannel -f supabase/init/phase2_tables.sql
+
+<span class="cm"># Alembic — crear migración</span>
+<span class="kw">alembic</span> revision --autogenerate -m <span class="str">"add_agent_action_logs_table"</span>
+<span class="kw">alembic</span> upgrade head
+<span class="kw">alembic</span> downgrade -1
+<span class="kw">alembic</span> history --verbose
+
+<span class="cm"># Verificar RLS (siempre con app_user, nunca superuser)</span>
+<span class="kw">psql</span> -h localhost -U app_user -d omnichannel -c <span class="str">"
+  BEGIN;
+  SET LOCAL app.current_client_id = 'tenant-a-uuid';
+  SELECT count(*) FROM contacts;  -- solo ve datos de tenant A
+  ROLLBACK;
+"</span>
+
+<span class="cm"># Backup manual</span>
+<span class="kw">pg_dump</span> -h localhost -U postgres -d omnichannel \
+  --format=custom --compress=9 > backup_$(date +%Y%m%d).dump
+<span class="kw">pg_restore</span> -h localhost -U postgres -d omnichannel_test backup_20260903.dump</pre>
+
+  <h3>Testing</h3>
+<pre><span class="cm"># Suite completa</span>
+<span class="kw">pytest</span> tests/ -v --tb=short
+
+<span class="cm"># Por tipo</span>
+<span class="kw">pytest</span> tests/unit/ -v
+<span class="kw">pytest</span> tests/integration/ -v
+<span class="kw">pytest</span> tests/e2e/ -v
+
+<span class="cm"># Test específico</span>
+<span class="kw">pytest</span> tests/unit/test_rls_isolation.py -v
+<span class="kw">pytest</span> tests/unit/test_webhooks.py::test_dedup_redis -v -s
+
+<span class="cm"># Con coverage</span>
+<span class="kw">pytest</span> --cov=app --cov-report=html --cov-report=term tests/
+<span class="kw">open</span> htmlcov/index.html
+
+<span class="cm"># Solo tests que cambiaron (rápido durante desarrollo)</span>
+<span class="kw">pytest</span> --lf -v   <span class="cm"># re-run last failed</span>
+<span class="kw">pytest</span> -x -v     <span class="cm"># stop on first failure</span></pre>
+
+  <h3>Celery & Redis</h3>
+<pre><span class="cm"># Worker con las 5 colas del proyecto</span>
+<span class="kw">celery</span> -A app.tasks.celery_app worker \
+  -Q webhooks,ai_inference,documents,notifications,bulk \
+  --loglevel=info --concurrency=4
+
+<span class="cm"># Beat scheduler (tareas periódicas)</span>
+<span class="kw">celery</span> -A app.tasks.celery_app beat --loglevel=info
+
+<span class="cm"># Flower — dashboard web (puerto 5555)</span>
+<span class="kw">celery</span> -A app.tasks.celery_app flower --port=5555
+
+<span class="cm"># Inspeccionar workers</span>
+<span class="kw">celery</span> -A app.tasks.celery_app inspect active
+<span class="kw">celery</span> -A app.tasks.celery_app inspect reserved
+<span class="kw">celery</span> -A app.tasks.celery_app inspect stats
+
+<span class="cm"># Redis CLI</span>
+<span class="kw">redis-cli</span> -h localhost -p 6379
+<span class="kw">redis-cli</span> INFO memory
+<span class="kw">redis-cli</span> LLEN celery   <span class="cm"># tamaño de cola</span></pre>
+
+  <h3>Lint, Types & Quality</h3>
+<pre><span class="cm"># Ruff (lint + format)</span>
+<span class="kw">ruff check</span> app/ tests/
+<span class="kw">ruff check</span> app/ --fix          <span class="cm"># auto-fix</span>
+<span class="kw">ruff format</span> app/ tests/        <span class="cm"># formatter</span>
+
+<span class="cm"># MyPy (type checking)</span>
+<span class="kw">mypy</span> app/ --ignore-missing-imports
+<span class="kw">mypy</span> app/ --strict              <span class="cm"># modo estricto</span>
+
+<span class="cm"># Pre-commit completo (simula el hook)</span>
+<span class="kw">ruff check</span> app/ && <span class="kw">mypy</span> app/ --ignore-missing-imports && <span class="kw">pytest</span> tests/ -v --tb=short</pre>
+
+  <h3>Frontend — Next.js (Sprint 15)</h3>
+<pre><span class="cm"># Setup inicial</span>
+<span class="kw">npx</span> create-next-app@latest frontend --typescript --tailwind --app --src-dir
+<span class="kw">cd</span> frontend
+<span class="kw">npm install</span> @supabase/supabase-js zustand @tanstack/react-query \
+  next-themes next-intl recharts lucide-react
+
+<span class="cm"># shadcn/ui</span>
+<span class="kw">npx</span> shadcn@latest init
+<span class="kw">npx</span> shadcn@latest add button card input dialog table tabs
+
+<span class="cm"># Desarrollo</span>
+<span class="kw">npm run</span> dev          <span class="cm"># http://localhost:3000</span>
+<span class="kw">npm run</span> build        <span class="cm"># build de producción</span>
+<span class="kw">npm run</span> lint
+
+<span class="cm"># Testing con Vitest</span>
+<span class="kw">npx</span> vitest
+<span class="kw">npx</span> vitest --coverage
+<span class="kw">npx</span> vitest --ui       <span class="cm"># dashboard visual</span>
+
+<span class="cm"># Playwright e2e</span>
+<span class="kw">npx</span> playwright install
+<span class="kw">npx</span> playwright test
+<span class="kw">npx</span> playwright test --headed      <span class="cm"># ver el browser</span>
+<span class="kw">npx</span> playwright test --ui          <span class="cm"># modo interactivo</span>
+<span class="kw">npx</span> playwright codegen localhost:3000  <span class="cm"># generar tests</span>
+<span class="kw">npx</span> playwright show-report</pre>
+
+  <h3>Deploy al VPS</h3>
+<pre><span class="cm"># SSH al servidor</span>
+<span class="kw">ssh</span> deploy@tu-vps-ip
+
+<span class="cm"># Deploy (primera vez)</span>
+<span class="kw">git clone</span> git@github.com:tu-usuario/omnichannel-platform.git /opt/omnichannel
+<span class="kw">cd</span> /opt/omnichannel
+<span class="kw">cp</span> .env.example .env.production
+<span class="cm"># Editar .env.production con valores de producción</span>
+<span class="kw">docker compose</span> -f docker-compose.prod.yml up -d
+
+<span class="cm"># Deploy (actualizaciones)</span>
+<span class="kw">cd</span> /opt/omnichannel
+<span class="kw">git pull</span> origin main
+<span class="kw">docker compose</span> -f docker-compose.prod.yml up -d --build
+
+<span class="cm"># Backup programado</span>
+<span class="kw">bash</span> scripts/backup.sh
+<span class="kw">bash</span> scripts/restore_test.sh
+
+<span class="cm"># Monitoreo</span>
+<span class="kw">docker compose</span> -f docker-compose.prod.yml logs -f --tail=100
+<span class="kw">htop</span>
+<span class="kw">df</span> -h
+<span class="kw">docker</span> stats
+
+<span class="cm"># Cloudflare Tunnel</span>
+<span class="kw">cloudflared</span> tunnel login
+<span class="kw">cloudflared</span> tunnel create omnichannel
+<span class="kw">cloudflared</span> tunnel run omnichannel
+
+<span class="cm"># Firewall (UFW)</span>
+<span class="kw">ufw</span> allow 22/tcp
+<span class="kw">ufw</span> allow 80/tcp
+<span class="kw">ufw</span> allow 443/tcp
+<span class="kw">ufw</span> enable
+<span class="kw">ufw</span> status verbose</pre>
+
+  <!-- ═══ PROMPTS ═══ -->
+  <h2 id="prompts">Prompts de Inicio para cada Agente</h2>
+
+  <p>Copia el prompt correspondiente al iniciar cada sesión de Claude Code. Los prompts siguen el protocolo definido en METHODOLOGY.md §4.1.</p>
+
+  <div class="prompt-box">
+    <div class="prompt-box-header">
+      <span class="badge badge--opus">Opus</span>
+      <span class="prompt-box-title">Orquestador — Review de PR</span>
+    </div>
+<pre>Soy el Orquestador del proyecto Omnichannel Platform.
+
+1. Lee: CLAUDE.md → METHODOLOGY.md → PROGRESS.md → MEMORY.md
+2. Revisa el PR #{número} en feature/sprint-{NN}-{descripcion}
+3. Verifica Quality Gates (METHODOLOGY.md §7):
+   - SET LOCAL en todas las queries (nunca SET)
+   - RLS con FORCE en tablas nuevas
+   - Type hints y docstrings Google-style
+   - Tests: happy path + 2 edge cases mínimo
+   - Sin sync I/O en contexto async
+   - AppException (nunca tracebacks)
+   - Loguru con client_id y trace_id
+4. Reporta: ✅ Aprobado | 🔄 Cambios requeridos | ❌ Rechazado</pre>
+  </div>
+
+  <div class="prompt-box">
+    <div class="prompt-box-header">
+      <span class="badge badge--sonnet">Sonnet</span>
+      <span class="prompt-box-title">Dev A — Foundations</span>
+    </div>
+<pre>Soy Dev A (Foundations).
+Sprint activo: {NN} — {nombre}
+Branch: feature/sprint-{NN}-{descripcion}
+
+1. Lee en orden: CLAUDE.md → METHODOLOGY.md → PROGRESS.md → MEMORY.md
+2. Lee la spec: specs/sprint-{NN}-*.md
+   (y addendums si existen: specs/sprint-{NN}-addendum-*.md)
+3. Consulta mis tareas en la Matriz de Asignación (METHODOLOGY.md §6)
+4. Crea la branch y ejecuta el loop semi-autónomo:
+   implementar → pytest → ruff → commit → PROGRESS.md
+5. Pausa en cada checkpoint (cada 3-5 módulos) para mi revisión
+
+Reglas: Solo archivos de Dev A. SET LOCAL siempre. Type hints. Docstrings.</pre>
+  </div>
+
+  <div class="prompt-box">
+    <div class="prompt-box-header">
+      <span class="badge badge--sonnet">Sonnet</span>
+      <span class="prompt-box-title">Dev B — Integration</span>
+    </div>
+<pre>Soy Dev B (Integration).
+Sprint activo: {NN} — {nombre}
+Branch: feature/sprint-{NN}-{descripcion}
+
+1. Lee en orden: CLAUDE.md → METHODOLOGY.md → PROGRESS.md → MEMORY.md
+2. Lee la spec: specs/sprint-{NN}-*.md
+   (y addendums si existen: specs/sprint-{NN}-addendum-*.md)
+3. Consulta mis tareas en la Matriz de Asignación (METHODOLOGY.md §6)
+4. Verifica si Dev A ya pusheó models/ y schemas/:
+   → SI: usar imports reales
+   → NO: crear stubs temporales basados en la spec
+5. Ejecuta el loop: implementar → pytest → ruff → commit → PROGRESS.md
+
+Foco: API endpoints, middleware, Celery tasks, agent nodes, tests.</pre>
+  </div>
+
+  <div class="prompt-box">
+    <div class="prompt-box-header">
+      <span class="badge badge--sonnet">Sonnet</span>
+      <span class="prompt-box-title">QA & Testing</span>
+    </div>
+<pre>Soy el agente de QA/Testing del proyecto Omnichannel Platform.
+
+1. Lee: CLAUDE.md → specs/sprint-{NN}-*.md
+2. Revisa el código implementado en el sprint actual
+3. Genera tests para:
+   - Aislamiento RLS (2 tenants, verificar cross-check)
+   - Happy path de cada endpoint
+   - Edge cases (al menos 2 por endpoint)
+   - Deduplicación de webhooks
+   - Token budget degradation
+4. Ejecuta: pytest tests/ -v --cov=app --cov-report=term
+5. Reporta cobertura y tests fallidos
+
+Target: > 70% cobertura en archivos nuevos del sprint.</pre>
+  </div>
+
+  <div class="prompt-box">
+    <div class="prompt-box-header">
+      <span class="badge badge--haiku">Haiku</span>
+      <span class="prompt-box-title">Documentación</span>
+    </div>
+<pre>Soy el agente de Documentación del proyecto Omnichannel Platform.
+
+1. Lee: PROGRESS.md → MEMORY.md
+2. Revisa los commits del sprint {NN} en la branch actual
+3. Actualiza:
+   - PROGRESS.md: mover tareas completadas, actualizar métricas
+   - Verificar docstrings Google-style en funciones públicas nuevas
+   - Generar changelog del sprint
+4. Si hay decisiones nuevas en el código → agregarlas a MEMORY.md
+5. Verificar que los endpoints nuevos tienen descriptions en FastAPI
+
+No modificar código — solo documentación y docstrings.</pre>
+  </div>
+
+  <!-- ═══ COSTS ═══ -->
+  <h2 id="costs">Estimación de Costos (Tokens)</h2>
+
+  <p>Estimación aproximada del consumo de tokens por sprint, asumiendo loop semi-autónomo con checkpoints.</p>
+
+  <div class="tbl-wrap">
+    <div class="tbl-surface">
+      <table>
+        <thead>
+          <tr><th>Agente</th><th>Modelo</th><th style="text-align:right">Tokens/Sprint</th><th style="text-align:right">Costo aprox/Sprint</th><th>Notas</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Orquestador</td><td><span class="badge badge--opus">Opus</span></td>
+            <td class="num">~50K</td><td class="num">~$1.50</td>
+            <td>Solo PR review, no genera código masivo</td>
+          </tr>
+          <tr>
+            <td>Dev A</td><td><span class="badge badge--sonnet">Sonnet</span></td>
+            <td class="num">~150K</td><td class="num">~$1.35</td>
+            <td>Generación de modelos, schemas, services</td>
+          </tr>
+          <tr>
+            <td>Dev B</td><td><span class="badge badge--sonnet">Sonnet</span></td>
+            <td class="num">~200K</td><td class="num">~$1.80</td>
+            <td>Más archivos: API + middleware + tests</td>
+          </tr>
+          <tr>
+            <td>DevOps</td><td><span class="badge badge--sonnet">Sonnet</span></td>
+            <td class="num">~30K</td><td class="num">~$0.27</td>
+            <td>On-demand, no todos los sprints</td>
+          </tr>
+          <tr>
+            <td>QA</td><td><span class="badge badge--sonnet">Sonnet</span></td>
+            <td class="num">~80K</td><td class="num">~$0.72</td>
+            <td>Test generation + execution</td>
+          </tr>
+          <tr>
+            <td>Docs</td><td><span class="badge badge--haiku">Haiku</span></td>
+            <td class="num">~20K</td><td class="num">~$0.02</td>
+            <td>Haiku es 60x más barato que Opus</td>
+          </tr>
+          <tr class="row-total">
+            <td colspan="2">Total por sprint</td>
+            <td class="num">~530K</td><td class="num">~$5.66</td>
+            <td></td>
+          </tr>
+          <tr class="row-total">
+            <td colspan="2">Total proyecto (15 sprints)</td>
+            <td class="num">~8M</td><td class="num">~$85</td>
+            <td>Estimación conservadora vía API</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="callout callout--success">
+    <p><strong>Con planes Pro/Team de Claude:</strong> Si usas Claude Pro ($20/mes) o Team ($30/usuario/mes), el costo se absorbe en la suscripción. Los precios arriba son para uso directo de la API. Con Cowork, el modelo se elige por sesión y el consumo va contra tu cuota mensual.</p>
+  </div>
+
+  <h3>Selección de Modelo — Guía Rápida</h3>
+
+  <div class="tbl-wrap">
+    <div class="tbl-surface">
+      <table>
+        <thead>
+          <tr><th>Tarea</th><th>Modelo</th><th>Por qué</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Decisiones de arquitectura, ADRs</td>
+            <td><span class="badge badge--opus">Opus</span></td>
+            <td>Máxima capacidad de razonamiento para trade-offs complejos</td>
+          </tr>
+          <tr>
+            <td>Code review de PRs críticos</td>
+            <td><span class="badge badge--opus">Opus</span></td>
+            <td>Detecta bugs sutiles en RLS, race conditions, async issues</td>
+          </tr>
+          <tr>
+            <td>Generación de código (modelos, APIs, services)</td>
+            <td><span class="badge badge--sonnet">Sonnet</span></td>
+            <td>Balance velocidad/calidad. Genera 2-3x más rápido que Opus</td>
+          </tr>
+          <tr>
+            <td>Tests, fixtures, conftest</td>
+            <td><span class="badge badge--sonnet">Sonnet</span></td>
+            <td>Buen razonamiento para edge cases sin el costo de Opus</td>
+          </tr>
+          <tr>
+            <td>Docker, CI/CD, deployment scripts</td>
+            <td><span class="badge badge--sonnet">Sonnet</span></td>
+            <td>Infraestructura repetitiva, Sonnet la maneja bien</td>
+          </tr>
+          <tr>
+            <td>DDL, migraciones SQL, RLS policies</td>
+            <td><span class="badge badge--sonnet">Sonnet</span></td>
+            <td>SQL bien manejado por Sonnet. Opus para queries complejas</td>
+          </tr>
+          <tr>
+            <td>Frontend (Next.js, React, UI)</td>
+            <td><span class="badge badge--sonnet">Sonnet</span></td>
+            <td>Excelente con React/TypeScript. Rápido para iterar UI</td>
+          </tr>
+          <tr>
+            <td>Docstrings, PROGRESS.md, changelog</td>
+            <td><span class="badge badge--haiku">Haiku</span></td>
+            <td>Tareas simples y repetitivas. 60x más económico</td>
+          </tr>
+          <tr>
+            <td>Playwright e2e test generation</td>
+            <td><span class="badge badge--sonnet">Sonnet</span></td>
+            <td>Necesita entender la UI para generar selectors correctos</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
