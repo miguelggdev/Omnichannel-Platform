@@ -1,0 +1,76 @@
+# =============================================================================
+# .dockerignore — Exclusiones del contexto Docker
+# =============================================================================
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Environment (NUNCA incluir en imagen)
+.env
+.env.*
+!.env.example
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+
+# Testing
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov/
+.coverage
+.tox
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Documentacion (no necesaria en imagen)
+*.md
+docs/
+specs/
+
+# Tests (no necesarios en imagen de produccion)
+tests/
+
+# Docker (evitar recursion)
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# CI/CD
+.github/
+.pre-commit-config.yaml
+.secrets.baseline
+
+# Build artifacts
+node_modules/
+dist/
+build/
+
+# Grafana/Prometheus configs (montados como volumenes)
+grafana/
+prometheus/
+
+# Scripts de desarrollo
+scripts/
+contracts/
+Makefile
+
+# Backups
+backups/
+*.gz
+*.tar
+
+# OS
+.DS_Store
+Thumbs.db

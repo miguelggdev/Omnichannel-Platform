@@ -1,0 +1,15 @@
+# =============================================================================
+# Traefik v3 — Configuracion TLS (Desarrollo)
+# =============================================================================
+# En produccion: reemplazar con certificados reales (Let's Encrypt / Cloudflare)
+# =============================================================================
+
+tls:
+  stores:
+    default:
+      defaultGeneratedCert:
+        resolver: default
+        domain:
+          main: "localhost"
+          sans:
+            - "*.localhost"

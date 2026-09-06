@@ -8,9 +8,9 @@
 ## Estado Actual
 
 - **Fase:** 1 — MVP Core
-- **Sprint Activo:** Sprint 1 — Schema DDL & Arquitectura
+- **Sprint Activo:** Sprint 2 — Infraestructura Docker
 - **Última actualización:** 2026-09-06
-- **Última sesión:** Sesión 7 — Admin Assistant spec, nueva tabla admin_assistant_history, campos admin_assistant en clients
+- **Última sesión:** Sesión 8 — Sprint 2 completo (Docker Compose 16 servicios, Dockerfile, Traefik, Celery, .env.example)
 
 ---
 
@@ -65,12 +65,58 @@ _(nada en progreso)_
 
 ---
 
+## Sprint 2: Infraestructura Docker
+
+### Completado
+- [x] `docker-compose.yml` — 16 servicios orquestados con health checks
+- [x] `Dockerfile` — Multi-stage (builder + runner) con tesseract-ocr, usuario no-root
+- [x] `traefik/traefik.yml` — Configuracion estatica Traefik v3 (entrypoints, providers, logging)
+- [x] `traefik/dynamic/middlewares.yml` — Rate limiting, security headers, compresion, CORS
+- [x] `traefik/dynamic/tls.yml` — Certificados autofirmados para desarrollo
+- [x] `app/tasks/celery_config.py` — 5 colas (webhooks, ai_inference, documents, notifications, bulk) + beat schedule
+- [x] `scripts/wait-for-it.sh` — Script de espera TCP para dependencias
+- [x] `.dockerignore` — 45 reglas de exclusion del contexto Docker
+- [x] `.env.example` — Actualizado con ANTHROPIC_API_KEY, ADMIN_ASSISTANT_*, META vars, REALTIME_SECRET_KEY_BASE
+
+### Servicios Docker (16)
+1. traefik (API Gateway v3)
+2. api (FastAPI x2 replicas)
+3. supabase-db (PostgreSQL 15 + pgvector)
+4. supabase-auth (GoTrue)
+5. supabase-storage (File storage)
+6. supabase-realtime (WebSockets)
+7. pgbouncer (Connection pooling, transaction mode)
+8. redis (Cache + Broker, 3 DBs separadas)
+9. celery-webhooks (c=4)
+10. celery-ai (c=2)
+11. celery-documents (c=2)
+12. celery-notifications (c=2)
+13. celery-bulk (c=1)
+14. celery-beat (Scheduler)
+15. prometheus (Metricas)
+16. grafana (Dashboards)
+
+### Pendiente
+- [ ] Validacion funcional con `docker-compose up -d` (requiere entorno Docker del usuario)
+- [ ] Verificar pgBouncer transaction mode con `SHOW pools`
+- [ ] Verificar que init.sql se ejecuta al crear contenedor PostgreSQL
+
+### Notas para la Proxima Sesion
+- celery-beat no tiene healthcheck (es scheduler, no endpoint)
+- pgBouncer usa `SERVER_RESET_QUERY: "DISCARD ALL"` para limpiar estado entre transacciones
+- Redis separado en 3 DBs: 0=broker, 1=results, 2=cache
+- Traefik redirecciona HTTP→HTTPS automaticamente
+- Workers Celery usan PGBOUNCER_URL, nunca DATABASE_URL directo
+- Sprint 3 (FastAPI Core & Auth) puede comenzar inmediatamente
+
+---
+
 ## Resumen por Sprint
 
 | Sprint | Nombre | Estado | Notas |
 |---|---|---|---|
 | 1 | Schema DDL & Arquitectura | ✅ Completado | 24 tablas, RLS verificado, DDL idempotente |
-| 2 | Infraestructura Docker | ⬜ Pendiente | Depende de Sprint 1 |
+| 2 | Infraestructura Docker | ✅ Completado | 16 servicios, Dockerfile multi-stage, Traefik v3, 5 workers Celery |
 | 3 | FastAPI Core & Auth | ⬜ Pendiente | |
 | 4 | Webhook Receiver & MessagingProvider | ⬜ Pendiente | YCloud (WhatsApp) + Meta (Instagram DM + Facebook Messenger) |
 | 5 | Pipeline de Documentos & RAG | ⬜ Pendiente | |
