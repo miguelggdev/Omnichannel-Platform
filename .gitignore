@@ -85,3 +85,4 @@ backups/
 *.key
 credentials.json
 service-account.json
+*.pptx 
