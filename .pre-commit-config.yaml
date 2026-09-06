@@ -1,0 +1,98 @@
+# =============================================================================
+# Pre-commit Hooks — Plataforma SaaS Omnicanal Multi-Tenant
+# =============================================================================
+# Instalación:
+#   pip install pre-commit --break-system-packages
+#   pre-commit install
+#   pre-commit install --hook-type commit-msg
+#
+# Ejecutar manualmente:
+#   pre-commit run --all-files
+# =============================================================================
+
+repos:
+  # ─── Ruff: Linter + Formatter (reemplaza flake8, isort, black) ────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        name: "ruff check (lint)"
+        args: [--fix, --exit-non-zero-on-fix]
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: "ruff format"
+        types_or: [python, pyi]
+
+  # ─── MyPy: Type checking estático ─────────────────────────────────────────
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.14.1
+    hooks:
+      - id: mypy
+        name: "mypy (type check)"
+        args: [--config-file=pyproject.toml]
+        additional_dependencies:
+          - types-redis
+          - sqlalchemy[mypy]
+          - pydantic
+        pass_filenames: false
+        # Solo verificar app/ — no tests ni scripts
+        entry: mypy app/
+
+  # ─── Seguridad: Detectar secrets hardcodeados ─────────────────────────────
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        name: "detect-secrets (no hardcoded keys)"
+        args: ['--baseline', '.secrets.baseline']
+        exclude: package-lock\.json|\.env\.example
+
+  # ─── Hooks estándar ────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        name: "trailing whitespace"
+      - id: end-of-file-fixer
+        name: "end of file fixer"
+      - id: check-yaml
+        name: "check YAML syntax"
+      - id: check-json
+        name: "check JSON syntax"
+      - id: check-toml
+        name: "check TOML syntax"
+      - id: check-added-large-files
+        name: "no large files (>500KB)"
+        args: ['--maxkb=500']
+      - id: check-merge-conflict
+        name: "no merge conflicts"
+      - id: debug-statements
+        name: "no debug statements (pdb, breakpoint)"
+
+  # ─── SQL: Validación de archivos SQL ───────────────────────────────────────
+  - repo: https://github.com/sqlfluff/sqlfluff
+    rev: 3.3.1
+    hooks:
+      - id: sqlfluff-lint
+        name: "sqlfluff (SQL lint)"
+        args: [--dialect, postgres]
+        files: \.sql$
+        exclude: migrations/versions/
+
+  # ─── Commit message: formato convencional ──────────────────────────────────
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.2.2
+    hooks:
+      - id: commitizen
+        name: "commit message format"
+        stages: [commit-msg]
+
+# =============================================================================
+# Configuración global
+# =============================================================================
+default_language_version:
+  python: python3.11
+
+ci:
+  autofix_commit_msg: "style: auto-fix pre-commit hooks"
+  autoupdate_commit_msg: "chore: update pre-commit hooks"

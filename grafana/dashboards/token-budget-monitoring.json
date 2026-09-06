@@ -1,0 +1,305 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Monitoreo de consumo de tokens por tenant, agente y hora. Detecta tenants que exceden cuota y agentes con prompts ineficientes.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Consumo Total de Tokens (Hoy)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 500000 },
+              { "color": "red", "value": 1000000 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT COALESCE(SUM(tokens_used), 0) AS total FROM token_usage_log WHERE created_at >= CURRENT_DATE",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "datasource": { "type": "postgres", "uid": "supabase-db" }
+    },
+    {
+      "title": "Tenants Activos (Hoy)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(DISTINCT client_id) AS tenants FROM token_usage_log WHERE created_at >= CURRENT_DATE",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "datasource": { "type": "postgres", "uid": "supabase-db" }
+    },
+    {
+      "title": "Tokens en Zona de Degradación (90-99%)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 3 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*) AS tenants_degraded FROM (SELECT tb.client_id, tb.monthly_limit, tb.used_this_month, ROUND((tb.used_this_month::numeric / NULLIF(tb.monthly_limit, 0)) * 100, 1) AS pct FROM token_budgets tb WHERE tb.used_this_month::numeric / NULLIF(tb.monthly_limit, 0) BETWEEN 0.90 AND 0.99) sub",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "datasource": { "type": "postgres", "uid": "supabase-db" }
+    },
+    {
+      "title": "Tenants con Presupuesto Agotado (100%)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(*) AS tenants_exhausted FROM token_budgets WHERE used_this_month >= monthly_limit AND monthly_limit > 0",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "datasource": { "type": "postgres", "uid": "supabase-db" }
+    },
+    {
+      "title": "Consumo de Tokens por Tenant (Top 10 - Este Mes)",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short"
+        }
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "always",
+        "barWidth": 0.7
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT c.name AS tenant, tb.used_this_month AS tokens, tb.monthly_limit AS limite, ROUND((tb.used_this_month::numeric / NULLIF(tb.monthly_limit, 0)) * 100, 1) AS porcentaje FROM token_budgets tb JOIN clients c ON c.id = tb.client_id WHERE c.is_active = true ORDER BY tb.used_this_month DESC LIMIT 10",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "datasource": { "type": "postgres", "uid": "supabase-db" }
+    },
+    {
+      "title": "Uso de Tokens por Nodo del Grafo (Hoy)",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "options": {
+        "pieType": "donut",
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "table", "placement": "right" }
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT node_name, SUM(tokens_used) AS tokens FROM token_usage_log WHERE created_at >= CURRENT_DATE GROUP BY node_name ORDER BY tokens DESC",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "datasource": { "type": "postgres", "uid": "supabase-db" }
+    },
+    {
+      "title": "Tokens por Hora (Últimas 24h)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "pointSize": 5
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "table", "placement": "bottom" }
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT date_trunc('hour', created_at) AS time, model, SUM(tokens_used) AS tokens FROM token_usage_log WHERE created_at >= NOW() - INTERVAL '24 hours' GROUP BY date_trunc('hour', created_at), model ORDER BY time",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "datasource": { "type": "postgres", "uid": "supabase-db" }
+    },
+    {
+      "title": "Costo Estimado por Modelo (Este Mes)",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "costo_usd" },
+            "properties": [
+              { "id": "unit", "value": "currencyUSD" },
+              { "id": "decimals", "value": 4 }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT model, SUM(tokens_used) AS total_tokens, COUNT(*) AS llamadas, ROUND(AVG(tokens_used), 0) AS avg_por_llamada, CASE WHEN model = 'gpt-4o' THEN ROUND(SUM(tokens_used) * 2.50 / 1000000, 4) WHEN model = 'gpt-4o-mini' THEN ROUND(SUM(tokens_used) * 0.15 / 1000000, 4) ELSE ROUND(SUM(tokens_used) * 1.00 / 1000000, 4) END AS costo_usd FROM token_usage_log WHERE created_at >= date_trunc('month', CURRENT_DATE) GROUP BY model ORDER BY total_tokens DESC",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "datasource": { "type": "postgres", "uid": "supabase-db" }
+    },
+    {
+      "title": "Tenants Cerca del Límite (>80%)",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "porcentaje" },
+            "properties": [
+              { "id": "unit", "value": "percent" },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 80 },
+                    { "color": "orange", "value": 90 },
+                    { "color": "red", "value": 100 }
+                  ]
+                }
+              },
+              { "id": "custom.displayMode", "value": "color-background" }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT c.name AS tenant, c.plan, tb.used_this_month AS usado, tb.monthly_limit AS limite, ROUND((tb.used_this_month::numeric / NULLIF(tb.monthly_limit, 0)) * 100, 1) AS porcentaje FROM token_budgets tb JOIN clients c ON c.id = tb.client_id WHERE c.is_active = true AND tb.used_this_month::numeric / NULLIF(tb.monthly_limit, 0) > 0.80 ORDER BY porcentaje DESC",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "datasource": { "type": "postgres", "uid": "supabase-db" }
+    },
+    {
+      "title": "Eficiencia de Agentes (Tokens/Conversación por Nodo)",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "avg_tokens" },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 500 },
+                    { "color": "red", "value": 1500 }
+                  ]
+                }
+              },
+              { "id": "custom.displayMode", "value": "color-background" }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT node_name AS nodo, COUNT(*) AS ejecuciones, SUM(tokens_used) AS total_tokens, ROUND(AVG(tokens_used), 0) AS avg_tokens, ROUND(AVG(duration_ms), 0) AS avg_duracion_ms, ROUND(STDDEV(tokens_used), 0) AS stddev_tokens FROM agent_action_logs WHERE created_at >= NOW() - INTERVAL '7 days' GROUP BY node_name ORDER BY avg_tokens DESC",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "datasource": { "type": "postgres", "uid": "supabase-db" }
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["tokens", "budget", "tenant", "monitoring"],
+  "templating": {
+    "list": [
+      {
+        "name": "tenant",
+        "type": "query",
+        "query": "SELECT name AS __text, id AS __value FROM clients WHERE is_active = true ORDER BY name",
+        "datasource": { "type": "postgres", "uid": "supabase-db" },
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Token Budget Monitoring",
+  "uid": "token-budget-monitoring",
+  "version": 1
+}

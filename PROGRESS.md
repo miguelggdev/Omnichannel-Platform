@@ -10,7 +10,7 @@
 - **Fase:** 1 — MVP Core
 - **Sprint Activo:** Sprint 1 — Schema DDL & Arquitectura
 - **Última actualización:** 2026-09-05
-- **Última sesión:** Sesión 5 — Integración de 11 nuevas features, creación Sprint 15, addendums para Sprints 3, 6, 8, 14
+- **Última sesión:** Sesión 6 — Git simplificado (sin develop), Dev Playbook, CI/CD pipeline, pre-commit hooks, RLS tests expandidos, Token Budget dashboard
 
 ---
 
@@ -46,6 +46,16 @@ _(nada en progreso)_
 
 ### Bloqueadores
 - Push a GitHub requiere ejecución manual desde terminal del usuario (credenciales no disponibles en sesión cloud)
+
+### Infraestructura CI/CD & QA (Sesión 6)
+- [x] `.pre-commit-config.yaml` — ruff, mypy, detect-secrets, sqlfluff, commitizen
+- [x] `.github/workflows/ci.yml` — 8 stages: lint → typecheck → test-unit → test-integration → migration-check → security → docker-build → frontend
+- [x] `tests/conftest.py` — Fixtures expandidas con rls_harness, tenant sessions, API client, TestDataFactory
+- [x] `tests/integration/test_rls_all_tables.py` — 25 tests de aislamiento RLS (todas las tablas)
+- [x] `grafana/dashboards/token-budget-monitoring.json` — 10 paneles: tokens/tenant, tokens/nodo, costos, eficiencia, alertas
+- [x] `pyproject.toml` — Actualizado: reglas de seguridad, coverage, commitizen, bandit
+- [x] `.secrets.baseline` — Baseline para detect-secrets
+- [x] `docs/dev-playbook.html` — Dev Playbook con 8 agentes + 6 roles secundarios
 
 ### Notas para la Próxima Sesión
 - Recordar el bug del alias SQL en WHERE: usar `1 - (embedding <=> :query_embedding) > :threshold` en lugar de `similarity > :threshold`

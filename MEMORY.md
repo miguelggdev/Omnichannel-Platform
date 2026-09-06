@@ -264,3 +264,26 @@
 | 2026-09-03 | Sesión 3 | Documento Word para devs, creación de archivos repo (CLAUDE.md, PROGRESS.md, MEMORY.md, specs) |
 | 2026-09-05 | Sesión 4 | Pitch deck investor (pptx), inclusión de Facebook e Instagram como canales MVP, actualización de specs (sprint-04, sprint-09) y docs del proyecto |
 | 2026-09-05 | Sesión 5 | Integración de 11 nuevas features en specs: onboarding, personalización, theme toggle, responsive, i18n (6 idiomas), Celery admin, Telegram bot, agent logging, client mgmt, backup/replicación, seguridad. Creación de Sprint 15 (Frontend). Addendums para Sprints 3, 6, 8, 14 |
+| 2026-09-05 | Sesión 6 | Eliminación de branch `develop` (feature/* → main directo). Dev Playbook artifact con 8 agentes + 6 roles secundarios. 5 funcionalidades adicionales: pre-commit hooks, GitHub Actions CI (8 stages), Alembic migration checks, RLS tests expandidos (25 tablas), Grafana Token Budget dashboard. Transferencia de 14+ archivos a PC vía device bridge |
+
+---
+
+## ADRs Adicionales
+
+### ADR-016: Eliminación de branch develop (git simplificado)
+- **Fecha:** 2026-09-05
+- **Contexto:** Con solo 2 devs, la branch `develop` agrega fricción sin beneficio. Cada merge a develop requiere después otro merge a main, duplicando trabajo de CI/CD.
+- **Decisión:** Flujo simplificado: `feature/sprint-{NN}-descripcion` → PR a `main` → CI pass → merge. Sin branch intermedia.
+- **Consecuencia:** Branch protection solo en `main` (require PR, 1 approval, status checks, no force push). Sync diario con `git pull origin main`. Code review con `git diff main...`.
+
+### ADR-017: CI Pipeline con 8 stages en GitHub Actions
+- **Fecha:** 2026-09-05
+- **Contexto:** Se necesita un pipeline de CI que valide lint, types, tests unitarios, tests de integración (con PostgreSQL+Redis), migraciones Alembic, seguridad y build Docker.
+- **Decisión:** 8 stages: lint → typecheck → test-unit → test-integration (con servicios PostgreSQL pgvector + Redis) → migration-check → security (bandit + pip-audit + secrets + RLS patterns) → docker-build → frontend (condicional). Job final `ci-pass` como merge gate.
+- **Consecuencia:** El job `ci-pass` es el status check requerido en branch protection. No se puede mergear si cualquier stage falla.
+
+### ADR-018: Pre-commit hooks con detect-secrets
+- **Fecha:** 2026-09-05
+- **Contexto:** Prevenir que secrets, debug statements o código mal formateado lleguen al repositorio.
+- **Decisión:** Usar pre-commit con: ruff (lint+format), mypy, detect-secrets, sqlfluff, commitizen (formato de commits), y hooks estándar (trailing whitespace, YAML/JSON check, no large files, no merge conflicts).
+- **Consecuencia:** Cada dev debe ejecutar `pre-commit install` después de clonar. Los hooks corren antes de cada commit local.

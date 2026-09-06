@@ -1,0 +1,360 @@
+# =============================================================================
+# CI Pipeline — Plataforma SaaS Omnicanal Multi-Tenant
+# =============================================================================
+# Se ejecuta en cada PR a main y en cada push a main.
+# Stages: lint → typecheck → test → security → docker-build
+# =============================================================================
+
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "20"
+
+jobs:
+  # ─── Stage 1: Lint & Format ────────────────────────────────────────────────
+  lint:
+    name: "Lint & Format"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Ruff check (lint)
+        run: ruff check app/ tests/ --output-format=github
+
+      - name: Ruff format (check)
+        run: ruff format app/ tests/ --check --diff
+
+  # ─── Stage 2: Type Checking ────────────────────────────────────────────────
+  typecheck:
+    name: "Type Check (mypy)"
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install mypy types-redis sqlalchemy[mypy]
+
+      - name: Run mypy
+        run: mypy app/ --config-file=pyproject.toml
+
+  # ─── Stage 3: Unit Tests ───────────────────────────────────────────────────
+  test-unit:
+    name: "Unit Tests"
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov httpx
+
+      - name: Run unit tests
+        run: |
+          pytest tests/unit/ -v --tb=short \
+            --cov=app --cov-report=xml --cov-report=term-missing \
+            --junitxml=test-results.xml
+        env:
+          TESTING: "true"
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  # ─── Stage 4: Integration Tests (con PostgreSQL + Redis) ───────────────────
+  test-integration:
+    name: "Integration Tests (RLS + DB)"
+    runs-on: ubuntu-latest
+    needs: [typecheck, test-unit]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_omnichannel
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test_user"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Initialize database schema
+        run: |
+          PGPASSWORD=test_password psql -h localhost -U test_user -d test_omnichannel \
+            -f supabase/init/init.sql
+        env:
+          PGPASSWORD: test_password
+
+      - name: Run RLS isolation tests
+        run: |
+          pytest tests/unit/test_rls_isolation.py -v --tb=short --run-db
+          pytest tests/integration/ -v --tb=short
+        env:
+          DATABASE_URL: "postgresql+asyncpg://test_user:test_password@localhost:5432/test_omnichannel"
+          REDIS_URL: "redis://localhost:6379/0"
+          TESTING: "true"
+
+  # ─── Stage 5: Alembic Migration Check ──────────────────────────────────────
+  migration-check:
+    name: "Alembic Migration Check"
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_migrations
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test_user"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install alembic
+
+      - name: Initialize base schema
+        run: |
+          PGPASSWORD=test_password psql -h localhost -U test_user -d test_migrations \
+            -f supabase/init/init.sql
+
+      - name: Run all migrations
+        run: |
+          cd migrations
+          alembic upgrade head
+        env:
+          DATABASE_URL: "postgresql+asyncpg://test_user:test_password@localhost:5432/test_migrations"
+
+      - name: Check for pending migrations
+        run: |
+          cd migrations
+          alembic check 2>&1 || {
+            echo "::error::Hay cambios en los modelos sin migración correspondiente."
+            echo "::error::Ejecuta 'alembic revision --autogenerate -m \"descripcion\"' para crear la migración."
+            exit 1
+          }
+        env:
+          DATABASE_URL: "postgresql+asyncpg://test_user:test_password@localhost:5432/test_migrations"
+
+  # ─── Stage 6: Security Scan ────────────────────────────────────────────────
+  security:
+    name: "Security Scan"
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install security tools
+        run: pip install bandit safety pip-audit
+
+      - name: Bandit (code security)
+        run: |
+          bandit -r app/ -c pyproject.toml \
+            --format json --output bandit-report.json || true
+          bandit -r app/ -c pyproject.toml --format screen
+
+      - name: pip-audit (dependency vulnerabilities)
+        run: |
+          pip install -r requirements.txt
+          pip-audit --format json --output pip-audit-report.json || true
+          pip-audit
+
+      - name: Check for hardcoded secrets
+        run: |
+          # Buscar patrones de secrets hardcodeados
+          if grep -rn --include="*.py" \
+            -e 'sk-[a-zA-Z0-9]\{20,\}' \
+            -e 'password\s*=\s*"[^"]\{8,\}"' \
+            -e 'api_key\s*=\s*"[^"]\{8,\}"' \
+            -e 'secret\s*=\s*"[^"]\{8,\}"' \
+            app/; then
+            echo "::error::Se encontraron posibles secrets hardcodeados en el código."
+            exit 1
+          fi
+          echo "No se encontraron secrets hardcodeados."
+
+      - name: Check RLS patterns
+        run: |
+          # Verificar que no se use SET sin LOCAL
+          if grep -rn --include="*.py" \
+            'SET app\.current_client_id' app/ | \
+            grep -v 'SET LOCAL'; then
+            echo "::error::Se encontró 'SET' sin 'LOCAL' para app.current_client_id."
+            echo "::error::SIEMPRE usar 'SET LOCAL' para compatibilidad con pgBouncer."
+            exit 1
+          fi
+          echo "Todos los SET usan LOCAL correctamente."
+
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            pip-audit-report.json
+
+  # ─── Stage 7: Docker Build (smoke test) ────────────────────────────────────
+  docker-build:
+    name: "Docker Build (smoke)"
+    runs-on: ubuntu-latest
+    needs: [test-integration, security, migration-check]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: omnichannel-api:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify image
+        run: |
+          docker run --rm omnichannel-api:test python -c "
+          from app.main import create_app
+          app = create_app()
+          print('FastAPI app created successfully')
+          print(f'Routes: {len(app.routes)}')
+          "
+
+  # ─── Stage 8: Frontend (Sprint 15+) ────────────────────────────────────────
+  frontend:
+    name: "Frontend Checks"
+    runs-on: ubuntu-latest
+    if: |
+      contains(github.event.pull_request.title, 'frontend') ||
+      contains(github.event.pull_request.title, 'sprint-15') ||
+      contains(github.event.head_commit.message, 'frontend')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Type check
+        working-directory: frontend
+        run: npm run type-check
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  # ─── PR Status Check (merge gate) ──────────────────────────────────────────
+  ci-pass:
+    name: "CI Pass"
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [lint, typecheck, test-unit, test-integration, security, migration-check, docker-build]
+    steps:
+      - name: Check all jobs
+        run: |
+          if [[ "${{ needs.lint.result }}" != "success" ]] || \
+             [[ "${{ needs.typecheck.result }}" != "success" ]] || \
+             [[ "${{ needs.test-unit.result }}" != "success" ]] || \
+             [[ "${{ needs.test-integration.result }}" != "success" ]] || \
+             [[ "${{ needs.security.result }}" != "success" ]] || \
+             [[ "${{ needs.migration-check.result }}" != "success" ]] || \
+             [[ "${{ needs.docker-build.result }}" != "success" ]]; then
+            echo "::error::Uno o más jobs del CI fallaron. PR no puede mergearse."
+            exit 1
+          fi
+          echo "Todos los checks pasaron. PR listo para merge."
