@@ -109,14 +109,16 @@ $$ LANGUAGE SQL IMMUTABLE;
 -- ─── Tabla 1: clients ───────────────────────────────────────────────────────
 -- Tenants (tabla raíz, NO tiene client_id)
 CREATE TABLE IF NOT EXISTS clients (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name        VARCHAR(255) NOT NULL,
-    slug        VARCHAR(100) UNIQUE NOT NULL,
-    plan        plan_type NOT NULL DEFAULT 'free',
-    settings    JSONB NOT NULL DEFAULT '{}'::jsonb,
-    is_active   BOOLEAN NOT NULL DEFAULT true,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name                            VARCHAR(255) NOT NULL,
+    slug                            VARCHAR(100) UNIQUE NOT NULL,
+    plan                            plan_type NOT NULL DEFAULT 'free',
+    settings                        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_active                       BOOLEAN NOT NULL DEFAULT true,
+    admin_assistant_enabled         BOOLEAN NOT NULL DEFAULT true,
+    admin_assistant_voice_enabled   BOOLEAN NOT NULL DEFAULT false,
+    created_at                      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at                      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ─── Tabla 2: users ─────────────────────────────────────────────────────────
@@ -374,6 +376,22 @@ CREATE TABLE IF NOT EXISTS approved_responses (
 );
 
 
+-- ─── Tabla 19: admin_assistant_history ───────────────────────────────────────
+-- Historial de conversaciones del asistente de administración por tenant/usuario
+CREATE TABLE IF NOT EXISTS admin_assistant_history (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id       UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role            VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant', 'system', 'tool')),
+    content         TEXT NOT NULL,
+    tool_name       VARCHAR(100),
+    tool_args       JSONB,
+    tool_result     JSONB,
+    tokens_used     INTEGER DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- 6. ROW LEVEL SECURITY (RLS)
 -- ═══════════════════════════════════════════════════════════════════════════════
@@ -401,7 +419,8 @@ BEGIN
             'contact_tags', 'internal_notes', 'conversations', 'messages',
             'documents', 'document_chunks', 'token_budgets', 'token_usage_log',
             'webhook_dedup', 'agent_configs', 'quick_replies',
-            'pending_responses', 'approved_responses'
+            'pending_responses', 'approved_responses',
+            'admin_assistant_history'
         ])
     LOOP
         EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', tbl);
@@ -518,6 +537,12 @@ CREATE INDEX IF NOT EXISTS idx_pending_responses_status ON pending_responses(cli
 -- approved_responses
 CREATE INDEX IF NOT EXISTS idx_approved_responses_client_id ON approved_responses(client_id);
 
+-- admin_assistant_history
+CREATE INDEX IF NOT EXISTS idx_admin_assistant_history_client
+    ON admin_assistant_history(client_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_assistant_history_user
+    ON admin_assistant_history(user_id, created_at DESC);
+
 -- ─── GIN: Columnas JSONB ────────────────────────────────────────────────────
 
 CREATE INDEX IF NOT EXISTS idx_clients_settings_gin ON clients USING gin(settings);
@@ -528,6 +553,8 @@ CREATE INDEX IF NOT EXISTS idx_documents_metadata_gin ON documents USING gin(met
 CREATE INDEX IF NOT EXISTS idx_document_chunks_metadata_gin ON document_chunks USING gin(metadata);
 CREATE INDEX IF NOT EXISTS idx_agent_configs_settings_gin ON agent_configs USING gin(settings);
 CREATE INDEX IF NOT EXISTS idx_quick_replies_variables_gin ON quick_replies USING gin(variables);
+CREATE INDEX IF NOT EXISTS idx_admin_assistant_history_tool_args_gin ON admin_assistant_history USING gin(tool_args);
+CREATE INDEX IF NOT EXISTS idx_admin_assistant_history_tool_result_gin ON admin_assistant_history USING gin(tool_result);
 
 -- ─── HNSW: Columnas vector (embeddings) ─────────────────────────────────────
 -- m = 16, ef_construction = 200 — balance entre velocidad y precisión

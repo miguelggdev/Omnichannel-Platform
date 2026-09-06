@@ -202,10 +202,11 @@
 | 23 | `satisfaction_surveys` | Encuestas CSAT post-conversación |
 | 24 | `channel_configs` | Configuración multi-canal por tenant |
 
-### Feature Enhancement Tables (Sesión 5)
+### Feature Enhancement Tables (Sesiones 5 y 7)
 | # | Tabla | Propósito |
 |---|---|---|
 | 25 | `agent_action_logs` | Log de acciones de cada nodo LangGraph por conversación |
+| 26 | `admin_assistant_history` | Historial de conversaciones del Admin Assistant por tenant/usuario |
 
 ### Enums importantes
 - **conversation_status:** `new`, `bot_active`, `human_active`, `waiting_human`, `waiting_client`, `resolved`, `archived`
@@ -252,6 +253,10 @@
 - `META_APP_SECRET` — App Secret de Meta (Facebook/Instagram)
 - `META_PAGE_ACCESS_TOKEN` — Page Access Token de Meta
 - `META_WEBHOOK_VERIFY_TOKEN` — Token de verificación de webhooks Meta
+- `ANTHROPIC_API_KEY` — API key de Anthropic (Claude) para Admin Assistant
+- `ADMIN_ASSISTANT_MODEL` — Modelo Claude a usar (default: claude-sonnet-4-20250514)
+- `ADMIN_ASSISTANT_MAX_TOKENS` — Máximo de tokens por respuesta del asistente (default: 1024)
+- `ADMIN_ASSISTANT_RATE_LIMIT` — Límite de mensajes por minuto por admin (default: 20)
 
 ---
 
@@ -265,6 +270,7 @@
 | 2026-09-05 | Sesión 4 | Pitch deck investor (pptx), inclusión de Facebook e Instagram como canales MVP, actualización de specs (sprint-04, sprint-09) y docs del proyecto |
 | 2026-09-05 | Sesión 5 | Integración de 11 nuevas features en specs: onboarding, personalización, theme toggle, responsive, i18n (6 idiomas), Celery admin, Telegram bot, agent logging, client mgmt, backup/replicación, seguridad. Creación de Sprint 15 (Frontend). Addendums para Sprints 3, 6, 8, 14 |
 | 2026-09-05 | Sesión 6 | Eliminación de branch `develop` (feature/* → main directo). Dev Playbook artifact con 8 agentes + 6 roles secundarios. 5 funcionalidades adicionales: pre-commit hooks, GitHub Actions CI (8 stages), Alembic migration checks, RLS tests expandidos (25 tablas), Grafana Token Budget dashboard. Transferencia de 14+ archivos a PC vía device bridge |
+| 2026-09-06 | Sesión 7 | Análisis del proyecto voz existente (AGENTE CONVERSACIONAL). Diseño de feature #12: Admin Assistant (chat+voz) con Claude + Edge TTS + Web Speech API. Spec completa (`specs/sprint-03-addendum-admin-assistant.md`). DDL: nueva tabla `admin_assistant_history` (#26), campos `admin_assistant_enabled`/`admin_assistant_voice_enabled` en `clients`, RLS + índices. ADR-019 |
 
 ---
 
@@ -287,3 +293,21 @@
 - **Contexto:** Prevenir que secrets, debug statements o código mal formateado lleguen al repositorio.
 - **Decisión:** Usar pre-commit con: ruff (lint+format), mypy, detect-secrets, sqlfluff, commitizen (formato de commits), y hooks estándar (trailing whitespace, YAML/JSON check, no large files, no merge conflicts).
 - **Consecuencia:** Cada dev debe ejecutar `pre-commit install` después de clonar. Los hooks corren antes de cada commit local.
+
+### ADR-019: Admin Assistant con Claude + Edge TTS (costo cero en TTS/STT)
+- **Fecha:** 2026-09-06
+- **Contexto:** Se analizó el proyecto existente del usuario ("AGENTE CONVERSACIONAL") que usa Gemini Flash + Fish Audio TTS + Google STT + FAISS RAG para un asistente clínico dental con voz. Se identificaron componentes reutilizables de costo cero: Edge TTS (`es-CO-SalomeNeural`) para síntesis de voz y Web Speech API del navegador para STT.
+- **Decisión:** Implementar un Admin Assistant (chat + voz opcional) para cada administrador de tenant. Stack:
+  - **LLM:** Claude API (Anthropic) con function calling — herramientas read-only (query_conversations, query_token_usage, etc.) y write con confirmación (update_welcome_message, toggle_agent_node, etc.)
+  - **TTS:** Edge TTS (`edge-tts` Python package, voz `es-CO-SalomeNeural`) — gratuito, streaming, sin API key
+  - **STT:** Web Speech API (nativa del navegador Chrome/Edge/Safari) — gratuito, sin backend
+  - **RAG:** Reutilizar el pipeline existente del proyecto (embeddings + pgvector) para consultar documentación de la plataforma
+  - **Transporte:** WebSocket bidireccional para chat y streaming de audio chunks
+  - **Toggleable:** `admin_assistant_enabled` y `admin_assistant_voice_enabled` en tabla `clients`
+- **Consecuencia:**
+  - Nueva tabla `admin_assistant_history` (tabla #26) para historial de conversaciones del asistente
+  - 2 nuevos campos en `clients`: `admin_assistant_enabled BOOLEAN`, `admin_assistant_voice_enabled BOOLEAN`
+  - El asistente NO es para usuarios finales, solo para admins/supervisores del panel
+  - El costo operativo es solo el consumo de tokens de Claude (sin costos de TTS/STT)
+  - Se distribuye en 3 sprints: backend (Sprint 3), diagnósticos del sistema (Sprint 8), widget frontend (Sprint 15)
+  - Spec completa en `specs/sprint-03-addendum-admin-assistant.md`

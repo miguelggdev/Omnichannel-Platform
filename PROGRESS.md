@@ -9,8 +9,8 @@
 
 - **Fase:** 1 — MVP Core
 - **Sprint Activo:** Sprint 1 — Schema DDL & Arquitectura
-- **Última actualización:** 2026-09-05
-- **Última sesión:** Sesión 6 — Git simplificado (sin develop), Dev Playbook, CI/CD pipeline, pre-commit hooks, RLS tests expandidos, Token Budget dashboard
+- **Última actualización:** 2026-09-06
+- **Última sesión:** Sesión 7 — Admin Assistant spec, nueva tabla admin_assistant_history, campos admin_assistant en clients
 
 ---
 
@@ -104,18 +104,19 @@ Las siguientes 11 features fueron diseñadas e integradas en los sprints existen
 | 9 | Client Management (deactivation/alerts) | Sprint 3 | `specs/sprint-03-addendum-onboarding.md` |
 | 10 | Backup & Replication (VPS) | Sprint 8 | `specs/sprint-08-addendum-ops.md` |
 | 11 | Security Policies (Cloudflare, firewall) | Sprint 8 | `specs/sprint-08-addendum-ops.md` |
+| 12 | Admin Assistant (voz/chat) | Sprint 3 + 8 + 15 | `specs/sprint-03-addendum-admin-assistant.md` |
 
 ---
 
 ## Métricas de Progreso
 
 - **Tests pasando:** 0 / 9 (RLS tests skip hasta Sprint 2 DB)
-- **Tablas creadas:** 25 / 25 (18 MVP + 6 Fase 2 + 1 agent_action_logs)
+- **Tablas creadas:** 26 / 26 (18 MVP + 6 Fase 2 + 1 agent_action_logs + 1 admin_assistant_history)
 - **Endpoints implementados:** 0
 - **Agentes LangGraph:** 0 / 7 (nodos)
 - **Proveedores de mensajería:** 0 / 2 (YCloud MVP + Meta MVP: Instagram DM + Facebook Messenger)
 - **Cobertura de tests:** N/A
-- **DDL verificado:** ✅ PostgreSQL 16 + pgvector 0.6.0
-- **RLS verificado:** ✅ 24 tablas con aislamiento confirmado
+- **DDL verificado:** ✅ PostgreSQL 16 + pgvector 0.6.0 (pendiente re-verificar con tabla 26)
+- **RLS verificado:** ✅ 24 tablas con aislamiento confirmado (pendiente tabla 26)
 - **Sprints especificados:** 15 / 15 (14 originales + 1 Frontend)
-- **Features nuevas integradas:** 11 / 11
+- **Features nuevas integradas:** 12 / 12
