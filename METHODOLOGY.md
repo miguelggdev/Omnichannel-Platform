@@ -25,7 +25,7 @@ Este proyecto se desarrolla con **Loop Engineering**: cada desarrollador trabaja
 
 | Capa | Archivos típicos |
 |---|---|
-| DDL / Migrations | `supabase/init/`, `migrations/versions/` |
+| DDL / Migrations | `migrations/versions/` (Alembic — Supabase Cloud no monta init.sql en el contenedor) |
 | SQLAlchemy Models | `app/models/*.py` |
 | Pydantic Schemas | `app/schemas/*.py` |
 | Core | `app/core/config.py`, `database.py`, `security.py`, `dependencies.py`, `exceptions.py` |
@@ -147,6 +147,8 @@ jobs:
           JWT_SECRET: test-secret-key-minimum-32-chars!!
           APP_ENV: testing
 ```
+
+> **Nota Supabase Cloud:** el job `test` sigue usando un contenedor Postgres local efímero (no el proyecto real de Supabase), igual que antes — así el CI no depende de credenciales de Cloud ni consume cuota del proyecto.
 
 ---
 
@@ -308,16 +310,16 @@ El stub se reemplaza por el import real en cuanto Dev A pushee el modelo. Claude
 ### Sprint 1 — Schema DDL & Arquitectura
 | Dev | Tareas | Archivos |
 |---|---|---|
-| **A** | DDL completo: extensiones, enums, 18 tablas MVP, FKs, constraints, índices (B-tree, GIN, HNSW), RLS policies con FORCE, roles | `supabase/init/init.sql` |
-| **A** | Tablas Fase 2 (6 tablas) en archivo separado | `supabase/init/phase2_tables.sql` |
+| **A** | DDL completo: extensiones, enums, 18 tablas MVP, FKs, constraints, índices (B-tree, GIN, HNSW), RLS policies con FORCE, roles — como migración de Alembic contra Supabase Cloud (`DATABASE_URL_DIRECT`) | `migrations/versions/0001_initial_schema.py` |
+| **A** | Tablas Fase 2 (6 tablas) en migración separada | `migrations/versions/0002_phase2_tables.py` |
 | **B** | Diagrama de arquitectura Mermaid (flujo webhook → respuesta) | `docs/architecture.mermaid` |
 | **B** | Test de aislamiento RLS (crear 2 tenants, verificar que no se ven datos cruzados) | `tests/test_rls_isolation.sql` |
 
 ### Sprint 2 — Infraestructura Docker
 | Dev | Tareas | Archivos |
 |---|---|---|
-| **A** | docker-compose.yml (16 servicios), Dockerfile multi-stage, .dockerignore | `docker-compose.yml`, `Dockerfile`, `.dockerignore` |
-| **A** | Configs de Supabase self-hosted | `supabase/docker/` |
+| **A** | docker-compose.yml (servicios propios: API, Celery, Redis — sin Postgres/Auth/Storage, eso lo provee Supabase Cloud), Dockerfile multi-stage, .dockerignore | `docker-compose.yml`, `Dockerfile`, `.dockerignore` |
+| **A** | Validar conexión de la app al Transaction Pooler de Supabase Cloud y correr la migración inicial contra `DATABASE_URL_DIRECT` | `.env.example` (verificación, sin archivo nuevo) |
 | **B** | Traefik v3 config (entrypoints, middlewares, rate limiting) | `traefik/traefik.yml`, `traefik/dynamic/` |
 | **B** | Prometheus config + Grafana provisioning | `prometheus/prometheus.yml`, `grafana/` |
 | **B** | Scripts de healthcheck y wait-for-it | `scripts/wait-for-it.sh`, `scripts/healthcheck.sh` |
@@ -609,7 +611,7 @@ Con Loop Engineering semi-autónomo para 2 devs:
 Antes de empezar el Sprint 1, ambos devs deben:
 
 - [ ] Clonar el repo y verificar la estructura
-- [ ] Copiar `.env.example` a `.env` y configurar valores locales
+- [ ] Copiar `.env.example` a `.env` y configurar valores locales (incluye credenciales del proyecto Supabase Cloud)
 - [ ] Instalar dependencias: `pip install -r requirements.txt`
 - [ ] Verificar que `ruff`, `mypy` y `pytest` funcionan
 - [ ] Configurar su sesión de Claude con acceso al repo
@@ -662,7 +664,7 @@ Tests automatizados que validan invariantes del sistema, independientes del LLM.
 Git hooks que detectan violaciones de reglas absolutas ANTES del commit.
 
 Checks bloqueantes (impiden commit):
-1. `SET` sin `LOCAL` (violación de compatibilidad con pgBouncer)
+1. `SET` sin `LOCAL` (violación de compatibilidad con el Transaction Pooler de Supabase Cloud — Supavisor)
 2. Secretos hardcodeados (API keys, passwords, private keys)
 3. Archivos `.env` en staging
 
