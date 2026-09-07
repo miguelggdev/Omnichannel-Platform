@@ -311,3 +311,16 @@
   - El costo operativo es solo el consumo de tokens de Claude (sin costos de TTS/STT)
   - Se distribuye en 3 sprints: backend (Sprint 3), diagnósticos del sistema (Sprint 8), widget frontend (Sprint 15)
   - Spec completa en `specs/sprint-03-addendum-admin-assistant.md`
+
+
+### ADR-020: Supabase Cloud en lugar de self-hosted (supersede ADR-007)
+
+- **Fecha:** 2026-09-07
+- **Contexto:** ADR-007 justificó self-hosted citando "limitaciones de extensiones (pgvector, pgcrypto)" en Supabase Cloud. Esa restricción no está vigente: pgvector y pgcrypto son extensiones estándar de Supabase Cloud, habilitables desde Database → Extensions en el dashboard — pgvector es de hecho un producto propio de Supabase ("Supabase Vector"). No hay limitación real para estos dos casos.
+- **Decisión:** Usar Supabase Cloud (proyecto administrado) en lugar de self-hosted. La app se conecta vía el Transaction Pooler de Supavisor (puerto 6543 — mismo rol que pgBouncer, misma razón de ADR-001/BUG-002 sobre `SET LOCAL`). Las migraciones de Alembic corren contra la conexión directa (`DATABASE_URL_DIRECT`). Auth, Storage y Realtime los provee el proyecto Cloud.
+- **Consecuencia:**
+  - Sprint 2 ya no incluye "Configs de Supabase self-hosted" (`supabase/docker/`), ni los servicios Docker #3–7 de la lista original (supabase-db, supabase-auth, supabase-storage, supabase-realtime, pgbouncer) — los reemplaza el proyecto Cloud.
+  - `PGBOUNCER_URL` se reemplaza por `DATABASE_URL` (pooler) y `DATABASE_URL_DIRECT` (migraciones) — ver `.env.example` actualizado.
+  - El DDL de Sprint 1 (antes `supabase/init/init.sql`) pasa a vivir como migración de Alembic en `migrations/versions/`.
+  - Se pierde configuración avanzada de PostgreSQL fuera de lo que expone Supabase Cloud — esto sí es una limitación real. Revisar si ADR-012 (streaming replication a VPS secundario) sigue siendo necesario, dado que Supabase Cloud ya incluye point-in-time recovery gestionado.
+  - **Importante:** el trabajo de Sprint 1 y 2 registrado en PROGRESS.md como "Completado" (docker-compose de 16 servicios, `init.sql` de 520+ líneas, etc.) fue diseñado sobre el esquema self-hosted en una sesión previa y — según el propio PROGRESS.md — nunca se pusheó al repo. Antes de subirlo hay que ajustarlo a este ADR, o se reintroduce todo lo que este cambio elimina.

@@ -14,14 +14,14 @@ Eres un Senior AI Engineer & Azure Solutions Architect construyendo una platafor
 | Capa | Tecnología | Versión mínima |
 |---|---|---|
 | Backend API | FastAPI (async) | Python 3.11+ |
-| Base de Datos | Supabase self-hosted (PostgreSQL + pgBouncer + GoTrue + Realtime + Storage) | PG 15+ |
+| Base de Datos | Supabase Cloud (PostgreSQL + Supavisor pooler + Auth + Realtime + Storage) | PG 15+ |
 | Vector Store | pgvector (extensión dentro de PostgreSQL) | 0.7+ |
 | Cache & Broker | Redis | 7+ |
 | Tareas Async | Celery | 5+ |
 | Orquestación IA | LangGraph (estado y flujo) + LangChain (componentes) | Latest stable |
 | LLM Principal | OpenAI GPT-4o / GPT-4o-mini (configurable por tenant) | — |
 | Mensajería | Abstracción `MessagingProvider` (MVP: YCloud + Meta/Instagram + Meta/Facebook) | — |
-| Despliegue | Docker Compose (migración futura a K8s) | — |
+| Despliegue | Docker Compose (servicios propios: API, Celery, Traefik, Redis, observabilidad — migración futura a K8s) | — |
 | API Gateway | Traefik v3 | 3.x |
 | Observabilidad | OpenTelemetry + Loguru + Prometheus + Grafana | — |
 | STT | OpenAI Whisper API | — |
@@ -31,6 +31,8 @@ Eres un Senior AI Engineer & Azure Solutions Architect construyendo una platafor
 | Seguridad | Cloudflare (WAF + DDoS) + Traefik mTLS + fail2ban | — |
 | Monitoreo Ops | Telegram Bot (python-telegram-bot) para super admin | — |
 
+> **Decisión de arquitectura (registrar en MEMORY.md):** el proyecto usa **Supabase Cloud**, no self-hosted. La app se conecta siempre vía el Transaction Pooler (Supavisor, puerto 6543); las migraciones de Alembic usan la conexión directa. No hay contenedores propios de Postgres/Auth/Storage en `docker-compose.yml`.
+
 ---
 
 ## Reglas Absolutas (NUNCA violar)
@@ -39,8 +41,9 @@ Eres un Senior AI Engineer & Azure Solutions Architect construyendo una platafor
 - **TODA tabla** tiene `client_id UUID NOT NULL REFERENCES clients(id)`.
 - **RLS habilitado con FORCE** en cada tabla.
 - Política: `USING (client_id = current_setting('app.current_client_id')::uuid)`.
-- **SIEMPRE `SET LOCAL`**, nunca `SET`. pgBouncer en transaction mode resetea variables de sesión; `SET LOCAL` es transaction-scoped y compatible.
+- **SIEMPRE `SET LOCAL`**, nunca `SET`. El Transaction Pooler de Supabase Cloud (Supavisor) resetea variables de sesión entre transacciones; `SET LOCAL` es transaction-scoped y compatible.
 - El middleware `TenantContextMiddleware` ejecuta `SET LOCAL app.current_client_id = '{tenant_id}'` al inicio de cada transacción.
+- Las migraciones de Alembic corren contra `DATABASE_URL_DIRECT` (conexión directa), no contra el pooler — el pooler en modo transacción no soporta bien el DDL de sesiones largas de Alembic.
 
 ### 2. Búsquedas Vectoriales
 - **SIEMPRE filtro pre-vectorial** por `client_id` (en el WHERE, antes del cálculo de distancia).
@@ -88,14 +91,11 @@ omnichannel-platform/
 │   ├── sprint-08-addendum-ops.md  # Celery admin, Telegram bot, backup, security
 │   ├── sprint-15-frontend.md     # Frontend Foundation (Fase 4)
 │   └── ...
-├── docker-compose.yml
+├── docker-compose.yml            # Servicios propios: API, Redis, Celery, Traefik, observabilidad
+│                                  # (NO incluye Postgres/Auth/Storage — eso vive en Supabase Cloud)
 ├── .env.example
 ├── traefik/
 │   └── traefik.yml
-├── supabase/
-│   ├── docker/
-│   └── init/
-│       └── init.sql
 ├── app/
 │   ├── __init__.py
 │   ├── main.py                  # FastAPI app factory
@@ -173,7 +173,7 @@ omnichannel-platform/
 │           ├── __init__.py
 │           ├── calendar_tools.py
 │           └── ...
-├── migrations/                  # Alembic
+├── migrations/                  # Alembic (corre contra DATABASE_URL_DIRECT en Supabase Cloud)
 │   ├── alembic.ini
 │   ├── env.py
 │   └── versions/
@@ -290,3 +290,4 @@ Este proyecto se desarrolla con **2 devs** trabajando en paralelo con sesiones d
 3. **NO implementar** el agente de visión como sub-proceso del mismo worker Celery. Requiere servicio GPU separado.
 4. **NO asumir** que todos los tenants necesitan todos los agentes. La arquitectura funciona con solo 1 agente activo.
 5. **NO saltarse tests** de aislamiento RLS en ningún sprint.
+6. **NO levantar contenedores propios de Postgres/Auth/Storage.** Esos servicios los provee Supabase Cloud; `docker-compose.yml` solo orquesta API, Celery, Redis, Traefik y observabilidad.
