@@ -271,6 +271,7 @@
 | 2026-09-05 | Sesión 5 | Integración de 11 nuevas features en specs: onboarding, personalización, theme toggle, responsive, i18n (6 idiomas), Celery admin, Telegram bot, agent logging, client mgmt, backup/replicación, seguridad. Creación de Sprint 15 (Frontend). Addendums para Sprints 3, 6, 8, 14 |
 | 2026-09-05 | Sesión 6 | Eliminación de branch `develop` (feature/* → main directo). Dev Playbook artifact con 8 agentes + 6 roles secundarios. 5 funcionalidades adicionales: pre-commit hooks, GitHub Actions CI (8 stages), Alembic migration checks, RLS tests expandidos (25 tablas), Grafana Token Budget dashboard. Transferencia de 14+ archivos a PC vía device bridge |
 | 2026-09-06 | Sesión 7 | Análisis del proyecto voz existente (AGENTE CONVERSACIONAL). Diseño de feature #12: Admin Assistant (chat+voz) con Claude + Edge TTS + Web Speech API. Spec completa (`specs/sprint-03-addendum-admin-assistant.md`). DDL: nueva tabla `admin_assistant_history` (#26), campos `admin_assistant_enabled`/`admin_assistant_voice_enabled` en `clients`, RLS + índices. ADR-019 |
+| 2026-09-06 | Sesión 8 | Sprint 2 completo: docker-compose.yml (16 servicios), Dockerfile multi-stage, Traefik v3 (static + dynamic config + TLS), Celery config (5 colas + beat schedule), wait-for-it.sh, .dockerignore, .env.example actualizado (ANTHROPIC_API_KEY, ADMIN_ASSISTANT_*, META vars, REALTIME_SECRET_KEY_BASE). Actualización de Admin Assistant spec con patrón WebMCP/UI Actions (F6) |
 
 ---
 

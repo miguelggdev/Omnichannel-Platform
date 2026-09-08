@@ -1,0 +1,560 @@
+# =============================================================================
+# Docker Compose — Plataforma SaaS Omnicanal Multi-Tenant
+# =============================================================================
+# Uso: docker-compose up -d
+# Dashboard Traefik: http://localhost:8080
+# API: https://api.localhost
+# Grafana: http://localhost:3000
+# =============================================================================
+
+services:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 1. TRAEFIK — API Gateway & Reverse Proxy
+  # ─────────────────────────────────────────────────────────────────────────────
+  traefik:
+    image: traefik:v3.1
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"  # Dashboard (solo desarrollo)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic/:/etc/traefik/dynamic/:ro
+    networks:
+      - frontend
+      - backend
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 2. API — FastAPI (2 replicas con load balancing via Traefik)
+  # ─────────────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - PGBOUNCER_URL=${PGBOUNCER_URL}
+      - REDIS_URL=${REDIS_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_ALGORITHM=${JWT_ALGORITHM}
+      - JWT_EXPIRATION_MINUTES=${JWT_EXPIRATION_MINUTES}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_DEFAULT_MODEL=${OPENAI_DEFAULT_MODEL}
+      - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL}
+      - OPENAI_FALLBACK_MODEL=${OPENAI_FALLBACK_MODEL}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - YCLOUD_API_KEY=${YCLOUD_API_KEY}
+      - YCLOUD_WEBHOOK_SECRET=${YCLOUD_WEBHOOK_SECRET}
+      - YCLOUD_BASE_URL=${YCLOUD_BASE_URL}
+      - META_APP_SECRET=${META_APP_SECRET}
+      - META_PAGE_ACCESS_TOKEN=${META_PAGE_ACCESS_TOKEN}
+      - META_VERIFY_TOKEN=${META_VERIFY_TOKEN}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME}
+      - APP_ENV=${APP_ENV}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - LOG_FORMAT=${LOG_FORMAT}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`api.localhost`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls=true"
+      - "traefik.http.routers.api.middlewares=rate-limit@file,security-headers@file,compress@file"
+      - "traefik.http.services.api.loadbalancer.server.port=8000"
+      - "traefik.http.services.api.loadbalancer.healthcheck.path=/internal/health"
+      - "traefik.http.services.api.loadbalancer.healthcheck.interval=10s"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/internal/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 3. SUPABASE-DB — PostgreSQL 15 + pgvector
+  # ─────────────────────────────────────────────────────────────────────────────
+  supabase-db:
+    image: supabase/postgres:15.6.1.143
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./supabase/init/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./supabase/init/phase2_tables.sql:/docker-entrypoint-initdb.d/02-phase2.sql:ro
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 4. SUPABASE-AUTH — GoTrue (autenticacion JWT)
+  # ─────────────────────────────────────────────────────────────────────────────
+  supabase-auth:
+    image: supabase/gotrue:v2.158.1
+    restart: unless-stopped
+    environment:
+      GOTRUE_API_HOST: "0.0.0.0"
+      GOTRUE_API_PORT: "9999"
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: ${DATABASE_URL}
+      GOTRUE_SITE_URL: ${SITE_URL:-http://localhost:3000}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 5. SUPABASE-STORAGE — Storage de archivos (documentos, audio)
+  # ─────────────────────────────────────────────────────────────────────────────
+  supabase-storage:
+    image: supabase/storage-api:v1.11.13
+    restart: unless-stopped
+    environment:
+      ANON_KEY: ${SUPABASE_ANON_KEY}
+      SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      DATABASE_URL: ${DATABASE_URL}
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      POSTGREST_URL: http://supabase-db:3000
+    volumes:
+      - storage_data:/var/lib/storage
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 6. SUPABASE-REALTIME — WebSockets para actualizaciones en tiempo real
+  # ─────────────────────────────────────────────────────────────────────────────
+  supabase-realtime:
+    image: supabase/realtime:v2.30.34
+    restart: unless-stopped
+    environment:
+      DB_HOST: supabase-db
+      DB_PORT: 5432
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB}
+      PORT: 4000
+      SECRET_KEY_BASE: ${REALTIME_SECRET_KEY_BASE}
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 7. PGBOUNCER — Connection Pooling (CRITICO: transaction mode para RLS)
+  # ─────────────────────────────────────────────────────────────────────────────
+  pgbouncer:
+    image: edoburu/pgbouncer:1.22.0
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@supabase-db:5432/${POSTGRES_DB}"
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 200
+      DEFAULT_POOL_SIZE: 20
+      MIN_POOL_SIZE: 5
+      RESERVE_POOL_SIZE: 5
+      RESERVE_POOL_TIMEOUT: 3
+      SERVER_RESET_QUERY: "DISCARD ALL"
+      AUTH_TYPE: scram-sha-256
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    ports:
+      - "6432:6432"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 6432"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 8. REDIS — Cache + Broker Celery + Dedup webhooks
+  #    DB 0: Celery broker | DB 1: Celery results | DB 2: App cache
+  # ─────────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 9. CELERY-WEBHOOKS — Worker para procesamiento de webhooks entrantes
+  #    Concurrencia: 4 (alta frecuencia, bajo CPU)
+  # ─────────────────────────────────────────────────────────────────────────────
+  celery-webhooks:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    command: >
+      celery -A app.tasks.celery_config worker
+      -Q webhooks
+      -c ${CELERY_WEBHOOK_CONCURRENCY:-4}
+      --loglevel=${LOG_LEVEL:-info}
+      -n webhooks@%h
+    environment:
+      - PGBOUNCER_URL=${PGBOUNCER_URL}
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - YCLOUD_API_KEY=${YCLOUD_API_KEY}
+      - META_APP_SECRET=${META_APP_SECRET}
+      - META_PAGE_ACCESS_TOKEN=${META_PAGE_ACCESS_TOKEN}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - LOG_FORMAT=${LOG_FORMAT}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_config inspect ping -d webhooks@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 10. CELERY-AI — Worker para inferencia LLM y agentes LangGraph
+  #     Concurrencia: 2 (alto CPU/memoria, llamadas API lentas)
+  # ─────────────────────────────────────────────────────────────────────────────
+  celery-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    command: >
+      celery -A app.tasks.celery_config worker
+      -Q ai_inference
+      -c ${CELERY_AI_CONCURRENCY:-2}
+      --loglevel=${LOG_LEVEL:-info}
+      -n ai@%h
+    environment:
+      - PGBOUNCER_URL=${PGBOUNCER_URL}
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_DEFAULT_MODEL=${OPENAI_DEFAULT_MODEL}
+      - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL}
+      - OPENAI_FALLBACK_MODEL=${OPENAI_FALLBACK_MODEL}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - LOG_FORMAT=${LOG_FORMAT}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_config inspect ping -d ai@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 11. CELERY-DOCUMENTS — Worker para ingestion de documentos y OCR
+  #     Concurrencia: 2 (I/O pesado, requiere tesseract-ocr)
+  # ─────────────────────────────────────────────────────────────────────────────
+  celery-documents:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    command: >
+      celery -A app.tasks.celery_config worker
+      -Q documents
+      -c ${CELERY_DOCUMENTS_CONCURRENCY:-2}
+      --loglevel=${LOG_LEVEL:-info}
+      -n documents@%h
+    environment:
+      - PGBOUNCER_URL=${PGBOUNCER_URL}
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - LOG_FORMAT=${LOG_FORMAT}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_config inspect ping -d documents@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 12. CELERY-NOTIFICATIONS — Worker para envio de notificaciones
+  #     Concurrencia: 2 (I/O bound, llamadas a APIs externas)
+  # ─────────────────────────────────────────────────────────────────────────────
+  celery-notifications:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    command: >
+      celery -A app.tasks.celery_config worker
+      -Q notifications
+      -c ${CELERY_NOTIFICATIONS_CONCURRENCY:-2}
+      --loglevel=${LOG_LEVEL:-info}
+      -n notifications@%h
+    environment:
+      - PGBOUNCER_URL=${PGBOUNCER_URL}
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - YCLOUD_API_KEY=${YCLOUD_API_KEY}
+      - META_PAGE_ACCESS_TOKEN=${META_PAGE_ACCESS_TOKEN}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - LOG_FORMAT=${LOG_FORMAT}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_config inspect ping -d notifications@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 13. CELERY-BULK — Worker para operaciones masivas (broadcast, imports)
+  #     Concurrencia: 1 (operaciones secuenciales pesadas)
+  # ─────────────────────────────────────────────────────────────────────────────
+  celery-bulk:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    command: >
+      celery -A app.tasks.celery_config worker
+      -Q bulk
+      -c ${CELERY_BULK_CONCURRENCY:-1}
+      --loglevel=${LOG_LEVEL:-info}
+      -n bulk@%h
+    environment:
+      - PGBOUNCER_URL=${PGBOUNCER_URL}
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - LOG_FORMAT=${LOG_FORMAT}
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_config inspect ping -d bulk@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 14. CELERY-BEAT — Scheduler para tareas periodicas
+  # ─────────────────────────────────────────────────────────────────────────────
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    command: >
+      celery -A app.tasks.celery_config beat
+      --loglevel=${LOG_LEVEL:-info}
+      --schedule=/tmp/celerybeat-schedule
+    environment:
+      - PGBOUNCER_URL=${PGBOUNCER_URL}
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - LOG_LEVEL=${LOG_LEVEL}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 15. PROMETHEUS — Recoleccion de metricas
+  # ─────────────────────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    ports:
+      - "9090:9090"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 16. GRAFANA — Dashboards de observabilidad
+  # ─────────────────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+      GF_SERVER_ROOT_URL: ${GF_SERVER_ROOT_URL:-http://localhost:3000}
+      GF_INSTALL_PLUGINS: "grafana-clock-panel,grafana-simple-json-datasource"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# REDES
+# ═══════════════════════════════════════════════════════════════════════════════
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# VOLUMENES PERSISTENTES
+# ═══════════════════════════════════════════════════════════════════════════════
+volumes:
+  postgres_data:
+    driver: local
+  storage_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local

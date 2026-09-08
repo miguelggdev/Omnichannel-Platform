@@ -1,0 +1,53 @@
+# =============================================================================
+# Traefik v3 — Middlewares Dinamicos
+# =============================================================================
+
+http:
+  middlewares:
+    # ─── Rate Limiting ─────────────────────────────────────────────────────
+    rate-limit:
+      rateLimit:
+        average: 100
+        burst: 200
+        period: 1s
+
+    # ─── Security Headers ──────────────────────────────────────────────────
+    security-headers:
+      headers:
+        browserXssFilter: true
+        contentTypeNosniff: true
+        frameDeny: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 31536000
+        customFrameOptionsValue: "SAMEORIGIN"
+        referrerPolicy: "strict-origin-when-cross-origin"
+        contentSecurityPolicy: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+        permissionsPolicy: "camera=(), microphone=(), geolocation=()"
+
+    # ─── Compresion ────────────────────────────────────────────────────────
+    compress:
+      compress:
+        excludedContentTypes:
+          - "text/event-stream"
+
+    # ─── CORS (desarrollo) ─────────────────────────────────────────────────
+    cors:
+      headers:
+        accessControlAllowMethods:
+          - "GET"
+          - "POST"
+          - "PUT"
+          - "PATCH"
+          - "DELETE"
+          - "OPTIONS"
+        accessControlAllowHeaders:
+          - "Content-Type"
+          - "Authorization"
+          - "X-Request-ID"
+          - "X-Trace-ID"
+        accessControlAllowOriginList:
+          - "http://localhost:3000"
+          - "http://localhost:8080"
+        accessControlMaxAge: 3600
+        addVaryHeader: true
