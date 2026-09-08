@@ -5,9 +5,13 @@ App factory completa, middleware stack, autenticacion JWT, RBAC y modelos SQLAlc
 
 ## Prerequisitos
 - Sprint 2 completado: infraestructura Docker funcionando, todos los servicios healthy
-- pgBouncer accesible desde el servicio `api`
 - Redis accesible para cache
-- Python 3.12 con las dependencias: fastapi, uvicorn, sqlalchemy[asyncio], asyncpg, pydantic-settings, python-jose[cryptography], passlib[bcrypt], redis[hiredis]
+- Python 3.12 con las dependencias: fastapi, uvicorn, sqlalchemy[asyncio], asyncpg, pydantic-settings, python-jose[cryptography], passlib[bcrypt], redis[hiredis], pydantic-settings
+
+> **ADR-020**: PostgreSQL, Auth, Storage y Realtime son provistos por **Supabase Cloud**.
+> No se levantan contenedores locales para estos componentes.
+> `DATABASE_URL` apunta al Transaction Pooler de Supabase Cloud (Supavisor, puerto 6543).
+> Ya NO existe `PGBOUNCER_URL` — el pooling lo gestiona Supavisor de forma transparente.
 
 ## Archivos a Crear
 
@@ -93,9 +97,15 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # Database
+    # Database — Supavisor (Transaction Pooler de Supabase Cloud, puerto 6543)
     DATABASE_URL: str
-    PGBOUNCER_URL: str
+    # Conexion directa — SOLO para migraciones Alembic (no soporta pooling)
+    DATABASE_URL_DIRECT: str = ""
+
+    # Supabase Cloud
+    SUPABASE_URL: str = ""
+    SUPABASE_PUBLISHABLE_KEY: str = ""
+    SUPABASE_SECRET_KEY: str = ""
 
     # Redis
     REDIS_URL: str = "redis://redis:6379/0"
@@ -130,7 +140,7 @@ settings = Settings()
 Validaciones requeridas:
 - `JWT_SECRET` debe tener minimo 32 caracteres
 - `ENCRYPTION_KEY` debe tener minimo 32 caracteres
-- `DATABASE_URL` y `PGBOUNCER_URL` deben empezar con `postgres`
+- `DATABASE_URL` debe empezar con `postgres`
 
 ### 2. Database Layer (`app/core/database.py`)
 
@@ -142,9 +152,9 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy import text
 
-# Motor asincrono contra pgBouncer
+# Motor asincrono contra Supavisor (Transaction Pooler de Supabase Cloud)
 engine = create_async_engine(
-    settings.PGBOUNCER_URL.replace("postgres://", "postgresql+asyncpg://"),
+    settings.DATABASE_URL,
     pool_size=20,
     max_overflow=10,
     pool_pre_ping=True,
@@ -173,7 +183,7 @@ async def tenant_session(client_id: UUID):
     """
     async with AsyncSessionLocal() as session:
         async with session.begin():
-            # SET LOCAL tiene scope de transaccion - seguro con pgBouncer
+            # SET LOCAL tiene scope de transaccion - seguro con Supavisor (transaction mode)
             await session.execute(
                 text("SET LOCAL app.current_client_id = :client_id"),
                 {"client_id": str(client_id)},
@@ -183,7 +193,7 @@ async def tenant_session(client_id: UUID):
             # limpia automaticamente el SET LOCAL
 ```
 
-**CRITICO**: SIEMPRE usar `SET LOCAL`, NUNCA `SET`. `SET LOCAL` tiene scope de transaccion, lo cual es esencial para pgBouncer en transaction mode. `SET` sin LOCAL persiste por sesion y puede causar fuga de datos entre tenants.
+**CRITICO**: SIEMPRE usar `SET LOCAL`, NUNCA `SET`. `SET LOCAL` tiene scope de transaccion, lo cual es esencial para Supavisor (Transaction Pooler de Supabase Cloud) en transaction mode. `SET` sin LOCAL persiste por sesion y puede causar fuga de datos entre tenants. Supavisor resetea variables de sesion entre transacciones, igual que pgBouncer.
 
 ### 3. App Factory (`app/main.py`)
 
@@ -602,7 +612,7 @@ async def health_check():
     """
     checks = {}
     try:
-        # Check DB via pgBouncer
+        # Check DB via Supavisor (Supabase Cloud)
         async with AsyncSessionLocal() as session:
             await session.execute(text("SELECT 1"))
         checks["database"] = "ok"
@@ -760,8 +770,8 @@ async def test_health_no_auth(client):
 
 ## Notas Tecnicas
 
-### SET LOCAL y pgBouncer
-`SET LOCAL` afecta solo la transaccion actual. Al usar pgBouncer en transaction mode, cada transaccion puede usar una conexion diferente del pool. Esto hace que `SET LOCAL` sea la unica opcion segura para establecer el contexto del tenant.
+### SET LOCAL y Supavisor (ADR-020)
+`SET LOCAL` afecta solo la transaccion actual. Supavisor (Transaction Pooler de Supabase Cloud) opera en transaction mode, igual que pgBouncer: cada transaccion puede usar una conexion diferente del pool. Esto hace que `SET LOCAL` sea la unica opcion segura para establecer el contexto del tenant. `DATABASE_URL` apunta al pooler (puerto 6543); `DATABASE_URL_DIRECT` (puerto 5432) se usa SOLO para migraciones Alembic.
 
 ### SQLAlchemy 2.0 con Async
 - Usar `Mapped` y `mapped_column` (estilo 2.0), no `Column` (estilo 1.x)
