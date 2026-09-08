@@ -8,8 +8,8 @@ Supavisor resetea variables de sesión entre transacciones.
 """
 
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 from uuid import UUID
 
 from sqlalchemy import text
@@ -54,13 +54,12 @@ async def tenant_session(client_id: UUID) -> AsyncGenerator[AsyncSession, None]:
     Yields:
         AsyncSession con el contexto de tenant ya configurado.
     """
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            await session.execute(
-                text("SET LOCAL app.current_client_id = :client_id"),
-                {"client_id": str(client_id)},
-            )
-            yield session
+    async with AsyncSessionLocal() as session, session.begin():
+        await session.execute(
+            text("SET LOCAL app.current_client_id = :client_id"),
+            {"client_id": str(client_id)},
+        )
+        yield session
 
 
 async def get_raw_session() -> AsyncGenerator[AsyncSession, None]:
@@ -71,9 +70,8 @@ async def get_raw_session() -> AsyncGenerator[AsyncSession, None]:
     Yields:
         AsyncSession sin SET LOCAL aplicado.
     """
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
-            yield session
+    async with AsyncSessionLocal() as session, session.begin():
+        yield session
 
 
 async def init_db() -> None:

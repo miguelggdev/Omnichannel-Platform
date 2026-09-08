@@ -5,7 +5,7 @@ Cada client representa una organización/empresa en la plataforma SaaS.
 """
 
 from datetime import datetime
-from uuid import UUID as PyUUID
+from uuid import UUID as _UUID
 
 from sqlalchemy import Boolean, DateTime, Enum, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -36,7 +36,7 @@ class Client(Base):
 
     __tablename__ = "clients"
 
-    id: Mapped[PyUUID] = mapped_column(
+    id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
         server_default=func.gen_random_uuid(),
@@ -45,7 +45,10 @@ class Client(Base):
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     plan: Mapped[str] = mapped_column(
         Enum(
-            "free", "starter", "professional", "enterprise",
+            "free",
+            "starter",
+            "professional",
+            "enterprise",
             name="plan_type",
             create_type=False,
         ),
@@ -55,34 +58,22 @@ class Client(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true")
 
     # Admin Assistant (ADR-019)
-    admin_assistant_enabled: Mapped[bool] = mapped_column(
-        Boolean, server_default="false"
-    )
-    admin_assistant_voice_enabled: Mapped[bool] = mapped_column(
-        Boolean, server_default="false"
-    )
+    admin_assistant_enabled: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    admin_assistant_voice_enabled: Mapped[bool] = mapped_column(Boolean, server_default="false")
 
     # Lead Management (ADR-021)
-    lead_management_enabled: Mapped[bool] = mapped_column(
-        Boolean, server_default="false"
-    )
+    lead_management_enabled: Mapped[bool] = mapped_column(Boolean, server_default="false")
 
     # Theme (ADR-025)
     theme_config: Mapped[dict] = mapped_column(JSONB, server_default="{}")
 
     # Suspensión por pago (ADR-015)
-    suspension_date: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    suspension_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     payment_alert_config: Mapped[dict] = mapped_column(JSONB, server_default="{}")
     alert_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
-    suspended_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

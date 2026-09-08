@@ -1,6 +1,6 @@
 """Modelo PendingResponse — Respuestas pendientes de aprobación (training mode, ADR-005)."""
 
-from uuid import UUID as PyUUID
+from uuid import UUID as _UUID
 
 from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
@@ -22,12 +22,12 @@ class PendingResponse(TenantBaseModel):
 
     __tablename__ = "pending_responses"
 
-    conversation_id: Mapped[PyUUID] = mapped_column(
+    conversation_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("conversations.id"), nullable=False, index=True
     )
     question: Mapped[str] = mapped_column(Text, nullable=False)
     generated_response: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(20), server_default="pending")
-    reviewed_by: Mapped[PyUUID | None] = mapped_column(
+    reviewed_by: Mapped[_UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )

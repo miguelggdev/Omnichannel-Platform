@@ -1,6 +1,6 @@
 """Modelo TokenBudget — Presupuesto mensual de tokens por tenant (ADR-004)."""
 
-from uuid import UUID as PyUUID
+from uuid import UUID as _UUID
 
 from sqlalchemy import ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -21,7 +21,7 @@ class TokenBudget(TenantBaseModel):
 
     __tablename__ = "token_budgets"
 
-    client_id: Mapped[PyUUID] = mapped_column(
+    client_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False, index=True
     )
     month: Mapped[str] = mapped_column(String(7), nullable=False)

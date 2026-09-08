@@ -6,7 +6,8 @@ Usa httpx AsyncClient con ASGITransport (sin DB real).
 
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from contextlib import asynccontextmanager
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -64,8 +65,6 @@ async def client():
         yield ac
 
 
-from contextlib import asynccontextmanager
-
 @asynccontextmanager
 async def _noop_lifespan(app):
     yield
@@ -77,8 +76,10 @@ class TestHealthEndpoint:
     @pytest.mark.asyncio
     async def test_health_no_auth_required(self, client: AsyncClient) -> None:
         """Health endpoint responde sin token de autenticación."""
-        with patch("app.api.internal.health.AsyncSessionLocal") as mock_db, \
-             patch("app.api.internal.health.aioredis") as mock_redis:
+        with (
+            patch("app.api.internal.health.AsyncSessionLocal") as mock_db,
+            patch("app.api.internal.health.aioredis") as mock_redis,
+        ):
             # Mock DB
             mock_session = AsyncMock()
             mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -112,18 +113,18 @@ class TestLoginEndpoint:
             mock_session = AsyncMock()
             mock_session.__aenter__ = AsyncMock(return_value=mock_session)
             mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_session.begin = MagicMock(return_value=AsyncMock(
-                __aenter__=AsyncMock(), __aexit__=AsyncMock(return_value=False)
-            ))
+            mock_session.begin = MagicMock(
+                return_value=AsyncMock(
+                    __aenter__=AsyncMock(), __aexit__=AsyncMock(return_value=False)
+                )
+            )
 
             # Primera llamada: buscar User; Segunda: buscar Client
             mock_result_user = MagicMock()
             mock_result_user.scalar_one_or_none.return_value = user
             mock_result_client = MagicMock()
             mock_result_client.scalar_one_or_none.return_value = client_mock
-            mock_session.execute = AsyncMock(
-                side_effect=[mock_result_user, mock_result_client]
-            )
+            mock_session.execute = AsyncMock(side_effect=[mock_result_user, mock_result_client])
             mock_db.return_value = mock_session
 
             resp = await client.post(
@@ -146,9 +147,11 @@ class TestLoginEndpoint:
             mock_session = AsyncMock()
             mock_session.__aenter__ = AsyncMock(return_value=mock_session)
             mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_session.begin = MagicMock(return_value=AsyncMock(
-                __aenter__=AsyncMock(), __aexit__=AsyncMock(return_value=False)
-            ))
+            mock_session.begin = MagicMock(
+                return_value=AsyncMock(
+                    __aenter__=AsyncMock(), __aexit__=AsyncMock(return_value=False)
+                )
+            )
             mock_result = MagicMock()
             mock_result.scalar_one_or_none.return_value = user
             mock_session.execute = AsyncMock(return_value=mock_result)
@@ -169,9 +172,11 @@ class TestLoginEndpoint:
             mock_session = AsyncMock()
             mock_session.__aenter__ = AsyncMock(return_value=mock_session)
             mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_session.begin = MagicMock(return_value=AsyncMock(
-                __aenter__=AsyncMock(), __aexit__=AsyncMock(return_value=False)
-            ))
+            mock_session.begin = MagicMock(
+                return_value=AsyncMock(
+                    __aenter__=AsyncMock(), __aexit__=AsyncMock(return_value=False)
+                )
+            )
             mock_result = MagicMock()
             mock_result.scalar_one_or_none.return_value = None
             mock_session.execute = AsyncMock(return_value=mock_result)
@@ -218,8 +223,9 @@ class TestProtectedEndpoints:
             },
             expires_delta=timedelta(seconds=-1),
         )
-        import time
-        time.sleep(0.1)
+        import asyncio
+
+        await asyncio.sleep(0.1)
 
         resp = await client.get(
             "/api/v1/some-protected-route",

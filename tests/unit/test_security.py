@@ -60,7 +60,7 @@ class TestPasswordHashing:
 class TestJWT:
     """Tests de creación y decodificación de JWT."""
 
-    SAMPLE_DATA = {
+    SAMPLE_DATA: dict[str, str] = {  # noqa: RUF012
         "user_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
         "client_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
         "email": "test@example.com",

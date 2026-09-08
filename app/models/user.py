@@ -5,7 +5,7 @@ Password hasheado con bcrypt (ver app.core.security).
 """
 
 from datetime import datetime
-from uuid import UUID as PyUUID
+from uuid import UUID as _UUID
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -29,7 +29,7 @@ class User(TenantBaseModel):
 
     __tablename__ = "users"
 
-    client_id: Mapped[PyUUID] = mapped_column(
+    client_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False, index=True
     )
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
@@ -38,16 +38,17 @@ class User(TenantBaseModel):
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     role: Mapped[str] = mapped_column(
         Enum(
-            "super_admin", "admin", "supervisor", "agent",
+            "super_admin",
+            "admin",
+            "supervisor",
+            "agent",
             name="user_role",
             create_type=False,
         ),
         nullable=False,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true")
-    last_login_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

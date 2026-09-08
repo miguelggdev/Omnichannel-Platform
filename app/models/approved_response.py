@@ -4,7 +4,7 @@ Usa pgvector para la columna embedding vector(1536).
 Threshold de similaridad: 0.80 (más estricto que RAG general).
 """
 
-from uuid import UUID as PyUUID
+from uuid import UUID as _UUID
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import ForeignKey, Text
@@ -26,7 +26,7 @@ class ApprovedResponse(TenantBaseModel):
 
     __tablename__ = "approved_responses"
 
-    conversation_id: Mapped[PyUUID | None] = mapped_column(
+    conversation_id: Mapped[_UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("conversations.id"), nullable=True
     )
     question: Mapped[str] = mapped_column(Text, nullable=False)

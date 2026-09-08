@@ -3,7 +3,7 @@
 Columnas sensibles (phone, email_address) cifradas con pgcrypto en DB.
 """
 
-from uuid import UUID as PyUUID
+from uuid import UUID as _UUID
 
 from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
@@ -26,13 +26,11 @@ class ContactIdentifier(TenantBaseModel):
         UniqueConstraint("client_id", "channel", "identifier_value", name="uq_contact_identifier"),
     )
 
-    contact_id: Mapped[PyUUID] = mapped_column(
+    contact_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False, index=True
     )
     channel: Mapped[str] = mapped_column(String(50), nullable=False)
     identifier_value: Mapped[str] = mapped_column(String(255), nullable=False)
 
     # Relationships
-    contact: Mapped["Contact"] = relationship(
-        "Contact", back_populates="identifiers"
-    )
+    contact: Mapped["Contact"] = relationship("Contact", back_populates="identifiers")

@@ -1,10 +1,9 @@
 """Modelo Document — Documentos de base de conocimiento por tenant."""
 
 from datetime import datetime
-from uuid import UUID as PyUUID
 
 from sqlalchemy import DateTime, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import TenantBaseModel
@@ -39,6 +38,4 @@ class Document(TenantBaseModel):
     )
 
     # Relationships
-    chunks: Mapped[list["DocumentChunk"]] = relationship(
-        "DocumentChunk", back_populates="document"
-    )
+    chunks: Mapped[list["DocumentChunk"]] = relationship("DocumentChunk", back_populates="document")

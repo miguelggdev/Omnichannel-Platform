@@ -40,8 +40,9 @@ ignore = [
 known-first-party = ["app"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S106", "T20"]  # assert, hardcoded passwords, print ok en tests
-"scripts/**/*.py" = ["T20"]                 # print ok en scripts
+"tests/**/*.py" = ["S101", "S105", "S106", "S107", "T20"]  # assert, hardcoded passwords, print ok en tests
+"scripts/**/*.py" = ["T20"]                                  # print ok en scripts
+"app/models/**/*.py" = ["F821"]                              # forward refs en Mapped["Model"] (SQLAlchemy)
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -4,7 +4,7 @@ Usa pgvector para la columna embedding vector(1536).
 SIEMPRE filtro pre-vectorial por client_id en WHERE antes del cálculo de distancia.
 """
 
-from uuid import UUID as PyUUID
+from uuid import UUID as _UUID
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import ForeignKey, Integer, Text
@@ -28,7 +28,7 @@ class DocumentChunk(TenantBaseModel):
 
     __tablename__ = "document_chunks"
 
-    document_id: Mapped[PyUUID] = mapped_column(
+    document_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)

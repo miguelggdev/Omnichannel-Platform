@@ -4,7 +4,7 @@ Soporta merge de contactos duplicados vía merged_into_id.
 """
 
 from datetime import datetime
-from uuid import UUID as PyUUID
+from uuid import UUID as _UUID
 
 from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -26,13 +26,13 @@ class Contact(TenantBaseModel):
 
     __tablename__ = "contacts"
 
-    client_id: Mapped[PyUUID] = mapped_column(
+    client_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False, index=True
     )
     first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    merged_into_id: Mapped[PyUUID | None] = mapped_column(
+    merged_into_id: Mapped[_UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=True
     )
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, server_default="{}")
@@ -45,15 +45,9 @@ class Contact(TenantBaseModel):
     identifiers: Mapped[list["ContactIdentifier"]] = relationship(
         "ContactIdentifier", back_populates="contact"
     )
-    tags: Mapped[list["ContactTag"]] = relationship(
-        "ContactTag", back_populates="contact"
-    )
-    notes: Mapped[list["InternalNote"]] = relationship(
-        "InternalNote", back_populates="contact"
-    )
+    tags: Mapped[list["ContactTag"]] = relationship("ContactTag", back_populates="contact")
+    notes: Mapped[list["InternalNote"]] = relationship("InternalNote", back_populates="contact")
     conversations: Mapped[list["Conversation"]] = relationship(
         "Conversation", back_populates="contact"
     )
-    merged_into: Mapped["Contact | None"] = relationship(
-        "Contact", remote_side="Contact.id"
-    )
+    merged_into: Mapped["Contact | None"] = relationship("Contact", remote_side="Contact.id")

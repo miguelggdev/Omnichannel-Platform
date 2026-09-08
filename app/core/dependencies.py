@@ -4,13 +4,14 @@ Provee: get_current_user, require_role, get_tenant_session.
 Jerarquía de roles: super_admin > admin > supervisor > agent.
 """
 
-from typing import Any, AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable
+from typing import Any
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import tenant_session
-from app.core.exceptions import AppException, FORBIDDEN, MISSING_TOKEN
+from app.core.exceptions import FORBIDDEN, MISSING_TOKEN, AppException
 
 
 async def get_current_user(request: Request) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 """Modelo InternalNote — Notas internas sobre contactos."""
 
-from uuid import UUID as PyUUID
+from uuid import UUID as _UUID
 
 from sqlalchemy import ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
@@ -20,10 +20,10 @@ class InternalNote(TenantBaseModel):
 
     __tablename__ = "internal_notes"
 
-    contact_id: Mapped[PyUUID] = mapped_column(
+    contact_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False, index=True
     )
-    author_id: Mapped[PyUUID] = mapped_column(
+    author_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)

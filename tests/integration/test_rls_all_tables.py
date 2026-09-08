@@ -61,41 +61,33 @@ async def assert_rls_isolation(
 
     # 2. SELECT como Tenant B → 0 rows
     result = await session_b.execute(
-        text(f"SELECT {id_column} FROM {table} WHERE {id_column} = :rid"),
+        text(f"SELECT {id_column} FROM {table} WHERE {id_column} = :rid"),  # noqa: S608
         {"rid": rid},
     )
     rows_b = result.fetchall()
-    assert len(rows_b) == 0, (
-        f"VIOLACIÓN RLS en {table}: Tenant B ve datos de Tenant A"
-    )
+    assert len(rows_b) == 0, f"VIOLACIÓN RLS en {table}: Tenant B ve datos de Tenant A"
 
     # 3. UPDATE como Tenant B → 0 rows affected
     result = await session_b.execute(
-        text(f"UPDATE {table} SET updated_at = NOW() WHERE {id_column} = :rid"),
+        text(f"UPDATE {table} SET updated_at = NOW() WHERE {id_column} = :rid"),  # noqa: S608
         {"rid": rid},
     )
-    assert result.rowcount == 0, (
-        f"VIOLACIÓN RLS en {table}: Tenant B pudo UPDATE datos de Tenant A"
-    )
+    assert result.rowcount == 0, f"VIOLACIÓN RLS en {table}: Tenant B pudo UPDATE datos de Tenant A"
 
     # 4. DELETE como Tenant B → 0 rows affected
     result = await session_b.execute(
-        text(f"DELETE FROM {table} WHERE {id_column} = :rid"),
+        text(f"DELETE FROM {table} WHERE {id_column} = :rid"),  # noqa: S608
         {"rid": rid},
     )
-    assert result.rowcount == 0, (
-        f"VIOLACIÓN RLS en {table}: Tenant B pudo DELETE datos de Tenant A"
-    )
+    assert result.rowcount == 0, f"VIOLACIÓN RLS en {table}: Tenant B pudo DELETE datos de Tenant A"
 
     # 5. SELECT como Tenant A → integridad
     result = await session_a.execute(
-        text(f"SELECT {id_column} FROM {table} WHERE {id_column} = :rid"),
+        text(f"SELECT {id_column} FROM {table} WHERE {id_column} = :rid"),  # noqa: S608
         {"rid": rid},
     )
     rows_a = result.fetchall()
-    assert len(rows_a) == 1, (
-        f"INTEGRIDAD en {table}: Tenant A no ve su propio registro"
-    )
+    assert len(rows_a) == 1, f"INTEGRIDAD en {table}: Tenant A no ve su propio registro"
 
 
 # ─── Tests por tabla MVP ────────────────────────────────────────────────────
@@ -693,9 +685,7 @@ class TestRLSVectorSearch:
         rows = result.fetchall()
         assert len(rows) >= 1, "Tenant A no puede ver su propio chunk en búsqueda vectorial"
 
-    async def test_approved_responses_similarity_isolation(
-        self, rls_harness: dict
-    ) -> None:
+    async def test_approved_responses_similarity_isolation(self, rls_harness: dict) -> None:
         """
         Few-shot approved_responses: búsqueda por similaridad aislada por tenant.
         """
@@ -734,33 +724,23 @@ class TestRLSVectorSearch:
 class TestSetLocalBehavior:
     """Tests que verifican el comportamiento correcto de SET LOCAL."""
 
-    async def test_set_local_is_transaction_scoped(
-        self, rls_harness: dict
-    ) -> None:
+    async def test_set_local_is_transaction_scoped(self, rls_harness: dict) -> None:
         """SET LOCAL se resetea al terminar la transacción."""
         sa = rls_harness["session_a"]
 
-        result = await sa.execute(
-            text("SELECT current_setting('app.current_client_id', true)")
-        )
+        result = await sa.execute(text("SELECT current_setting('app.current_client_id', true)"))
         setting = result.scalar()
         assert setting is not None, "SET LOCAL no estableció app.current_client_id"
         assert setting == str(rls_harness["tenant_a"])
 
-    async def test_different_tenants_different_views(
-        self, rls_harness: dict
-    ) -> None:
+    async def test_different_tenants_different_views(self, rls_harness: dict) -> None:
         """Dos sesiones con diferente SET LOCAL ven datos diferentes."""
         sa = rls_harness["session_a"]
         sb = rls_harness["session_b"]
 
         # Verificar que cada sesión tiene su propio client_id
-        result_a = await sa.execute(
-            text("SELECT current_setting('app.current_client_id', true)")
-        )
-        result_b = await sb.execute(
-            text("SELECT current_setting('app.current_client_id', true)")
-        )
+        result_a = await sa.execute(text("SELECT current_setting('app.current_client_id', true)"))
+        result_b = await sb.execute(text("SELECT current_setting('app.current_client_id', true)"))
 
         assert result_a.scalar() == str(rls_harness["tenant_a"])
         assert result_b.scalar() == str(rls_harness["tenant_b"])

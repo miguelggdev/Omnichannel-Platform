@@ -1,6 +1,6 @@
 """Modelo TokenUsageLog — Log granular de uso de tokens."""
 
-from uuid import UUID as PyUUID
+from uuid import UUID as _UUID
 
 from sqlalchemy import ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
@@ -23,7 +23,7 @@ class TokenUsageLog(TenantBaseModel):
 
     __tablename__ = "token_usage_logs"
 
-    conversation_id: Mapped[PyUUID | None] = mapped_column(
+    conversation_id: Mapped[_UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("conversations.id"), nullable=True
     )
     model: Mapped[str] = mapped_column(String(50), nullable=False)

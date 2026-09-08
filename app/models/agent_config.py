@@ -1,6 +1,6 @@
 """Modelo AgentConfig — Configuración del agente IA por tenant."""
 
-from uuid import UUID as PyUUID
+from uuid import UUID as _UUID
 
 from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -27,7 +27,7 @@ class AgentConfig(TenantBaseModel):
 
     __tablename__ = "agent_configs"
 
-    client_id: Mapped[PyUUID] = mapped_column(
+    client_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)

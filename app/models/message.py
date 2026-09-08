@@ -1,7 +1,7 @@
 """Modelo Message — Mensajes entrantes y salientes."""
 
 from datetime import datetime
-from uuid import UUID as PyUUID
+from uuid import UUID as _UUID
 
 from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -27,7 +27,7 @@ class Message(TenantBaseModel):
 
     __tablename__ = "messages"
 
-    conversation_id: Mapped[PyUUID] = mapped_column(
+    conversation_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("conversations.id"), nullable=False, index=True
     )
     direction: Mapped[str] = mapped_column(
@@ -36,8 +36,14 @@ class Message(TenantBaseModel):
     )
     message_type: Mapped[str] = mapped_column(
         Enum(
-            "text", "image", "audio", "video", "document",
-            "location", "template", "interactive",
+            "text",
+            "image",
+            "audio",
+            "video",
+            "document",
+            "location",
+            "template",
+            "interactive",
             name="message_type",
             create_type=False,
         ),
@@ -45,19 +51,13 @@ class Message(TenantBaseModel):
     )
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     media_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
-    external_message_id: Mapped[str | None] = mapped_column(
-        String(255), nullable=True, index=True
-    )
+    external_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     sender_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    sender_id: Mapped[PyUUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    sender_id: Mapped[_UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, server_default="{}")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
     # Relationships
-    conversation: Mapped["Conversation"] = relationship(
-        "Conversation", back_populates="messages"
-    )
+    conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages")

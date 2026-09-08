@@ -18,9 +18,7 @@ class WebhookDedup(TenantBaseModel):
     """
 
     __tablename__ = "webhook_dedup"
-    __table_args__ = (
-        UniqueConstraint("channel", "external_message_id", name="uq_webhook_dedup"),
-    )
+    __table_args__ = (UniqueConstraint("channel", "external_message_id", name="uq_webhook_dedup"),)
 
     channel: Mapped[str] = mapped_column(String(50), nullable=False)
     external_message_id: Mapped[str] = mapped_column(String(255), nullable=False)
