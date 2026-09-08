@@ -110,7 +110,7 @@
 - **Decisión:** Implementar sistema de alertas escalonadas: el super admin configura `alert_days_before_suspension` (ej: [7, 3, 1]) y `suspension_date`. Un Celery Beat task diario envía alertas y auto-suspende en la fecha configurada. El cliente suspendido recibe un `alert_message` configurable en lugar de respuestas del agente.
 - **Consecuencia:** Requiere campos adicionales en `clients` (suspension_date, payment_alert_config JSONB, alert_message, suspended_at). El middleware `verify_client_is_active` bloquea mensajes salientes excepto el alert_message.
 
-### ADR-007: Supabase self-hosted en lugar de cloud
+### ADR-007: ~~Supabase self-hosted en lugar de cloud~~ [SUPERSEDED por ADR-020]
 - **Fecha:** 2026-09-01
 - **Contexto:** Supabase Cloud tiene limitaciones de extensiones (pgvector, pgcrypto) y no permite configuración avanzada de PostgreSQL.
 - **Decisión:** Usar Supabase self-hosted con Docker Compose. Incluye PostgreSQL 15+, pgBouncer, GoTrue (auth), Storage, Realtime.
@@ -140,8 +140,8 @@
   ```
 - **Impacto:** Todas las queries de similaridad en el servicio RAG y en approved_responses.
 
-### BUG-002: pgBouncer transaction mode y SET vs SET LOCAL
-- **Descripción:** Ver ADR-001. `SET` sin `LOCAL` en pgBouncer transaction mode puede causar que el `client_id` de un tenant se "filtre" a la siguiente request que reutilice la misma conexión del pool.
+### BUG-002: Supavisor/pgBouncer transaction mode y SET vs SET LOCAL
+- **Descripción:** Ver ADR-001. `SET` sin `LOCAL` en Supavisor/pgBouncer transaction mode puede causar que el `client_id` de un tenant se "filtre" a la siguiente request que reutilice la misma conexión del pool.
 - **Impacto:** Fuga de datos entre tenants. CRÍTICO.
 - **Prevención:** Grep periódico por `SET app.current_client_id` sin `LOCAL` en el codebase. Agregar test de integración que valide aislamiento.
 
@@ -218,38 +218,38 @@
 
 ## Contexto de Infraestructura
 
-### Servicios Docker Compose (Sprint 2)
+### Servicios Docker Compose (Sprint 2) — Actualizado por ADR-020
+> PostgreSQL, Auth, Storage y Realtime los provee Supabase Cloud.
+> docker-compose.yml solo orquesta los servicios propios.
+
 1. `traefik` — API Gateway, TLS, routing
 2. `api` — FastAPI application (2+ réplicas)
-3. `supabase-db` — PostgreSQL 15 + pgvector + pgcrypto
-4. `supabase-auth` — GoTrue (autenticación)
-5. `supabase-storage` — Almacenamiento de archivos
-6. `supabase-realtime` — Websockets para tiempo real
-7. `pgbouncer` — Connection pooling (transaction mode)
-8. `redis` — Cache + message broker
-9. `celery-webhooks` — Worker cola webhooks
-10. `celery-ai` — Worker cola AI inference
-11. `celery-documents` — Worker cola documentos
-12. `celery-notifications` — Worker cola notificaciones
-13. `celery-bulk` — Worker cola bulk operations
-14. `celery-beat` — Scheduler periódico
-15. `prometheus` — Métricas
-16. `grafana` — Dashboards
+3. `redis` — Cache + message broker
+4. `celery-webhooks` — Worker cola webhooks
+5. `celery-ai` — Worker cola AI inference
+6. `celery-documents` — Worker cola documentos
+7. `celery-notifications` — Worker cola notificaciones
+8. `celery-bulk` — Worker cola bulk operations
+9. `celery-beat` — Scheduler periódico
+10. `prometheus` — Métricas
+11. `grafana` — Dashboards
 
-### Variables de entorno críticas
-- `DATABASE_URL` — PostgreSQL connection string
-- `PGBOUNCER_URL` — pgBouncer connection string (para la app)
+### Variables de entorno críticas — Actualizado por ADR-020
+- `DATABASE_URL` — Connection string via Supavisor Transaction Pooler (puerto 6543, para la app)
+- `DATABASE_URL_DIRECT` — Conexión directa a PostgreSQL (puerto 5432, solo para migraciones Alembic)
+- `SUPABASE_PROJECT_REF` — Referencia del proyecto Supabase Cloud
+- `SUPABASE_URL` — URL del proyecto Supabase Cloud
+- `SUPABASE_PUBLISHABLE_KEY` — API key pública (formato v2: sb_publishable_*)
+- `SUPABASE_SECRET_KEY` — API key secreta (formato v2: sb_secret_*)
 - `REDIS_URL` — Redis connection string
 - `OPENAI_API_KEY` — API key de OpenAI
 - `YCLOUD_API_KEY` — API key de YCloud
-- `JWT_SECRET` — Secreto para tokens JWT
+- `JWT_SECRET` — Secreto para tokens JWT (gestionado por Supabase Cloud)
 - `ENCRYPTION_KEY` — Clave para pgcrypto
 - `TELEGRAM_BOT_TOKEN` — Token del bot de Telegram para monitoreo
 - `TELEGRAM_ADMIN_CHAT_ID` — Chat ID del super admin para alertas
 - `CLOUDFLARE_API_TOKEN` — Token de Cloudflare para WAF/Tunnel
 - `CLOUDFLARE_ZONE_ID` — Zone ID de Cloudflare
-- `REPLICA_HOST` — Host del servidor VPS de replicación
-- `REPLICA_PORT` — Puerto PostgreSQL en réplica
 - `META_APP_SECRET` — App Secret de Meta (Facebook/Instagram)
 - `META_PAGE_ACCESS_TOKEN` — Page Access Token de Meta
 - `META_WEBHOOK_VERIFY_TOKEN` — Token de verificación de webhooks Meta
