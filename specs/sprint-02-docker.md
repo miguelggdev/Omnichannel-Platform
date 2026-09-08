@@ -3,25 +3,36 @@
 ## Objetivo
 Todos los servicios del sistema levantados, comunicados y saludables con Docker Compose. Al finalizar este sprint, un solo comando `docker-compose up -d` debe levantar toda la infraestructura necesaria para desarrollo.
 
+> **ADR-020**: PostgreSQL, Auth, Storage y Realtime son provistos por **Supabase Cloud**.
+> No se levantan contenedores locales para estos componentes.
+> La app se conecta via el Transaction Pooler de Supabase Cloud (Supavisor, puerto 6543).
+
 ## Prerequisitos
-- Sprint 1 completado: `supabase/init/init.sql` ejecutable y validado
+- Sprint 1 completado: esquema DDL ejecutable y validado en Supabase Cloud
 - Docker Engine 24+ y Docker Compose v2 instalados
-- Puertos disponibles: 80, 443, 5432, 6379, 8080, 3000, 9090
+- Puertos disponibles: 80, 443, 6379, 8080, 3000, 9090
+- Proyecto de Supabase Cloud configurado con API keys y connection strings
 
 ## Archivos a Crear
-- `docker-compose.yml` — Orquestacion de 16 servicios
+- `docker-compose.yml` — Orquestacion de 12 servicios
 - `.env.example` — Variables documentadas agrupadas por servicio
 - `traefik/traefik.yml` — Configuracion estatica de Traefik v3
 - `traefik/dynamic/middlewares.yml` — Configuracion dinamica de middlewares
 - `traefik/dynamic/tls.yml` — Configuracion TLS (dev con certificados autofirmados)
 - `Dockerfile` — Multi-stage para la aplicacion FastAPI
-- `app/tasks/celery_config.py` — Configuracion de colas y routing Celery
+- `app/tasks/celery_config.py` — Configuracion de 6 colas y routing Celery
 - `scripts/wait-for-it.sh` — Script de espera para dependencias
 - `.dockerignore` — Exclusiones del contexto Docker
 
 ## Tareas Detalladas
 
-### 1. Docker Compose — 16 servicios
+### 1. Docker Compose — 12 servicios
+
+> **Nota ADR-020**: Los servicios supabase-db, supabase-auth, supabase-storage,
+> supabase-realtime y pgbouncer ya **NO** se levantan localmente. PostgreSQL, Auth,
+> Storage y Realtime los provee Supabase Cloud. El connection pooling lo maneja
+> Supavisor (transaction pooler de Supabase Cloud, puerto 6543). DATABASE_URL apunta
+> directamente al pooler de Supabase Cloud.
 
 Definir todos los servicios en `docker-compose.yml`:
 
@@ -58,11 +69,11 @@ api:
     replicas: 2
   environment:
     - DATABASE_URL=${DATABASE_URL}
-    - PGBOUNCER_URL=${PGBOUNCER_URL}
     - REDIS_URL=${REDIS_URL}
+    - SUPABASE_URL=${SUPABASE_URL}
+    - SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY}
+    - SUPABASE_SECRET_KEY=${SUPABASE_SECRET_KEY}
   depends_on:
-    pgbouncer:
-      condition: service_healthy
     redis:
       condition: service_healthy
   labels:
@@ -78,138 +89,20 @@ api:
     retries: 3
 ```
 
-#### 1.3 `supabase-db` — PostgreSQL 15 + pgvector
-```yaml
-supabase-db:
-  image: supabase/postgres:15.6.1.143
-  # Alternativa si pgvector no esta incluido:
-  # build desde imagen base con: apt-get install postgresql-15-pgvector
-  volumes:
-    - postgres_data:/var/lib/postgresql/data
-    - ./supabase/init/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-  environment:
-    POSTGRES_USER: ${POSTGRES_USER}
-    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    POSTGRES_DB: ${POSTGRES_DB}
-  ports:
-    - "5432:5432"
-  networks:
-    - backend
-  healthcheck:
-    test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-    interval: 30s
-    timeout: 10s
-    retries: 5
-```
+> **Cambio ADR-020**: `depends_on` solo incluye `redis`. La BD es externa (Supabase Cloud)
+> y no hay pgBouncer local. `DATABASE_URL` apunta al Transaction Pooler de Supabase Cloud.
+> Las keys usan el formato nuevo: `SUPABASE_PUBLISHABLE_KEY` y `SUPABASE_SECRET_KEY`.
 
-#### 1.4 `supabase-auth` — GoTrue
-```yaml
-supabase-auth:
-  image: supabase/gotrue:v2.158.1
-  environment:
-    GOTRUE_API_HOST: "0.0.0.0"
-    GOTRUE_API_PORT: "9999"
-    GOTRUE_DB_DRIVER: postgres
-    GOTRUE_DB_DATABASE_URL: ${DATABASE_URL}
-    GOTRUE_SITE_URL: ${SITE_URL}
-    GOTRUE_JWT_SECRET: ${JWT_SECRET}
-    GOTRUE_JWT_EXP: 3600
-    GOTRUE_DISABLE_SIGNUP: "false"
-  depends_on:
-    supabase-db:
-      condition: service_healthy
-  networks:
-    - backend
-  healthcheck:
-    test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
-    interval: 30s
-    timeout: 10s
-    retries: 3
-```
-
-#### 1.5 `supabase-storage` — Storage de archivos
-```yaml
-supabase-storage:
-  image: supabase/storage-api:v1.11.13
-  environment:
-    ANON_KEY: ${SUPABASE_ANON_KEY}
-    SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
-    DATABASE_URL: ${DATABASE_URL}
-    STORAGE_BACKEND: file
-    FILE_STORAGE_BACKEND_PATH: /var/lib/storage
-  volumes:
-    - storage_data:/var/lib/storage
-  depends_on:
-    supabase-db:
-      condition: service_healthy
-  networks:
-    - backend
-  healthcheck:
-    test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/status"]
-    interval: 30s
-    timeout: 10s
-    retries: 3
-```
-
-#### 1.6 `supabase-realtime` — WebSockets
-```yaml
-supabase-realtime:
-  image: supabase/realtime:v2.30.34
-  environment:
-    DB_HOST: supabase-db
-    DB_PORT: 5432
-    DB_USER: ${POSTGRES_USER}
-    DB_PASSWORD: ${POSTGRES_PASSWORD}
-    DB_NAME: ${POSTGRES_DB}
-    PORT: 4000
-    SECRET_KEY_BASE: ${REALTIME_SECRET_KEY_BASE}
-  depends_on:
-    supabase-db:
-      condition: service_healthy
-  networks:
-    - backend
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
-    interval: 30s
-    timeout: 10s
-    retries: 3
-```
-
-#### 1.7 `pgbouncer` — Connection Pooling
-```yaml
-pgbouncer:
-  image: edoburu/pgbouncer:1.22.0
-  environment:
-    DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@supabase-db:5432/${POSTGRES_DB}"
-    POOL_MODE: transaction
-    MAX_CLIENT_CONN: 200
-    DEFAULT_POOL_SIZE: 20
-    MIN_POOL_SIZE: 5
-    RESERVE_POOL_SIZE: 5
-    RESERVE_POOL_TIMEOUT: 3
-    SERVER_RESET_QUERY: "DISCARD ALL"
-    AUTH_TYPE: scram-sha-256
-  depends_on:
-    supabase-db:
-      condition: service_healthy
-  ports:
-    - "6432:6432"
-  networks:
-    - backend
-  healthcheck:
-    test: ["CMD-SHELL", "pg_isready -h localhost -p 6432"]
-    interval: 30s
-    timeout: 10s
-    retries: 3
-```
-
-**CRITICO**: `POOL_MODE: transaction` es obligatorio. Esto garantiza que `SET LOCAL` (usado para RLS multi-tenant) tenga scope solo dentro de la transaccion actual y no afecte otras conexiones reutilizadas por pgBouncer. `SERVER_RESET_QUERY: "DISCARD ALL"` limpia cualquier estado residual al devolver la conexion al pool.
-
-#### 1.8 `redis` — Cache + Broker Celery
+#### 1.3 `redis` — Cache + Broker Celery
 ```yaml
 redis:
   image: redis:7.4-alpine
-  command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+  command: >
+    redis-server
+    --appendonly yes
+    --maxmemory 256mb
+    --maxmemory-policy allkeys-lru
+    --requirepass ${REDIS_PASSWORD}
   volumes:
     - redis_data:/data
   ports:
@@ -217,13 +110,13 @@ redis:
   networks:
     - backend
   healthcheck:
-    test: ["CMD", "redis-cli", "ping"]
+    test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
     interval: 30s
     timeout: 10s
     retries: 3
 ```
 
-#### 1.9-1.13 Workers Celery (5 colas)
+#### 1.4-1.8 Workers Celery (5 colas originales)
 
 Cada worker es un servicio separado con su propia cola y concurrencia:
 
@@ -233,14 +126,17 @@ celery-webhooks:
     context: .
     dockerfile: Dockerfile
     target: runner
-  command: celery -A app.tasks.celery_config worker -Q webhooks -c 4 --loglevel=info -n webhooks@%h
+  command: >
+    celery -A app.tasks.celery_config worker
+    -Q webhooks
+    -c ${CELERY_WEBHOOK_CONCURRENCY:-4}
+    --loglevel=${LOG_LEVEL:-info}
+    -n webhooks@%h
   environment:
-    - PGBOUNCER_URL=${PGBOUNCER_URL}
+    - DATABASE_URL=${DATABASE_URL}
     - REDIS_URL=${REDIS_URL}
     - OPENAI_API_KEY=${OPENAI_API_KEY}
   depends_on:
-    pgbouncer:
-      condition: service_healthy
     redis:
       condition: service_healthy
   networks:
@@ -267,17 +163,65 @@ celery-bulk:
   # NOTA: Concurrencia 1 para operaciones secuenciales pesadas
 ```
 
-#### 1.14 `celery-beat` — Scheduler
+> **Cambio ADR-020**: Todos los workers usan `DATABASE_URL` (que apunta al pooler de
+> Supabase Cloud). Ya no existe `PGBOUNCER_URL`. `depends_on` solo incluye `redis`.
+
+#### 1.9 `celery-lead-enrichment` — Enriquecimiento de Leads (ADR-022)
+```yaml
+celery-lead-enrichment:
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: runner
+  command: >
+    celery -A app.tasks.celery_config worker
+    -Q lead_enrichment
+    -c ${CELERY_ENRICHMENT_CONCURRENCY:-2}
+    --loglevel=${LOG_LEVEL:-info}
+    -n lead-enrichment@%h
+  environment:
+    - DATABASE_URL=${DATABASE_URL}
+    - REDIS_URL=${REDIS_URL}
+    - OPENAI_API_KEY=${OPENAI_API_KEY}
+    - CLEARBIT_API_KEY=${CLEARBIT_API_KEY}
+    - HUNTER_API_KEY=${HUNTER_API_KEY}
+    - VAPI_API_KEY=${VAPI_API_KEY}
+    - VAPI_PHONE_NUMBER=${VAPI_PHONE_NUMBER}
+    - BLAND_AI_API_KEY=${BLAND_AI_API_KEY}
+    - BLAND_AI_PHONE_NUMBER=${BLAND_AI_PHONE_NUMBER}
+    - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+  depends_on:
+    redis:
+      condition: service_healthy
+  networks:
+    - backend
+  healthcheck:
+    test: ["CMD-SHELL", "celery -A app.tasks.celery_config inspect ping -d lead-enrichment@$$HOSTNAME"]
+    interval: 60s
+    timeout: 30s
+    retries: 3
+```
+
+> **Nuevo (ADR-022)**: Worker dedicado al pipeline de enriquecimiento asincrono de leads.
+> Concurrencia 2: llamadas I/O-bound a APIs externas (Clearbit, Hunter, Vapi, Bland.ai).
+
+#### 1.10 `celery-beat` — Scheduler
 ```yaml
 celery-beat:
   build:
     context: .
     dockerfile: Dockerfile
     target: runner
-  command: celery -A app.tasks.celery_config beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+  command: >
+    celery -A app.tasks.celery_config beat
+    --loglevel=${LOG_LEVEL:-info}
+    --schedule=/tmp/celerybeat-schedule
   environment:
-    - PGBOUNCER_URL=${PGBOUNCER_URL}
+    - DATABASE_URL=${DATABASE_URL}
     - REDIS_URL=${REDIS_URL}
+    - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+    - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+    - LOG_LEVEL=${LOG_LEVEL}
   depends_on:
     redis:
       condition: service_healthy
@@ -285,7 +229,7 @@ celery-beat:
     - backend
 ```
 
-#### 1.15 `prometheus` — Metricas
+#### 1.11 `prometheus` — Metricas
 ```yaml
 prometheus:
   image: prom/prometheus:v2.54.1
@@ -303,13 +247,13 @@ prometheus:
     retries: 3
 ```
 
-#### 1.16 `grafana` — Dashboards
+#### 1.12 `grafana` — Dashboards
 ```yaml
 grafana:
   image: grafana/grafana:11.2.0
   environment:
-    GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
-    GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+    GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
+    GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
   volumes:
     - grafana_data:/var/lib/grafana
   ports:
@@ -335,12 +279,16 @@ networks:
     driver: bridge
 
 volumes:
-  postgres_data:
-  storage_data:
   redis_data:
+    driver: local
   prometheus_data:
+    driver: local
   grafana_data:
+    driver: local
 ```
+
+> **Cambio ADR-020**: Se eliminaron `postgres_data` y `storage_data`. PostgreSQL y Storage
+> son servicios gestionados por Supabase Cloud; no hay datos locales que persistir.
 
 ### 2. Health Checks
 
@@ -348,7 +296,7 @@ Cada servicio DEBE tener un healthcheck con los parametros estandar:
 - `interval: 30s`
 - `timeout: 10s`
 - `retries: 3`
-- `start_period: 40s` (para servicios que tardan en iniciar como supabase-db)
+- `start_period: 40s` (para servicios que tardan en iniciar)
 
 Todos los `depends_on` deben usar `condition: service_healthy` para garantizar el orden de inicio correcto.
 
@@ -469,7 +417,7 @@ RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuse
 
 # Copiar codigo de la aplicacion
 COPY ./app ./app
-COPY ./alembic ./alembic
+COPY ./migrations ./migrations
 COPY ./alembic.ini .
 
 # Cambiar permisos y usuario
@@ -478,10 +426,10 @@ USER appuser
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=40s \
     CMD curl -f http://localhost:8000/internal/health || exit 1
 
-# Uvicorn con workers basados en CPU cores
+# Uvicorn con app factory pattern
 CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
 ```
 
@@ -493,65 +441,73 @@ Notas del Dockerfile:
 
 ### 6. Celery Config
 
-Archivo `app/tasks/celery_config.py`:
+Archivo `app/tasks/celery_config.py` — **6 colas** (incluyendo `lead_enrichment`):
 
 ```python
 from celery import Celery
 from kombu import Queue, Exchange
+import os
 
-# Crear instancia de Celery
 celery_app = Celery("omnichannel")
 
-# Configuracion base
 celery_app.conf.update(
-    # Broker y backend
-    broker_url="redis://redis:6379/0",
-    result_backend="redis://redis:6379/1",
+    broker_url=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"),
+    result_backend=os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1"),
 
-    # Serializacion
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
 
-    # Retry global
     task_acks_late=True,
     task_reject_on_worker_lost=True,
+    worker_prefetch_multiplier=1,
+    task_default_retry_delay=60,
+    task_max_retries=3,
+    result_expires=3600,
 
-    # Definicion de colas
+    # 6 colas especializadas
     task_queues=(
-        Queue("webhooks", Exchange("webhooks"), routing_key="webhooks"),
-        Queue("ai_inference", Exchange("ai_inference"), routing_key="ai_inference"),
-        Queue("documents", Exchange("documents"), routing_key="documents"),
-        Queue("notifications", Exchange("notifications"), routing_key="notifications"),
-        Queue("bulk", Exchange("bulk"), routing_key="bulk"),
+        Queue("webhooks", Exchange("webhooks", type="direct"), routing_key="webhooks"),
+        Queue("ai_inference", Exchange("ai_inference", type="direct"), routing_key="ai_inference"),
+        Queue("documents", Exchange("documents", type="direct"), routing_key="documents"),
+        Queue("notifications", Exchange("notifications", type="direct"), routing_key="notifications"),
+        Queue("bulk", Exchange("bulk", type="direct"), routing_key="bulk"),
+        Queue("lead_enrichment", Exchange("lead_enrichment", type="direct"), routing_key="lead_enrichment"),
     ),
 
-    # Routing automatico por nombre de task
     task_routes={
         "app.tasks.webhook_*": {"queue": "webhooks"},
         "app.tasks.ai_*": {"queue": "ai_inference"},
         "app.tasks.document_*": {"queue": "documents"},
         "app.tasks.notification_*": {"queue": "notifications"},
         "app.tasks.bulk_*": {"queue": "bulk"},
+        "app.tasks.enrichment_*": {"queue": "lead_enrichment"},
     },
 
-    # Cola por defecto
     task_default_queue="webhooks",
 
-    # Concurrencia y prefetch
-    worker_prefetch_multiplier=1,
-
-    # Beat schedule (tareas periodicas)
     beat_schedule={
         "auto-close-conversations": {
             "task": "app.tasks.bulk_auto_close_conversations",
-            "schedule": 900.0,  # cada 15 minutos
+            "schedule": 900.0,
+            "options": {"queue": "bulk"},
         },
         "check-token-budgets": {
             "task": "app.tasks.notification_check_token_budgets",
-            "schedule": 3600.0,  # cada hora
+            "schedule": 3600.0,
+            "options": {"queue": "notifications"},
+        },
+        "recalculate-lead-scores": {
+            "task": "app.tasks.enrichment_recalculate_scores",
+            "schedule": 1800.0,
+            "options": {"queue": "lead_enrichment"},
+        },
+        "check-stale-leads": {
+            "task": "app.tasks.enrichment_check_stale_leads",
+            "schedule": 3600.0,
+            "options": {"queue": "lead_enrichment"},
         },
     },
 )
@@ -562,94 +518,9 @@ Notas de la configuracion:
 - `task_reject_on_worker_lost=True`: si el worker se pierde, la tarea se rechaza y re-encola.
 - `worker_prefetch_multiplier=1`: cada worker toma solo 1 tarea a la vez, importante para tareas largas de IA.
 - El routing usa patrones glob: `webhook_*` captura todas las tareas que empiecen con ese prefijo.
+- `enrichment_*` enruta tareas de enriquecimiento de leads a la cola `lead_enrichment` (ADR-022).
 
-### 7. .env.example
-
-```bash
-# ================================================
-# POSTGRESQL / SUPABASE DB
-# ================================================
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=your_secure_password_here
-POSTGRES_DB=omnichannel
-DATABASE_URL=postgres://postgres:your_secure_password_here@supabase-db:5432/omnichannel
-
-# ================================================
-# PGBOUNCER
-# ================================================
-PGBOUNCER_URL=postgres://postgres:your_secure_password_here@pgbouncer:6432/omnichannel
-
-# ================================================
-# REDIS
-# ================================================
-REDIS_URL=redis://redis:6379/0
-
-# ================================================
-# JWT / AUTENTICACION
-# ================================================
-JWT_SECRET=your_jwt_secret_min_32_chars_here
-JWT_ALGORITHM=HS256
-JWT_EXPIRATION_MINUTES=30
-JWT_REFRESH_EXPIRATION_DAYS=7
-
-# ================================================
-# CIFRADO
-# ================================================
-ENCRYPTION_KEY=your_encryption_key_min_32_chars_here
-
-# ================================================
-# OPENAI
-# ================================================
-OPENAI_API_KEY=sk-your_openai_api_key_here
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-OPENAI_CHAT_MODEL=gpt-4o
-
-# ================================================
-# YCLOUD (MESSAGING PROVIDER)
-# ================================================
-YCLOUD_API_KEY=your_ycloud_api_key_here
-YCLOUD_WEBHOOK_SECRET=your_ycloud_webhook_secret_here
-
-# ================================================
-# SUPABASE
-# ================================================
-SUPABASE_ANON_KEY=your_supabase_anon_key_here
-SUPABASE_SERVICE_KEY=your_supabase_service_key_here
-SITE_URL=http://localhost:3000
-
-# ================================================
-# SUPABASE REALTIME
-# ================================================
-REALTIME_SECRET_KEY_BASE=your_secret_key_base_min_64_chars_here
-
-# ================================================
-# TRAEFIK
-# ================================================
-TRAEFIK_DASHBOARD_USER=admin
-TRAEFIK_DASHBOARD_PASSWORD=admin
-
-# ================================================
-# GRAFANA
-# ================================================
-GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD=admin_password_here
-
-# ================================================
-# GOOGLE CALENDAR (Sprint 7)
-# ================================================
-# GOOGLE_CLIENT_ID=your_google_client_id
-# GOOGLE_CLIENT_SECRET=your_google_client_secret
-# GOOGLE_REDIRECT_URI=http://localhost:8000/api/v1/auth/google/callback
-
-# ================================================
-# APLICACION
-# ================================================
-APP_ENV=development
-LOG_LEVEL=INFO
-CORS_ORIGINS=http://localhost:3000,http://localhost:8080
-```
-
-### 8. .dockerignore
+### 7. .dockerignore
 
 ```
 .git
@@ -674,26 +545,27 @@ Makefile
 ```
 
 ## Criterios de Aceptacion
-- [ ] `docker-compose up -d` levanta todos los 16 servicios sin errores
+- [ ] `docker-compose up -d` levanta todos los 12 servicios sin errores
 - [ ] Todos los servicios alcanzan estado `healthy` en menos de 2 minutos
 - [ ] El endpoint `/internal/health` del servicio `api` responde HTTP 200
-- [ ] pgBouncer esta en `transaction mode` (verificar con `SHOW pools` via pgBouncer)
-- [ ] `init.sql` se ejecuta automaticamente al crear el contenedor de PostgreSQL (verificar tablas con `\dt`)
-- [ ] Workers Celery se registran con sus colas respectivas (verificar con `celery inspect active_queues`)
-- [ ] Redis es accesible tanto por `api` como por los workers Celery
+- [ ] `DATABASE_URL` apunta al Transaction Pooler de Supabase Cloud (Supavisor, puerto 6543)
+- [ ] Workers Celery se registran con sus 6 colas respectivas (verificar con `celery inspect active_queues`)
+- [ ] Redis es accesible tanto por `api` como por los workers Celery en la red `backend`
 - [ ] Traefik enruta correctamente al servicio `api` (verificar dashboard en localhost:8080)
 - [ ] Grafana accesible en localhost:3000 con credenciales del .env
 - [ ] Las 2 replicas del servicio `api` reciben trafico via load balancer de Traefik
-- [ ] `docker-compose down && docker-compose up -d` no pierde datos de PostgreSQL (volumen persistente)
+- [ ] El worker `celery-lead-enrichment` se registra con la cola `lead_enrichment`
 
 ## Notas Tecnicas
 
-### pgBouncer en Transaction Mode
-pgBouncer DEBE estar en `transaction mode` para compatibilidad con `SET LOCAL`. En este modo:
-- Cada transaccion puede usar una conexion diferente del pool
-- `SET LOCAL` tiene scope solo dentro de la transaccion actual
-- `SERVER_RESET_QUERY = "DISCARD ALL"` limpia estado residual
-- Los workers Celery deben usar `PGBOUNCER_URL`, nunca `DATABASE_URL` directo
+### Supavisor (Transaction Pooler de Supabase Cloud) — ADR-020
+Supabase Cloud provee Supavisor como transaction pooler (puerto 6543), reemplazando
+al pgBouncer self-hosted. El comportamiento es equivalente para nuestra app:
+- Transaction mode: cada transaccion puede usar una conexion diferente del pool
+- `SET LOCAL` tiene scope solo dentro de la transaccion actual (compatible con RLS multi-tenant)
+- `DATABASE_URL` apunta siempre al pooler (puerto 6543), nunca conexion directa
+- `DATABASE_URL_DIRECT` (puerto 5432) se usa SOLO para migraciones de Alembic
+- Los workers Celery y la API usan `DATABASE_URL` (via Supavisor)
 
 ### Redis: Broker y Backend
 Redis se usa como:
@@ -705,28 +577,33 @@ Separar en databases distintos evita colisiones de keys.
 
 ### Volumenes Persistentes
 Los volumenes nombrados garantizan persistencia:
-- `postgres_data`: datos de PostgreSQL
-- `storage_data`: archivos subidos via Supabase Storage
 - `redis_data`: datos de Redis (AOF habilitado)
 - `grafana_data`: dashboards y configuracion de Grafana
 - `prometheus_data`: metricas historicas
 
+> **Cambio ADR-020**: `postgres_data` y `storage_data` fueron eliminados.
+> PostgreSQL y Storage son gestionados por Supabase Cloud.
+
 ### Orden de Inicio
 El grafo de dependencias es:
 ```
-supabase-db → pgbouncer → api
-supabase-db → supabase-auth
-supabase-db → supabase-storage
-supabase-db → supabase-realtime
 redis → api
-redis → celery-* (todos los workers)
-pgbouncer + redis → celery-* (todos los workers)
+redis → celery-webhooks
+redis → celery-ai
+redis → celery-documents
+redis → celery-notifications
+redis → celery-bulk
+redis → celery-lead-enrichment
+redis → celery-beat
 prometheus → grafana
 ```
 
+> **Cambio ADR-020**: El grafo es mas simple. Ya no hay cadena
+> `supabase-db → pgbouncer → api/workers`. Solo Redis es dependencia local.
+
 ## Dependencias para Sprint 3
 - El servicio `api` debe estar accesible via Traefik en `api.localhost` (o la URL configurada)
-- pgBouncer debe aceptar conexiones del servicio `api` y de los workers Celery
+- `DATABASE_URL` debe apuntar correctamente al Transaction Pooler de Supabase Cloud
 - Redis debe ser accesible por `api` y todos los workers Celery en la red `backend`
 - El endpoint `/internal/health` debe existir como placeholder (puede retornar `{"status": "ok"}`)
 - La imagen Docker debe tener `tesseract-ocr` instalado para el Sprint 5

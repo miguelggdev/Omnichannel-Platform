@@ -6,6 +6,10 @@
 # API: https://api.localhost
 # Grafana: http://localhost:3000
 # =============================================================================
+# ADR-020: PostgreSQL, Auth, Storage y Realtime provistos por Supabase Cloud.
+#           DATABASE_URL apunta al Transaction Pooler (Supavisor, puerto 6543).
+#           No se levantan contenedores locales para estos componentes.
+# =============================================================================
 
 services:
   # ─────────────────────────────────────────────────────────────────────────────
@@ -44,7 +48,6 @@ services:
       replicas: 2
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - PGBOUNCER_URL=${PGBOUNCER_URL}
       - REDIS_URL=${REDIS_URL}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_ALGORITHM=${JWT_ALGORITHM}
@@ -62,8 +65,8 @@ services:
       - META_PAGE_ACCESS_TOKEN=${META_PAGE_ACCESS_TOKEN}
       - META_VERIFY_TOKEN=${META_VERIFY_TOKEN}
       - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY}
+      - SUPABASE_SECRET_KEY=${SUPABASE_SECRET_KEY}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
@@ -73,8 +76,6 @@ services:
       - LOG_FORMAT=${LOG_FORMAT}
       - CORS_ORIGINS=${CORS_ORIGINS}
     depends_on:
-      pgbouncer:
-        condition: service_healthy
       redis:
         condition: service_healthy
     labels:
@@ -96,144 +97,7 @@ services:
       start_period: 40s
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 3. SUPABASE-DB — PostgreSQL 15 + pgvector
-  # ─────────────────────────────────────────────────────────────────────────────
-  supabase-db:
-    image: supabase/postgres:15.6.1.143
-    restart: unless-stopped
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./supabase/init/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-      - ./supabase/init/phase2_tables.sql:/docker-entrypoint-initdb.d/02-phase2.sql:ro
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      - "5432:5432"
-    networks:
-      - backend
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 40s
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 4. SUPABASE-AUTH — GoTrue (autenticacion JWT)
-  # ─────────────────────────────────────────────────────────────────────────────
-  supabase-auth:
-    image: supabase/gotrue:v2.158.1
-    restart: unless-stopped
-    environment:
-      GOTRUE_API_HOST: "0.0.0.0"
-      GOTRUE_API_PORT: "9999"
-      GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: ${DATABASE_URL}
-      GOTRUE_SITE_URL: ${SITE_URL:-http://localhost:3000}
-      GOTRUE_JWT_SECRET: ${JWT_SECRET}
-      GOTRUE_JWT_EXP: 3600
-      GOTRUE_DISABLE_SIGNUP: "false"
-      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
-      GOTRUE_MAILER_AUTOCONFIRM: "true"
-    depends_on:
-      supabase-db:
-        condition: service_healthy
-    networks:
-      - backend
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 5. SUPABASE-STORAGE — Storage de archivos (documentos, audio)
-  # ─────────────────────────────────────────────────────────────────────────────
-  supabase-storage:
-    image: supabase/storage-api:v1.11.13
-    restart: unless-stopped
-    environment:
-      ANON_KEY: ${SUPABASE_ANON_KEY}
-      SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
-      DATABASE_URL: ${DATABASE_URL}
-      STORAGE_BACKEND: file
-      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
-      POSTGREST_URL: http://supabase-db:3000
-    volumes:
-      - storage_data:/var/lib/storage
-    depends_on:
-      supabase-db:
-        condition: service_healthy
-    networks:
-      - backend
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/status"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 6. SUPABASE-REALTIME — WebSockets para actualizaciones en tiempo real
-  # ─────────────────────────────────────────────────────────────────────────────
-  supabase-realtime:
-    image: supabase/realtime:v2.30.34
-    restart: unless-stopped
-    environment:
-      DB_HOST: supabase-db
-      DB_PORT: 5432
-      DB_USER: ${POSTGRES_USER}
-      DB_PASSWORD: ${POSTGRES_PASSWORD}
-      DB_NAME: ${POSTGRES_DB}
-      PORT: 4000
-      SECRET_KEY_BASE: ${REALTIME_SECRET_KEY_BASE}
-    depends_on:
-      supabase-db:
-        condition: service_healthy
-    networks:
-      - backend
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 7. PGBOUNCER — Connection Pooling (CRITICO: transaction mode para RLS)
-  # ─────────────────────────────────────────────────────────────────────────────
-  pgbouncer:
-    image: edoburu/pgbouncer:1.22.0
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@supabase-db:5432/${POSTGRES_DB}"
-      POOL_MODE: transaction
-      MAX_CLIENT_CONN: 200
-      DEFAULT_POOL_SIZE: 20
-      MIN_POOL_SIZE: 5
-      RESERVE_POOL_SIZE: 5
-      RESERVE_POOL_TIMEOUT: 3
-      SERVER_RESET_QUERY: "DISCARD ALL"
-      AUTH_TYPE: scram-sha-256
-    depends_on:
-      supabase-db:
-        condition: service_healthy
-    ports:
-      - "6432:6432"
-    networks:
-      - backend
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h localhost -p 6432"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # 8. REDIS — Cache + Broker Celery + Dedup webhooks
+  # 3. REDIS — Cache + Broker Celery + Dedup webhooks
   #    DB 0: Celery broker | DB 1: Celery results | DB 2: App cache
   # ─────────────────────────────────────────────────────────────────────────────
   redis:
@@ -258,7 +122,7 @@ services:
       retries: 3
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 9. CELERY-WEBHOOKS — Worker para procesamiento de webhooks entrantes
+  # 4. CELERY-WEBHOOKS — Worker para procesamiento de webhooks entrantes
   #    Concurrencia: 4 (alta frecuencia, bajo CPU)
   # ─────────────────────────────────────────────────────────────────────────────
   celery-webhooks:
@@ -274,7 +138,7 @@ services:
       --loglevel=${LOG_LEVEL:-info}
       -n webhooks@%h
     environment:
-      - PGBOUNCER_URL=${PGBOUNCER_URL}
+      - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
@@ -285,8 +149,6 @@ services:
       - LOG_LEVEL=${LOG_LEVEL}
       - LOG_FORMAT=${LOG_FORMAT}
     depends_on:
-      pgbouncer:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -299,8 +161,8 @@ services:
       start_period: 40s
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 10. CELERY-AI — Worker para inferencia LLM y agentes LangGraph
-  #     Concurrencia: 2 (alto CPU/memoria, llamadas API lentas)
+  # 5. CELERY-AI — Worker para inferencia LLM y agentes LangGraph
+  #    Concurrencia: 2 (alto CPU/memoria, llamadas API lentas)
   # ─────────────────────────────────────────────────────────────────────────────
   celery-ai:
     build:
@@ -315,7 +177,7 @@ services:
       --loglevel=${LOG_LEVEL:-info}
       -n ai@%h
     environment:
-      - PGBOUNCER_URL=${PGBOUNCER_URL}
+      - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
@@ -328,8 +190,6 @@ services:
       - LOG_LEVEL=${LOG_LEVEL}
       - LOG_FORMAT=${LOG_FORMAT}
     depends_on:
-      pgbouncer:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -342,8 +202,8 @@ services:
       start_period: 40s
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 11. CELERY-DOCUMENTS — Worker para ingestion de documentos y OCR
-  #     Concurrencia: 2 (I/O pesado, requiere tesseract-ocr)
+  # 6. CELERY-DOCUMENTS — Worker para ingestion de documentos y OCR
+  #    Concurrencia: 2 (I/O pesado, requiere tesseract-ocr)
   # ─────────────────────────────────────────────────────────────────────────────
   celery-documents:
     build:
@@ -358,7 +218,7 @@ services:
       --loglevel=${LOG_LEVEL:-info}
       -n documents@%h
     environment:
-      - PGBOUNCER_URL=${PGBOUNCER_URL}
+      - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
@@ -368,8 +228,6 @@ services:
       - LOG_LEVEL=${LOG_LEVEL}
       - LOG_FORMAT=${LOG_FORMAT}
     depends_on:
-      pgbouncer:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -382,8 +240,8 @@ services:
       start_period: 40s
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 12. CELERY-NOTIFICATIONS — Worker para envio de notificaciones
-  #     Concurrencia: 2 (I/O bound, llamadas a APIs externas)
+  # 7. CELERY-NOTIFICATIONS — Worker para envio de notificaciones
+  #    Concurrencia: 2 (I/O bound, llamadas a APIs externas)
   # ─────────────────────────────────────────────────────────────────────────────
   celery-notifications:
     build:
@@ -398,7 +256,7 @@ services:
       --loglevel=${LOG_LEVEL:-info}
       -n notifications@%h
     environment:
-      - PGBOUNCER_URL=${PGBOUNCER_URL}
+      - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
@@ -407,8 +265,6 @@ services:
       - LOG_LEVEL=${LOG_LEVEL}
       - LOG_FORMAT=${LOG_FORMAT}
     depends_on:
-      pgbouncer:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -421,8 +277,8 @@ services:
       start_period: 40s
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 13. CELERY-BULK — Worker para operaciones masivas (broadcast, imports)
-  #     Concurrencia: 1 (operaciones secuenciales pesadas)
+  # 8. CELERY-BULK — Worker para operaciones masivas (broadcast, imports)
+  #    Concurrencia: 1 (operaciones secuenciales pesadas)
   # ─────────────────────────────────────────────────────────────────────────────
   celery-bulk:
     build:
@@ -437,7 +293,7 @@ services:
       --loglevel=${LOG_LEVEL:-info}
       -n bulk@%h
     environment:
-      - PGBOUNCER_URL=${PGBOUNCER_URL}
+      - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
@@ -446,8 +302,6 @@ services:
       - LOG_LEVEL=${LOG_LEVEL}
       - LOG_FORMAT=${LOG_FORMAT}
     depends_on:
-      pgbouncer:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -460,7 +314,51 @@ services:
       start_period: 40s
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 14. CELERY-BEAT — Scheduler para tareas periodicas
+  # 9. CELERY-LEAD-ENRICHMENT — Worker para enriquecimiento asincrono de leads
+  #    Concurrencia: 2 (llamadas a APIs externas: Clearbit, Hunter, etc.)
+  #    ADR-022: Pipeline de enriquecimiento asincrono
+  # ─────────────────────────────────────────────────────────────────────────────
+  celery-lead-enrichment:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    command: >
+      celery -A app.tasks.celery_config worker
+      -Q lead_enrichment
+      -c ${CELERY_ENRICHMENT_CONCURRENCY:-2}
+      --loglevel=${LOG_LEVEL:-info}
+      -n lead-enrichment@%h
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CLEARBIT_API_KEY=${CLEARBIT_API_KEY}
+      - HUNTER_API_KEY=${HUNTER_API_KEY}
+      - VAPI_API_KEY=${VAPI_API_KEY}
+      - VAPI_PHONE_NUMBER=${VAPI_PHONE_NUMBER}
+      - BLAND_AI_API_KEY=${BLAND_AI_API_KEY}
+      - BLAND_AI_PHONE_NUMBER=${BLAND_AI_PHONE_NUMBER}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - LOG_FORMAT=${LOG_FORMAT}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_config inspect ping -d lead-enrichment@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 10. CELERY-BEAT — Scheduler para tareas periodicas
   # ─────────────────────────────────────────────────────────────────────────────
   celery-beat:
     build:
@@ -473,7 +371,7 @@ services:
       --loglevel=${LOG_LEVEL:-info}
       --schedule=/tmp/celerybeat-schedule
     environment:
-      - PGBOUNCER_URL=${PGBOUNCER_URL}
+      - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
@@ -485,7 +383,7 @@ services:
       - backend
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 15. PROMETHEUS — Recoleccion de metricas
+  # 11. PROMETHEUS — Recoleccion de metricas
   # ─────────────────────────────────────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:v2.54.1
@@ -509,7 +407,7 @@ services:
       retries: 3
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 16. GRAFANA — Dashboards de observabilidad
+  # 12. GRAFANA — Dashboards de observabilidad
   # ─────────────────────────────────────────────────────────────────────────────
   grafana:
     image: grafana/grafana:11.2.0
@@ -548,10 +446,6 @@ networks:
 # VOLUMENES PERSISTENTES
 # ═══════════════════════════════════════════════════════════════════════════════
 volumes:
-  postgres_data:
-    driver: local
-  storage_data:
-    driver: local
   redis_data:
     driver: local
   prometheus_data:

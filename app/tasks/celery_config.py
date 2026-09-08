@@ -1,7 +1,7 @@
 """Configuracion de Celery — Plataforma SaaS Omnicanal Multi-Tenant.
 
 Define colas, routing y configuracion del broker/backend.
-5 colas especializadas con routing automatico por nombre de tarea.
+6 colas especializadas con routing automatico por nombre de tarea.
 
 Colas:
     - webhooks: Procesamiento de webhooks entrantes (c=4)
@@ -9,6 +9,7 @@ Colas:
     - documents: Ingestion de documentos y OCR (c=2)
     - notifications: Envio de notificaciones (c=2)
     - bulk: Operaciones masivas secuenciales (c=1)
+    - lead_enrichment: Enriquecimiento asincrono de leads (c=2) — ADR-022
 """
 
 import os
@@ -73,6 +74,11 @@ celery_app.conf.update(
             Exchange("bulk", type="direct"),
             routing_key="bulk",
         ),
+        Queue(
+            "lead_enrichment",
+            Exchange("lead_enrichment", type="direct"),
+            routing_key="lead_enrichment",
+        ),
     ),
 
     # ─── Routing automatico por nombre de tarea ────────────────────────────
@@ -82,6 +88,7 @@ celery_app.conf.update(
         "app.tasks.document_*": {"queue": "documents"},
         "app.tasks.notification_*": {"queue": "notifications"},
         "app.tasks.bulk_*": {"queue": "bulk"},
+        "app.tasks.enrichment_*": {"queue": "lead_enrichment"},
     },
 
     # Cola por defecto si no matchea ningun patron
@@ -98,6 +105,16 @@ celery_app.conf.update(
             "task": "app.tasks.notification_check_token_budgets",
             "schedule": 3600.0,  # cada hora
             "options": {"queue": "notifications"},
+        },
+        "recalculate-lead-scores": {
+            "task": "app.tasks.enrichment_recalculate_scores",
+            "schedule": 1800.0,  # cada 30 minutos
+            "options": {"queue": "lead_enrichment"},
+        },
+        "check-stale-leads": {
+            "task": "app.tasks.enrichment_check_stale_leads",
+            "schedule": 3600.0,  # cada hora
+            "options": {"queue": "lead_enrichment"},
         },
     },
 )
