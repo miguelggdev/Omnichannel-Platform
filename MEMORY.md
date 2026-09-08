@@ -207,12 +207,30 @@
 |---|---|---|
 | 25 | `agent_action_logs` | Log de acciones de cada nodo LangGraph por conversación |
 | 26 | `admin_assistant_history` | Historial de conversaciones del Admin Assistant por tenant/usuario |
+### Fase 3 (Lead Management) — 10 tablas
+| # | Tabla | Propósito |
+|---|---|---|
+| 27 | `lead_pipeline_stages` | Etapas configurables del pipeline por tenant |
+| 28 | `leads` | Entidad principal de lead (extiende contact con datos de ventas) |
+| 29 | `lead_sources` | Fuentes de captura configuradas por tenant |
+| 30 | `lead_activities` | Log de actividades por lead (llamadas, emails, cambios de etapa) |
+| 31 | `lead_scores` | Historial de scoring (FIT, behavioral, AI) |
+| 32 | `lead_sequences` | Secuencias de follow-up automatizadas |
+| 33 | `lead_sequence_steps` | Pasos individuales de cada secuencia |
+| 34 | `lead_sequence_enrollments` | Leads inscritos en secuencias activas |
+| 35 | `deals` | Oportunidades de venta con valor y probabilidad |
+| 36 | `scheduled_calls` | Llamadas agendadas (IA o humanas) |
 
 ### Enums importantes
 - **conversation_status:** `new`, `bot_active`, `human_active`, `waiting_human`, `waiting_client`, `resolved`, `archived`
 - **message_direction:** `inbound`, `outbound`
 - **message_type:** `text`, `image`, `audio`, `video`, `document`, `location`, `template`, `interactive`
 - **user_role:** `super_admin`, `admin`, `supervisor`, `agent`
+- **lead_stage_type:** `new`, `enriched`, `qualified`, `assigned`, `follow_up`, `meeting_scheduled`, `proposal`, `negotiation`, `won`, `lost`, `disqualified`
+- **lead_source_type:** `web_form`, `linkedin`, `facebook_ad`, `google_ad`, `instagram`, `referral`, `manual`, `api`, `whatsapp`, `import`
+- **deal_stage:** `new_contact`, `qualified`, `proposal`, `negotiation`, `closed_won`, `closed_lost`
+- **call_type:** `ai_voice`, `human`, `hybrid`
+- **call_status:** `pending`, `confirmed`, `in_progress`, `completed`, `no_show`, `cancelled`, `rescheduled`
 
 ---
 
@@ -233,6 +251,7 @@
 9. `celery-beat` — Scheduler periódico
 10. `prometheus` — Métricas
 11. `grafana` — Dashboards
+12. `celery-lead-enrichment` — Worker cola enrichment de leads (Sprint 6)
 
 ### Variables de entorno críticas — Actualizado por ADR-020
 - `DATABASE_URL` — Connection string via Supavisor Transaction Pooler (puerto 6543, para la app)
@@ -257,6 +276,16 @@
 - `ADMIN_ASSISTANT_MODEL` — Modelo Claude a usar (default: claude-sonnet-4-20250514)
 - `ADMIN_ASSISTANT_MAX_TOKENS` — Máximo de tokens por respuesta del asistente (default: 1024)
 - `ADMIN_ASSISTANT_RATE_LIMIT` — Límite de mensajes por minuto por admin (default: 20)
+#### Variables Lead Management (Sprints 5-8)
+- `CLEARBIT_API_KEY` — API key de Clearbit (enrichment de empresas y contactos)
+- `HUNTER_API_KEY` — API key de Hunter.io (verificación de emails)
+- `VAPI_API_KEY` — API key de Vapi.ai (llamadas con voz IA)
+- `VAPI_PHONE_NUMBER` — Número de teléfono Vapi.ai
+- `BLAND_AI_API_KEY` — API key de Bland.ai (llamadas con voz IA, alternativa)
+- `BLAND_AI_PHONE_NUMBER` — Número de teléfono Bland.ai
+- `PHANTOMBUSTER_API_KEY` — API key de PhantomBuster (scraping LinkedIn)
+- `FB_ADS_ACCESS_TOKEN` — Access Token de Facebook Ads API (captura de leads)
+- `GOOGLE_ADS_API_KEY` — API key de Google Ads (captura de leads)
 
 ---
 
@@ -272,6 +301,7 @@
 | 2026-09-05 | Sesión 6 | Eliminación de branch `develop` (feature/* → main directo). Dev Playbook artifact con 8 agentes + 6 roles secundarios. 5 funcionalidades adicionales: pre-commit hooks, GitHub Actions CI (8 stages), Alembic migration checks, RLS tests expandidos (25 tablas), Grafana Token Budget dashboard. Transferencia de 14+ archivos a PC vía device bridge |
 | 2026-09-06 | Sesión 7 | Análisis del proyecto voz existente (AGENTE CONVERSACIONAL). Diseño de feature #12: Admin Assistant (chat+voz) con Claude + Edge TTS + Web Speech API. Spec completa (`specs/sprint-03-addendum-admin-assistant.md`). DDL: nueva tabla `admin_assistant_history` (#26), campos `admin_assistant_enabled`/`admin_assistant_voice_enabled` en `clients`, RLS + índices. ADR-019 |
 | 2026-09-06 | Sesión 8 | Sprint 2 completo: docker-compose.yml (16 servicios), Dockerfile multi-stage, Traefik v3 (static + dynamic config + TLS), Celery config (5 colas + beat schedule), wait-for-it.sh, .dockerignore, .env.example actualizado (ANTHROPIC_API_KEY, ADMIN_ASSISTANT_*, META vars, REALTIME_SECRET_KEY_BASE). Actualización de Admin Assistant spec con patrón WebMCP/UI Actions (F6) |
+| 2026-09-08 | Sesión 9 | Merge PR #1 (Supabase Cloud migration, ADR-020) a main. Diseño completo del módulo Lead Management (Sprints 5-8): análisis de BuilderX/AI CRM, pipeline de 8 etapas (CAPTURA→ENRIQUECE→CALIFICA→ASIGNA→FOLLOW-UP→AGENDA→MIDE→CIERRA), 10 tablas nuevas (#27-36), triple scoring (FIT+Behavioral+AI), secuencias multi-canal con RAG, integración Vapi/Bland.ai para voz IA, theming configurable por tenant. 5 ADRs nuevos (#021-025). Spec en `specs/sprint-16-19-lead-management.md` |
 
 ---
 
@@ -325,3 +355,36 @@
   - El DDL de Sprint 1 (antes `supabase/init/init.sql`) pasa a vivir como migración de Alembic en `migrations/versions/`.
   - Se pierde configuración avanzada de PostgreSQL fuera de lo que expone Supabase Cloud — esto sí es una limitación real. Revisar si ADR-012 (streaming replication a VPS secundario) sigue siendo necesario, dado que Supabase Cloud ya incluye point-in-time recovery gestionado.
   - **Importante:** el trabajo de Sprint 1 y 2 registrado en PROGRESS.md como "Completado" (docker-compose de 16 servicios, `init.sql` de 520+ líneas, etc.) fue diseñado sobre el esquema self-hosted en una sesión previa y — según el propio PROGRESS.md — nunca se pusheó al repo. Antes de subirlo hay que ajustarlo a este ADR, o se reintroduce todo lo que este cambio elimina.
+
+### ADR-021: Lead Management como módulo activable por tenant
+- **Fecha:** 2026-09-08
+- **Contexto:** No todos los tenants necesitan lead management. Agregarlo a todos incrementa complejidad de UI y costo.
+- **Decisión:** Campo `lead_management_enabled` en `clients`. El middleware solo carga rutas de leads si está habilitado. El onboarding crea pipeline stages por defecto al activar.
+- **Consecuencia:** Los endpoints de leads retornan 403 si el módulo no está habilitado para el tenant.
+
+### ADR-022: Lead scoring triple (FIT + Behavioral + AI)
+- **Fecha:** 2026-09-08
+- **Contexto:** BuilderX usa solo FIT Score. Un score único no captura engagement ni contexto conversacional.
+- **Decisión:** 3 dimensiones con pesos configurables por tenant (default 40/30/30):
+  - **FIT Score:** Match con ICP (industria, tamaño, cargo, región). Estático.
+  - **Behavioral Score:** Engagement (respuestas, velocidad, clicks). Dinámico.
+  - **AI Score:** Claude/GPT analiza conversaciones y da score + reasoning. Periódico.
+- **Consecuencia:** `total_score` es columna GENERATED ALWAYS. Recalculación: FIT al enriquecer, Behavioral en cada interacción, AI cada 24h o al cambiar de etapa.
+
+### ADR-023: Secuencias de follow-up multi-canal con RAG
+- **Fecha:** 2026-09-08
+- **Contexto:** El follow-up genérico tiene baja tasa de respuesta. Personalizar con el knowledge base del negocio mejora conversión.
+- **Decisión:** El nodo LangGraph de generación de mensajes de follow-up usa: contexto del lead, RAG del knowledge base del tenant, few-shot de approved_responses, y canal óptimo del lead.
+- **Consecuencia:** Cada mensaje de follow-up consume tokens (controlado por TokenBudgetGuard). La cola `ai_inference` procesa la generación.
+
+### ADR-024: Vapi + Bland.ai como providers de voz IA (patrón ABC)
+- **Fecha:** 2026-09-08
+- **Contexto:** Se necesitan llamadas con voz IA para follow-up y calificación. Depender de un solo proveedor es riesgo.
+- **Decisión:** Crear `VoiceCallProvider` ABC con métodos: `initiate_call`, `get_status`, `get_recording`, `get_transcript`. Implementaciones: `VapiProvider`, `BlandAiProvider`. Factory resuelve por config del tenant.
+- **Consecuencia:** Patrón idéntico a `MessagingProvider` (ADR-003). Cada tenant configura su proveedor de voz. Los recordings se almacenan en Supabase Storage.
+
+### ADR-025: Theming configurable por tenant
+- **Fecha:** 2026-09-08
+- **Contexto:** El frontend necesita soportar dark/orange (inspirado en BuilderX), dark/blue, light mode, toggle, y acento configurable.
+- **Decisión:** `clients.theme_config` JSONB con: `mode` (dark/light/system), `accent` (hex color), `variant` (default/compact). El frontend Next.js usa CSS custom properties + next-themes.
+- **Consecuencia:** Las CSS variables se generan dinámicamente desde `theme_config`. shadcn/ui soporta theming nativo con HSL variables.
