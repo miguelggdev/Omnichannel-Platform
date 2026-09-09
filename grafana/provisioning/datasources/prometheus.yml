@@ -1,0 +1,25 @@
+# =============================================================================
+# Grafana — Provisioning de Datasource (Prometheus)
+# =============================================================================
+# Referencia: https://grafana.com/docs/grafana/latest/administration/provisioning/#data-sources
+# El datasource se resuelve por DNS interno de la red "backend" de
+# docker-compose.yml (Sprint 2): el host "prometheus" es el nombre del
+# servicio, no localhost.
+#
+# Sin credenciales ni secretos: Prometheus local no requiere autenticacion.
+# =============================================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Coincide con scrape_interval en prometheus/prometheus.yml (Sprint 2).
+      timeInterval: "15s"
+      httpMethod: POST
