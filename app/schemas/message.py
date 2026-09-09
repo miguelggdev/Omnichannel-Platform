@@ -1,6 +1,7 @@
 """Schemas de Message — CRUD de mensajes."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,14 +17,14 @@ class MessageCreate(BaseModel):
     media_url: str | None = None
     sender_type: str = Field(max_length=20)
     sender_id: UUID | None = None
-    metadata: dict = {}
+    metadata: dict[str, Any] = {}
 
 
 class MessageUpdate(BaseModel):
     """Schema para actualizar un mensaje."""
 
     content: str | None = None
-    metadata: dict | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class MessageResponse(BaseModel):

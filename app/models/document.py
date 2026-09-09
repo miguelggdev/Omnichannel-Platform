@@ -1,6 +1,7 @@
 """Modelo Document — Documentos de base de conocimiento por tenant."""
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import DateTime, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
@@ -32,7 +33,7 @@ class Document(TenantBaseModel):
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, server_default="0")
     status: Mapped[str] = mapped_column(String(20), server_default="pending")
-    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, server_default="{}")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, server_default="{}")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

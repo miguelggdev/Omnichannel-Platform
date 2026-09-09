@@ -1,6 +1,7 @@
 """Schemas de Document — CRUD de documentos del knowledge base."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,7 +15,7 @@ class DocumentCreate(BaseModel):
     file_type: str | None = None
     file_size: int | None = None
     content: str | None = None
-    metadata: dict = {}
+    metadata: dict[str, Any] = {}
 
 
 class DocumentUpdate(BaseModel):
@@ -23,7 +24,7 @@ class DocumentUpdate(BaseModel):
     title: str | None = None
     content: str | None = None
     status: str | None = None
-    metadata: dict | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class DocumentResponse(BaseModel):

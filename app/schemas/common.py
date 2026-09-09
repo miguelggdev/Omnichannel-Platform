@@ -1,6 +1,6 @@
 """Schemas comunes — Paginación, errores, respuestas genéricas."""
 
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -48,4 +48,4 @@ class ErrorResponse(BaseModel):
 
     error_code: str
     message: str
-    details: dict | None = None
+    details: dict[str, Any] | None = None

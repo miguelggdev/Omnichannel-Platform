@@ -39,7 +39,7 @@ async def get_current_user(request: Request) -> dict[str, Any]:
     }
 
 
-def require_role(*allowed_roles: str) -> Callable:
+def require_role(*allowed_roles: str) -> Callable[..., Any]:
     """Factory de dependency que verifica que el usuario tenga un rol permitido.
 
     Jerarquía de roles:

@@ -1,5 +1,6 @@
 """Modelo AgentConfig — Configuración del agente IA por tenant."""
 
+from typing import Any
 from uuid import UUID as _UUID
 
 from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
@@ -39,7 +40,7 @@ class AgentConfig(TenantBaseModel):
     training_mode: Mapped[bool] = mapped_column(Boolean, server_default="false")
     similarity_threshold: Mapped[float] = mapped_column(server_default="0.80")
     handoff_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    config: Mapped[dict] = mapped_column(JSONB, server_default="{}")
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true")
 
     # Relationships

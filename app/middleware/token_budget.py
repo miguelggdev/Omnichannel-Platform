@@ -9,6 +9,7 @@ Niveles (ADR-004):
     - >= 100%: exceeded (rechaza y hace handoff a humano)
 """
 
+from typing import Any
 from uuid import UUID
 
 
@@ -26,7 +27,7 @@ class TokenBudgetGuard:
     THRESHOLD_DEGRADED: int = 90
     THRESHOLD_EXCEEDED: int = 100
 
-    async def check_budget(self, client_id: UUID) -> dict:
+    async def check_budget(self, client_id: UUID) -> dict[str, Any]:
         """Verifica el presupuesto de tokens para un tenant.
 
         Args:

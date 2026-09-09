@@ -13,9 +13,9 @@ from fastapi.responses import JSONResponse
 logger = logging.getLogger(__name__)
 
 # Códigos de error estándar
-MISSING_TOKEN = "MISSING_TOKEN"  # noqa: S105
-TOKEN_EXPIRED = "TOKEN_EXPIRED"  # noqa: S105
-INVALID_TOKEN = "INVALID_TOKEN"  # noqa: S105
+MISSING_TOKEN = "MISSING_TOKEN"  # noqa: S105  # nosec B105
+TOKEN_EXPIRED = "TOKEN_EXPIRED"  # noqa: S105  # nosec B105
+INVALID_TOKEN = "INVALID_TOKEN"  # noqa: S105  # nosec B105
 FORBIDDEN = "FORBIDDEN"
 NOT_FOUND = "NOT_FOUND"
 DUPLICATE = "DUPLICATE"

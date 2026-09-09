@@ -1,6 +1,7 @@
 """Schemas de Conversation — CRUD de conversaciones."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -12,7 +13,7 @@ class ConversationCreate(BaseModel):
     contact_id: UUID
     channel: str = Field(max_length=50)
     subject: str | None = Field(default=None, max_length=255)
-    metadata: dict = {}
+    metadata: dict[str, Any] = {}
 
 
 class ConversationUpdate(BaseModel):
@@ -21,7 +22,7 @@ class ConversationUpdate(BaseModel):
     status: str | None = None
     assigned_user_id: UUID | None = None
     subject: str | None = None
-    metadata: dict | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class ConversationResponse(BaseModel):

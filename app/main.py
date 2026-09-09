@@ -5,6 +5,7 @@ aisladas (producción y testing).
 """
 
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
@@ -13,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.internal.health import router as health_router
 from app.api.v1.auth import router as auth_router
-from app.core.config import settings
+from app.core.config import get_settings
 from app.core.database import dispose_db, init_db
 from app.core.exceptions import (
     AppException,
@@ -23,14 +24,14 @@ from app.core.exceptions import (
 from app.middleware.tenant_context import TenantContextMiddleware
 
 logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
+    level=getattr(logging, get_settings().LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
 )
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Inicialización y limpieza de recursos.
 
     Startup: verifica conexión a DB y Redis.
@@ -43,13 +44,13 @@ async def lifespan(app: FastAPI):
         Control al framework mientras la app está activa.
     """
     # ── Startup ──
-    logger.info("Iniciando aplicación — env=%s", settings.APP_ENV)
+    logger.info("Iniciando aplicación — env=%s", get_settings().APP_ENV)
 
     # Verificar DB
     await init_db()
 
     # Verificar Redis
-    redis_client = aioredis.from_url(settings.REDIS_URL)
+    redis_client = aioredis.from_url(get_settings().REDIS_URL)
     try:
         await redis_client.ping()
         logger.info("Conexión a Redis verificada")
@@ -63,7 +64,7 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ──
     logger.info("Cerrando aplicación...")
-    await redis_client.aclose()
+    await redis_client.close()
     await dispose_db()
     logger.info("Aplicación cerrada")
 
@@ -91,7 +92,7 @@ def create_app() -> FastAPI:
     # Orden importa: último registrado = primero ejecutado
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.CORS_ORIGINS,
+        allow_origins=get_settings().CORS_ORIGINS,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -99,7 +100,7 @@ def create_app() -> FastAPI:
     app.add_middleware(TenantContextMiddleware)
 
     # ── Exception handlers ──
-    app.add_exception_handler(AppException, app_exception_handler)
+    app.add_exception_handler(AppException, app_exception_handler)  # type: ignore[arg-type]
     app.add_exception_handler(Exception, unhandled_exception_handler)
 
     # ── Routers ──

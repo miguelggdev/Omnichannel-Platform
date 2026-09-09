@@ -5,6 +5,7 @@ resolved, archived.
 """
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID as _UUID
 
 from sqlalchemy import DateTime, Enum, ForeignKey, String, func
@@ -55,7 +56,7 @@ class Conversation(TenantBaseModel):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
     subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, server_default="{}")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, server_default="{}")
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(

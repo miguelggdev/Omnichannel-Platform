@@ -1,6 +1,7 @@
 """Schemas de Client — CRUD de tenants."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,7 +19,7 @@ class ClientCreate(BaseModel):
     name: str = Field(max_length=255)
     slug: str = Field(max_length=100, pattern=r"^[a-z0-9-]+$")
     plan: str = "free"
-    settings: dict = {}
+    settings: dict[str, Any] = {}
 
 
 class ClientUpdate(BaseModel):
@@ -26,12 +27,12 @@ class ClientUpdate(BaseModel):
 
     name: str | None = None
     plan: str | None = None
-    settings: dict | None = None
+    settings: dict[str, Any] | None = None
     is_active: bool | None = None
     admin_assistant_enabled: bool | None = None
     admin_assistant_voice_enabled: bool | None = None
     lead_management_enabled: bool | None = None
-    theme_config: dict | None = None
+    theme_config: dict[str, Any] | None = None
     alert_message: str | None = None
 
 
@@ -44,12 +45,12 @@ class ClientResponse(BaseModel):
     name: str
     slug: str
     plan: str
-    settings: dict
+    settings: dict[str, Any]
     is_active: bool
     admin_assistant_enabled: bool
     admin_assistant_voice_enabled: bool
     lead_management_enabled: bool
-    theme_config: dict
+    theme_config: dict[str, Any]
     created_at: datetime
     updated_at: datetime
 

@@ -1,6 +1,7 @@
 """Modelo Message — Mensajes entrantes y salientes."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID as _UUID
 
 from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, func
@@ -54,7 +55,7 @@ class Message(TenantBaseModel):
     external_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     sender_type: Mapped[str] = mapped_column(String(20), nullable=False)
     sender_id: Mapped[_UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, server_default="{}")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, server_default="{}")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

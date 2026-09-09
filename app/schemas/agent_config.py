@@ -1,5 +1,6 @@
 """Schemas de AgentConfig — Configuración del agente IA."""
 
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,7 +18,7 @@ class AgentConfigCreate(BaseModel):
     training_mode: bool = False
     similarity_threshold: float = Field(default=0.80, ge=0.0, le=1.0)
     handoff_message: str | None = None
-    config: dict = {}
+    config: dict[str, Any] = {}
 
 
 class AgentConfigUpdate(BaseModel):
@@ -32,7 +33,7 @@ class AgentConfigUpdate(BaseModel):
     training_mode: bool | None = None
     similarity_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     handoff_message: str | None = None
-    config: dict | None = None
+    config: dict[str, Any] | None = None
     is_active: bool | None = None
 
 
@@ -52,7 +53,7 @@ class AgentConfigResponse(BaseModel):
     training_mode: bool
     similarity_threshold: float
     handoff_message: str | None
-    config: dict
+    config: dict[str, Any]
     is_active: bool
 
 

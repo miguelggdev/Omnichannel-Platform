@@ -5,6 +5,8 @@ DATABASE_URL apunta al Transaction Pooler de Supabase Cloud (Supavisor, puerto 6
 DATABASE_URL_DIRECT es SOLO para migraciones Alembic (conexión directa, puerto 5432).
 """
 
+from functools import lru_cache
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -97,4 +99,11 @@ class Settings(BaseSettings):
         return v
 
 
-settings = Settings()
+@lru_cache
+def get_settings() -> Settings:
+    """Obtener instancia singleton de Settings (lazy).
+
+    Usa lru_cache para instanciar solo una vez, evitando
+    errores de validación al importar sin env vars (e.g. en tests).
+    """
+    return Settings()

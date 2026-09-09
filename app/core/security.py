@@ -4,12 +4,13 @@ JWT con python-jose (HS256). Password hashing con passlib/bcrypt.
 Payload JWT: { user_id, client_id, email, role, exp, type }.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 
 from jose import ExpiredSignatureError, JWTError, jwt
 from passlib.context import CryptContext
 
-from app.core.config import settings
+from app.core.config import get_settings
 from app.core.exceptions import JWTExpiredError, JWTInvalidError
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -24,7 +25,7 @@ def hash_password(password: str) -> str:
     Returns:
         Hash bcrypt del password.
     """
-    return pwd_context.hash(password)
+    return cast("str", pwd_context.hash(password))
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -37,11 +38,11 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     Returns:
         True si el password coincide.
     """
-    return pwd_context.verify(plain_password, hashed_password)
+    return cast("bool", pwd_context.verify(plain_password, hashed_password))
 
 
 def create_access_token(
-    data: dict,
+    data: dict[str, Any],
     expires_delta: timedelta | None = None,
 ) -> str:
     """Crea un access token JWT.
@@ -54,14 +55,17 @@ def create_access_token(
         Token JWT codificado.
     """
     to_encode = data.copy()
-    expire = datetime.now(UTC) + (
-        expires_delta or timedelta(minutes=settings.JWT_EXPIRATION_MINUTES)
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=get_settings().JWT_EXPIRATION_MINUTES)
     )
     to_encode.update({"exp": expire, "type": "access"})
-    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+    return cast(
+        "str",
+        jwt.encode(to_encode, get_settings().JWT_SECRET, algorithm=get_settings().JWT_ALGORITHM),
+    )
 
 
-def create_refresh_token(data: dict) -> str:
+def create_refresh_token(data: dict[str, Any]) -> str:
     """Crea un refresh token JWT con expiración de 7 días.
 
     Args:
@@ -71,12 +75,15 @@ def create_refresh_token(data: dict) -> str:
         Refresh token JWT codificado.
     """
     to_encode = data.copy()
-    expire = datetime.now(UTC) + timedelta(days=settings.JWT_REFRESH_EXPIRATION_DAYS)
+    expire = datetime.now(timezone.utc) + timedelta(days=get_settings().JWT_REFRESH_EXPIRATION_DAYS)
     to_encode.update({"exp": expire, "type": "refresh"})
-    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+    return cast(
+        "str",
+        jwt.encode(to_encode, get_settings().JWT_SECRET, algorithm=get_settings().JWT_ALGORITHM),
+    )
 
 
-def decode_jwt(token: str) -> dict:
+def decode_jwt(token: str) -> dict[str, Any]:
     """Decodifica y valida un token JWT.
 
     Args:
@@ -90,7 +97,9 @@ def decode_jwt(token: str) -> dict:
         JWTInvalidError: Si el token es inválido o corrupto.
     """
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+        payload: dict[str, Any] = jwt.decode(
+            token, get_settings().JWT_SECRET, algorithms=[get_settings().JWT_ALGORITHM]
+        )
         return payload
     except ExpiredSignatureError as err:
         raise JWTExpiredError("Token expirado") from err

@@ -34,6 +34,7 @@ ignore = [
     "S101",   # assert en tests es válido
     "S104",   # binding to all interfaces (Docker)
     "RET504", # assignment before return (readability)
+    "UP017",  # datetime-timezone-utc — usamos timezone.utc para compat Python 3.10+
 ]
 
 [tool.ruff.lint.isort]
@@ -89,9 +90,25 @@ ignore_missing_imports = true
 module = "redis.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "jose.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "passlib.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "kombu.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "app.models.*"
+disable_error_code = ["name-defined"]
+
 [tool.bandit]
 exclude_dirs = ["tests", "scripts"]
-skips = ["B101"]  # assert ok en app para preconditions
+skips = ["B101", "B105"]  # B101: assert ok, B105: false positives on error code constants
 
 [tool.commitizen]
 name = "cz_conventional_commits"

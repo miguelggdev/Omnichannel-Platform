@@ -1,6 +1,7 @@
 """Schemas de Contact — CRUD de contactos."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -12,7 +13,7 @@ class ContactCreate(BaseModel):
     first_name: str | None = Field(default=None, max_length=100)
     last_name: str | None = Field(default=None, max_length=100)
     display_name: str | None = Field(default=None, max_length=200)
-    metadata: dict = {}
+    metadata: dict[str, Any] = {}
 
 
 class ContactUpdate(BaseModel):
@@ -21,7 +22,7 @@ class ContactUpdate(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     display_name: str | None = None
-    metadata: dict | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class ContactResponse(BaseModel):

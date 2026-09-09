@@ -4,6 +4,7 @@ Soporta merge de contactos duplicados vía merged_into_id.
 """
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID as _UUID
 
 from sqlalchemy import DateTime, ForeignKey, String, func
@@ -35,7 +36,7 @@ class Contact(TenantBaseModel):
     merged_into_id: Mapped[_UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=True
     )
-    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, server_default="{}")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, server_default="{}")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

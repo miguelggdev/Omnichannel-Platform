@@ -4,6 +4,7 @@ Usa pgvector para la columna embedding vector(1536).
 SIEMPRE filtro pre-vectorial por client_id en WHERE antes del cálculo de distancia.
 """
 
+from typing import Any
 from uuid import UUID as _UUID
 
 from pgvector.sqlalchemy import Vector
@@ -35,7 +36,7 @@ class DocumentChunk(TenantBaseModel):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(1536), nullable=False)
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, server_default="{}")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, server_default="{}")
 
     # Relationships
     document: Mapped["Document"] = relationship("Document", back_populates="chunks")

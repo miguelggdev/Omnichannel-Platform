@@ -5,7 +5,7 @@ POST /api/v1/auth/refresh — refresh_token → nuevo access_token
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter
 from sqlalchemy import select
@@ -94,7 +94,7 @@ async def login(credentials: LoginRequest) -> TokenResponse:
         }
 
         # Actualizar last_login_at
-        user.last_login_at = datetime.now(UTC)
+        user.last_login_at = datetime.now(timezone.utc)
 
         logger.info(
             "Login exitoso: user=%s client=%s role=%s",

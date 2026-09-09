@@ -19,18 +19,18 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.core.config import settings
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 # Motor asíncrono contra Supavisor (Transaction Pooler de Supabase Cloud)
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    get_settings().DATABASE_URL,
     pool_size=20,
     max_overflow=10,
     pool_pre_ping=True,
     pool_recycle=300,
-    echo=settings.APP_ENV == "development",
+    echo=get_settings().APP_ENV == "development",
 )
 
 AsyncSessionLocal = async_sessionmaker(

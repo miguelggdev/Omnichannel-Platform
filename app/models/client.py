@@ -5,6 +5,7 @@ Cada client representa una organización/empresa en la plataforma SaaS.
 """
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID as _UUID
 
 from sqlalchemy import Boolean, DateTime, Enum, String, func
@@ -54,7 +55,7 @@ class Client(Base):
         ),
         server_default="free",
     )
-    settings: Mapped[dict] = mapped_column(JSONB, server_default="{}")
+    settings: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true")
 
     # Admin Assistant (ADR-019)
@@ -65,11 +66,11 @@ class Client(Base):
     lead_management_enabled: Mapped[bool] = mapped_column(Boolean, server_default="false")
 
     # Theme (ADR-025)
-    theme_config: Mapped[dict] = mapped_column(JSONB, server_default="{}")
+    theme_config: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
 
     # Suspensión por pago (ADR-015)
     suspension_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    payment_alert_config: Mapped[dict] = mapped_column(JSONB, server_default="{}")
+    payment_alert_config: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     alert_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

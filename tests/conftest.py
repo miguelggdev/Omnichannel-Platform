@@ -35,7 +35,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Registrar markers personalizados."""
+    """Registrar markers personalizados y setear env vars de testing."""
+    # Env vars requeridas por Settings — valores de testing
+    os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+    os.environ.setdefault("JWT_SECRET", "test-secret-key-minimum-32-characters-long!!")
+    os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key-minimum-32-characters!!")
     config.addinivalue_line(
         "markers",
         "db: marca tests que requieren PostgreSQL activo (usar --run-db)",

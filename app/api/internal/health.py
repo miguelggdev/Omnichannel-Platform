@@ -11,7 +11,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.core.config import settings
+from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
@@ -42,9 +42,9 @@ async def health_check() -> JSONResponse:
 
     # Check Redis
     try:
-        redis_client = aioredis.from_url(settings.REDIS_URL)
+        redis_client = aioredis.from_url(get_settings().REDIS_URL)
         await redis_client.ping()
-        await redis_client.aclose()
+        await redis_client.close()
         checks["redis"] = "ok"
     except Exception as exc:
         logger.warning("Health check Redis failed: %s", exc)
