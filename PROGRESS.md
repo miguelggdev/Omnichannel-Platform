@@ -9,8 +9,8 @@
 
 - **Fase:** 1 — MVP Core
 - **Sprint Activo:** Sprint 2 — Infraestructura Docker
-- **Última actualización:** 2026-09-06
-- **Última sesión:** Sesión 8 — Sprint 2 completo (Docker Compose 16 servicios, Dockerfile, Traefik, Celery, .env.example)
+- **Última actualización:** 2026-09-09
+- **Última sesión:** Sesión 9 — Sprint 2 slice de Dev B (Traefik ping/métricas, Prometheus, Grafana provisioning, healthcheck.sh) + corrección de este archivo, que seguía describiendo la arquitectura self-hosted previa a ADR-020
 
 ---
 
@@ -67,46 +67,67 @@ _(nada en progreso)_
 
 ## Sprint 2: Infraestructura Docker
 
-### Completado
-- [x] `docker-compose.yml` — 16 servicios orquestados con health checks
+> **Corregido 2026-09-09:** este apartado describía 16 servicios con `supabase-db`,
+> `supabase-auth`, `supabase-storage`, `supabase-realtime` y `pgbouncer`, y notas con
+> `PGBOUNCER_URL`. Eso quedó obsoleto con ADR-020 (Supabase Cloud). El
+> `docker-compose.yml` real en `main` ya tenía 12 servicios desde el commit `33f62eb`;
+> era este archivo el que estaba desactualizado.
+
+### Completado — Dev A
+- [x] `docker-compose.yml` — 12 servicios orquestados con health checks (sin Postgres/Auth/Storage: ADR-020)
 - [x] `Dockerfile` — Multi-stage (builder + runner) con tesseract-ocr, usuario no-root
+- [x] `app/tasks/celery_config.py` — 6 colas (webhooks, ai_inference, documents, notifications, bulk, lead_enrichment) + beat schedule
+- [x] `.dockerignore` — 45 reglas de exclusion del contexto Docker
+- [x] `.env.example` — `DATABASE_URL` (pooler Supavisor 6543) + `DATABASE_URL_DIRECT` (migraciones Alembic)
+
+### Completado — Dev B (branch `feature/sprint-02-traefik`, sesión 9)
 - [x] `traefik/traefik.yml` — Configuracion estatica Traefik v3 (entrypoints, providers, logging)
+- [x] `traefik/traefik.yml` — `ping` habilitado: sin él el healthcheck `traefik healthcheck` de compose nunca pasaba a `healthy` (ADR-027)
+- [x] `traefik/traefik.yml` — `metrics.prometheus` sobre el entryPoint interno `traefik` (8080)
 - [x] `traefik/dynamic/middlewares.yml` — Rate limiting, security headers, compresion, CORS
 - [x] `traefik/dynamic/tls.yml` — Certificados autofirmados para desarrollo
-- [x] `app/tasks/celery_config.py` — 5 colas (webhooks, ai_inference, documents, notifications, bulk) + beat schedule
+- [x] `prometheus/prometheus.yml` — Jobs `prometheus`, `traefik`, `api`. El archivo faltaba y compose ya lo montaba, así que el contenedor no arrancaba
+- [x] `grafana/provisioning/datasources/prometheus.yml` — Datasource Prometheus (`uid: prometheus`)
+- [x] `grafana/provisioning/dashboards/dashboards.yml` — Provider de dashboards tipo file
+- [x] `docker-compose.yml` — Montaje de Grafana corregido para que el provisioning se aplique (archivo de Dev A, tocado con autorización explícita y aislado en el commit `005dfb6` — **revisar en el PR**)
 - [x] `scripts/wait-for-it.sh` — Script de espera TCP para dependencias
-- [x] `.dockerignore` — 45 reglas de exclusion del contexto Docker
-- [x] `.env.example` — Actualizado con ANTHROPIC_API_KEY, ADMIN_ASSISTANT_*, META vars, REALTIME_SECRET_KEY_BASE
+- [x] `scripts/healthcheck.sh` — Verifica los 12 servicios, espera hasta 120s, exit 0/1/2/3
 
-### Servicios Docker (16)
+### Servicios Docker (12) — ADR-020
 1. traefik (API Gateway v3)
 2. api (FastAPI x2 replicas)
-3. supabase-db (PostgreSQL 15 + pgvector)
-4. supabase-auth (GoTrue)
-5. supabase-storage (File storage)
-6. supabase-realtime (WebSockets)
-7. pgbouncer (Connection pooling, transaction mode)
-8. redis (Cache + Broker, 3 DBs separadas)
-9. celery-webhooks (c=4)
-10. celery-ai (c=2)
-11. celery-documents (c=2)
-12. celery-notifications (c=2)
-13. celery-bulk (c=1)
-14. celery-beat (Scheduler)
-15. prometheus (Metricas)
-16. grafana (Dashboards)
+3. redis (Cache + Broker, 3 DBs separadas)
+4. celery-webhooks (c=4)
+5. celery-ai (c=2)
+6. celery-documents (c=2)
+7. celery-notifications (c=2)
+8. celery-bulk (c=1)
+9. celery-lead-enrichment (c=2, ADR-022)
+10. celery-beat (Scheduler)
+11. prometheus (Metricas)
+12. grafana (Dashboards)
+
+> PostgreSQL, Auth, Storage y Realtime los provee **Supabase Cloud**. El pooling lo
+> maneja Supavisor (puerto 6543). No hay `pgbouncer` ni contenedores `supabase-*`.
 
 ### Pendiente
-- [ ] Validacion funcional con `docker-compose up -d` (requiere entorno Docker del usuario)
-- [ ] Verificar pgBouncer transaction mode con `SHOW pools`
-- [ ] Verificar que init.sql se ejecuta al crear contenedor PostgreSQL
+- [ ] Validacion funcional con `docker compose up -d` (requiere entorno Docker del usuario) — `scripts/healthcheck.sh` automatiza la verificación
+- [ ] Verificar `SET LOCAL` contra el Transaction Pooler de Supabase Cloud (sustituye a la vieja verificación de `SHOW pools` de pgBouncer)
+- [ ] Correr la migración inicial de Alembic contra `DATABASE_URL_DIRECT` (Dev A) — sustituye a la vieja verificación de `init.sql`
+- [ ] BUG-003: `grafana/dashboards/token-budget-monitoring.json` apunta al datasource `supabase-db`, inexistente con ADR-020 — asignado a Dev A en Sprint 8
+
+### Bloqueadores
+- **`mypy` no está instalado en el entorno** (`No module named mypy` en todos los intérpretes). El Gate 2 pre-PR de METHODOLOGY §7 lo exige. Solución: `pip install mypy`
+- Deuda de lint preexistente en `main`: `ruff check .` reporta 8 errores en `tests/conftest.py` (UP035, 3×SIM117) y `tests/integration/test_rls_all_tables.py` (4×S608). No los introduce Sprint 2; el Gate 1 (`ruff check app/`) está verde
 
 ### Notas para la Proxima Sesion
-- celery-beat no tiene healthcheck (es scheduler, no endpoint)
-- pgBouncer usa `SERVER_RESET_QUERY: "DISCARD ALL"` para limpiar estado entre transacciones
+- celery-beat no tiene healthcheck (es scheduler, no endpoint): `scripts/healthcheck.sh` lo evalúa como `running`, no como `healthy`
 - Redis separado en 3 DBs: 0=broker, 1=results, 2=cache
 - Traefik redirecciona HTTP→HTTPS automaticamente
-- Workers Celery usan PGBOUNCER_URL, nunca DATABASE_URL directo
+- Workers Celery y API usan `DATABASE_URL` (pooler Supavisor). `PGBOUNCER_URL` ya no existe
+- El puerto 8080 de Traefik sirve dashboard, `/ping` y `/metrics`: cerrarlo al exterior en el hardening del Sprint 8 (ADR-027)
+- `accessLog` de Traefik va a stdout, desviación consciente de la spec justificada en ADR-026
+- Los tests marcados `db` (34) siguen en `skipped` hasta tener la BD accesible con `--run-db`
 - Sprint 3 (FastAPI Core & Auth) puede comenzar inmediatamente
 
 ---
@@ -116,7 +137,7 @@ _(nada en progreso)_
 | Sprint | Nombre | Estado | Notas |
 |---|---|---|---|
 | 1 | Schema DDL & Arquitectura | ✅ Completado | 24 tablas, RLS verificado, DDL idempotente |
-| 2 | Infraestructura Docker | ✅ Completado | 16 servicios, Dockerfile multi-stage, Traefik v3, 5 workers Celery |
+| 2 | Infraestructura Docker | 🔄 En revisión | 12 servicios (ADR-020), Dockerfile multi-stage, Traefik v3, 6 colas Celery. Slice de Dev B en PR |
 | 3 | FastAPI Core & Auth | ⬜ Pendiente | |
 | 4 | Webhook Receiver & MessagingProvider | ⬜ Pendiente | YCloud (WhatsApp) + Meta (Instagram DM + Facebook Messenger) |
 | 5 | Pipeline de Documentos & RAG | ⬜ Pendiente | |
