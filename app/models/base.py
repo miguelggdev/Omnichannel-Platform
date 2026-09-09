@@ -8,7 +8,7 @@ Client es la excepción: hereda de Base directamente (es la tabla raíz).
 from datetime import datetime
 from uuid import UUID as _UUID
 
-from sqlalchemy import DateTime, func
+from sqlalchemy import DateTime, ForeignKey, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -40,6 +40,7 @@ class TenantBaseModel(Base):
     )
     client_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True),
+        ForeignKey("clients.id"),
         nullable=False,
         index=True,
     )
