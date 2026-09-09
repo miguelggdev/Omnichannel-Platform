@@ -39,7 +39,11 @@ out() {
 }
 
 usage() {
-    cat << USAGE >&2
+    # Exit code: 0 cuando se pide la ayuda con -h, 2 ante un error de uso.
+    local code="${1:-2}"
+    local stream=2
+    [[ "${code}" -eq 0 ]] && stream=1
+    cat << USAGE >&${stream}
 Uso:
     $HEALTHCHECK_cmdname [-t TIMEOUT] [-q] [-s SERVICIO] [-h]
     -t TIMEOUT   Segundos a esperar a que todos los servicios esten sanos
@@ -55,7 +59,7 @@ Exit codes:
     2 = error de uso (flags invalidos)
     3 = docker/docker compose no disponible
 USAGE
-    exit 2
+    exit "${code}"
 }
 
 # ─── Los 12 servicios de docker-compose.yml (Sprint 2) ─────────────────────
@@ -117,7 +121,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -h)
-            usage
+            usage 0
             ;;
         *)
             echoerr "Argumento desconocido: $1"
