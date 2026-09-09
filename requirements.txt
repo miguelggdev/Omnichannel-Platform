@@ -12,6 +12,7 @@ python-multipart>=0.0.9
 # ─── Database ────────────────────────────────────────────────────────────────
 sqlalchemy[asyncio]>=2.0.25
 asyncpg>=0.29.0
+psycopg2-binary>=2.9.9  # Driver sync para Alembic (env.py convierte asyncpg→postgresql://)
 alembic>=1.13.0
 pgvector>=0.2.5
 
