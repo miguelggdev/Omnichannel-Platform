@@ -53,6 +53,14 @@ async def assert_rls_isolation(
         params: Parámetros del INSERT.
         id_column: Columna ID para filtrar (default: 'id').
         record_id: ID del registro insertado (default: params['id']).
+
+    Note:
+        Las queries interpolan `table` e `id_column` directamente en el SQL
+        (silenciado con `# noqa: S608`) porque son identificadores SQL, que
+        PostgreSQL no permite pasar como parámetros ligados; ambos provienen
+        siempre de la lista fija de tablas declarada en este módulo de tests,
+        nunca de entrada de usuario. Los valores (`rid`) sí se pasan ligados
+        vía `params`.
     """
     rid = record_id or params.get("id")
 
