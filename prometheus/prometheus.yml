@@ -1,0 +1,50 @@
+# =============================================================================
+# Prometheus — Configuracion de Scraping
+# =============================================================================
+# Referencia: https://prometheus.io/docs/prometheus/latest/configuration/configuration/
+# Todos los targets se resuelven por DNS interno de la red "backend" de
+# docker-compose.yml (Sprint 2).
+# =============================================================================
+
+# ─── Global ────────────────────────────────────────────────────────────────
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: omnichannel
+    environment: development  # En produccion se cambia a "production"
+
+# ─── Scrape Configs ────────────────────────────────────────────────────────
+scrape_configs:
+  # Prometheus se scrapea a si mismo.
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+
+  # Metricas del API Gateway (Traefik v3), habilitadas en traefik/traefik.yml
+  # (bloque metrics.prometheus), servidas por el entryPoint interno "traefik".
+  - job_name: traefik
+    static_configs:
+      - targets:
+          - traefik:8080
+    metrics_path: /metrics
+
+  # Metricas del backend FastAPI. El endpoint /metrics se implementa en
+  # Sprint 8 (app/core/metrics.py, Dev A); hasta entonces este target
+  # aparece como DOWN en Prometheus y es el comportamiento esperado.
+  - job_name: api
+    static_configs:
+      - targets:
+          - api:8000
+    metrics_path: /metrics
+
+# ─── Pendiente (Sprint 8) ──────────────────────────────────────────────────
+# Redis y los workers de Celery todavia NO se scrapean: requieren exporters
+# dedicados (redis_exporter / celery-exporter) que no forman parte de los
+# 12 servicios definidos en el Sprint 2. Se evaluan en Sprint 8 junto con
+# el endpoint /metrics del API.
+#
+# No se incluyen jobs de postgres/supabase/pgbouncer: por ADR-020 el
+# proyecto usa Supabase Cloud, no contenedores propios de base de datos,
+# y Supabase Cloud no se scrapea desde este Prometheus local.
