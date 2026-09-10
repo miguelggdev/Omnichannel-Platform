@@ -16,6 +16,21 @@
 
 ## Sprint 1: Schema DDL & Arquitectura
 
+> **Corregido 2026-09-10 (BUG-005, issue #6):** la migración baseline de Alembic
+> (`migrations/versions/001_baseline.py`) no habilitaba RLS en ninguna tabla —
+> las líneas de abajo que dan por hecho "RLS aislamiento verificado" se referían
+> únicamente a `supabase/init/init.sql`, que ADR-020 dejó de ejecutar contra
+> Supabase Cloud. Una base creada solo con Alembic quedaba sin aislamiento entre
+> tenants. Fix: `migrations/versions/002_rls_policies.py` agrega
+> ENABLE/FORCE/CREATE POLICY a las 18 tablas reales, y `.github/workflows/ci.yml`
+> ahora siembra el schema de test vía `alembic upgrade head` (no `init.sql`) y
+> corre `tests/integration/` con `--run-db` (antes se saltaba entero, sin que CI
+> avisara). `tests/unit/test_rls_isolation.py` se eliminó: sus 9 tests tenían
+> `@pytest.mark.skip` individual desde Sprint 1 ("activar cuando init.sql esté
+> ejecutado", algo que su propio `--run-db` nunca disparaba) y probaban columnas
+> que ya no existen (`contacts.phone_number`, `users.full_name`); quedó
+> completamente superado por `tests/integration/test_rls_all_tables.py`.
+
 ### Completado
 - [x] Diseño de arquitectura general (SDD publicado como artifact)
 - [x] Definición de 24 tablas (18 MVP + 6 Fase 2)

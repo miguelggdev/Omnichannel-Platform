@@ -4,6 +4,12 @@
 -- Descomentar y ejecutar cuando se inicien los sprints de Fase 2.
 -- Requiere que init.sql se haya ejecutado previamente.
 -- =============================================================================
+-- ESTADO (2026-09-10, issue #6 / BUG-005): LEGACY junto con init.sql — ver la
+-- nota de estado al inicio de ese archivo. Estas 6 tablas (audit_logs,
+-- tenant_templates, tenant_webhooks, satisfaction_surveys, channel_configs,
+-- agent_action_logs) tampoco existen todavía en ninguna migración de Alembic;
+-- cuando se creen, deben nacer como migraciones (no ejecutando este archivo).
+-- =============================================================================
 
 BEGIN;
 
