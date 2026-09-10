@@ -196,6 +196,26 @@
 - **Detectado:** Sprint 4, Dev B, al revisar cómo resolver el `client_id` de los webhooks.
 - **Estado:** ABIERTO — Dev A. `migrations/versions/*` es suyo en la Matriz §6. Debería resolverse antes de que Sprint 4 llegue a un entorno con datos reales.
 
+### NOTA-001: Los Quality Gates de METHODOLOGY §7 son más laxos que el CI
+- **Descripción:** Verificar en local lo que dice METHODOLOGY §7 no garantiza un CI verde. Dos desajustes reales, ambos me costaron un rebote en el PR #5:
+  - **Gate 1** pide `ruff check app/`. El CI corre además `ruff format app/ tests/ --check --diff`. Un archivo bien lintado puede estar mal formateado.
+  - **Gate 2** pide `mypy app/ --ignore-missing-imports`. El CI corre `mypy app/ --config-file=pyproject.toml` (sin esa flag) y además instala `types-redis` y `sqlalchemy[mypy]`. Con la forma laxa pasaban 8 errores que el CI sí veía: `Redis` es genérico en los stubs (`Redis[str]` con `decode_responses=True`), los stubs de `types-redis` todavía no conocen `aclose()` (hay que usar `close()`), y los imports de módulos aún inexistentes necesitan un override explícito en vez de la flag global.
+- **Cómo verificar de verdad antes de abrir un PR** (los comandos exactos del workflow):
+  ```
+  ruff check app/ tests/
+  ruff format app/ tests/ --check --diff
+  mypy app/ --config-file=pyproject.toml     # con types-redis instalado
+  pytest tests/
+  ```
+- **Pitfall aparte:** correr los gates sobre el working tree y no sobre `HEAD`. Un arreglo sin commitear da verde en local y rojo en el CI. Comprobar `git status` antes de dar por buenos los gates.
+- **Detectado:** Sprint 4, Dev B. METHODOLOGY.md no es de ningún rol en la Matriz §6; queda anotado aquí en vez de editarlo por mi cuenta.
+
+### NOTA-002: El CI valida RLS contra `init.sql`, no contra la migración de Alembic
+- **Descripción:** El job "Integration Tests (RLS + DB)" siembra el esquema con `psql -f supabase/init/init.sql` — el archivo que **sí** tiene las políticas RLS. Por eso los tests de aislamiento pasan en verde mientras `migrations/versions/001_baseline.py` no crea ninguna (BUG-005). El CI nunca ejerce el camino que realmente corre contra Supabase Cloud.
+- **Agravante:** ese mismo job corre `pytest tests/integration/ -v --tb=short` **sin** `--run-db`, así que todo lo marcado con `db` (incluidos los 25 tests de `test_rls_all_tables.py` y los 8 de `test_webhook_flow.py`) se omite. Solo `tests/unit/test_rls_isolation.py` se ejecuta con `--run-db`.
+- **Consecuencia:** el verde del CI en RLS es engañoso. Mientras BUG-005 siga abierto, un despliegue real hecho con Alembic no tiene aislamiento entre tenants y ningún check lo detecta.
+- **Detectado:** Sprint 4, Dev B, al revisar por qué el CI pasaba con BUG-005 presente.
+
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.
 - **Razón:** Los proveedores de mensajería (YCloud, Twilio, Meta) pueden reenviar webhooks por timeouts o errores de red.
