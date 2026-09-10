@@ -25,28 +25,22 @@ celery_app.conf.update(
     # Broker y backend (Redis, separando DBs)
     broker_url=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"),
     result_backend=os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1"),
-
     # Serializacion segura
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
-
     # Fiabilidad: ACK despues de ejecutar, re-encolar si worker muere
     task_acks_late=True,
     task_reject_on_worker_lost=True,
-
     # Prefetch: 1 tarea a la vez (importante para tareas largas de IA)
     worker_prefetch_multiplier=1,
-
     # Limites de reintento por defecto
     task_default_retry_delay=60,
     task_max_retries=3,
-
     # Resultados expiran en 1 hora
     result_expires=3600,
-
     # ─── Definicion de colas ────────────────────────────────────────────────
     task_queues=(
         Queue(
@@ -80,7 +74,6 @@ celery_app.conf.update(
             routing_key="lead_enrichment",
         ),
     ),
-
     # ─── Routing automatico por nombre de tarea ────────────────────────────
     task_routes={
         "app.tasks.webhook_*": {"queue": "webhooks"},
@@ -90,10 +83,8 @@ celery_app.conf.update(
         "app.tasks.bulk_*": {"queue": "bulk"},
         "app.tasks.enrichment_*": {"queue": "lead_enrichment"},
     },
-
     # Cola por defecto si no matchea ningun patron
     task_default_queue="webhooks",
-
     # ─── Beat schedule (tareas periodicas) ──────────────────────────────────
     beat_schedule={
         "auto-close-conversations": {

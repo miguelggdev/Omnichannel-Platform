@@ -16,7 +16,7 @@ Uso:
 import asyncio
 import os
 import uuid
-from typing import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Generator
 
 import pytest
 import pytest_asyncio
@@ -35,7 +35,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Registrar markers personalizados."""
+    """Registrar markers personalizados y setear env vars de testing."""
+    # Env vars requeridas por Settings — valores de testing
+    os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
+    os.environ.setdefault("JWT_SECRET", "test-secret-key-minimum-32-characters-long!!")
+    os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key-minimum-32-characters!!")
     config.addinivalue_line(
         "markers",
         "db: marca tests que requieren PostgreSQL activo (usar --run-db)",
@@ -46,9 +50,7 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
-def pytest_collection_modifyitems(
-    config: pytest.Config, items: list[pytest.Item]
-) -> None:
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Omitir tests marcados con @pytest.mark.db si no se pasa --run-db."""
     if config.getoption("--run-db"):
         return
@@ -135,9 +137,8 @@ async def db_session(db_engine) -> AsyncGenerator:
     """Sesión DB async con rollback automático al final del test."""
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    async with AsyncSession(db_engine) as session:
-        async with session.begin():
-            yield session
+    async with AsyncSession(db_engine) as session, session.begin():
+        yield session
         # El rollback es automático si no se hizo commit
 
 
@@ -147,13 +148,12 @@ async def tenant_session_a(db_engine, tenant_a_id) -> AsyncGenerator:
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    async with AsyncSession(db_engine) as session:
-        async with session.begin():
-            await session.execute(
-                text("SET LOCAL app.current_client_id = :cid"),
-                {"cid": str(tenant_a_id)},
-            )
-            yield session
+    async with AsyncSession(db_engine) as session, session.begin():
+        await session.execute(
+            text("SET LOCAL app.current_client_id = :cid"),
+            {"cid": str(tenant_a_id)},
+        )
+        yield session
 
 
 @pytest_asyncio.fixture
@@ -162,13 +162,12 @@ async def tenant_session_b(db_engine, tenant_b_id) -> AsyncGenerator:
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    async with AsyncSession(db_engine) as session:
-        async with session.begin():
-            await session.execute(
-                text("SET LOCAL app.current_client_id = :cid"),
-                {"cid": str(tenant_b_id)},
-            )
-            yield session
+    async with AsyncSession(db_engine) as session, session.begin():
+        await session.execute(
+            text("SET LOCAL app.current_client_id = :cid"),
+            {"cid": str(tenant_b_id)},
+        )
+        yield session
 
 
 @pytest_asyncio.fixture

@@ -43,7 +43,6 @@ RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuse
 # Copiar codigo de la aplicacion
 COPY ./app ./app
 COPY ./migrations ./migrations
-COPY ./alembic.ini .
 
 # Permisos del usuario no-root
 RUN chown -R appuser:appuser /app
