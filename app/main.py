@@ -7,6 +7,7 @@ aisladas (producción y testing).
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, cast
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI
@@ -28,6 +29,9 @@ logging.basicConfig(
     level=getattr(logging, get_settings().LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
 )
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,7 +57,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Verificar Redis
     redis_client = aioredis.from_url(get_settings().REDIS_URL)
     try:
-        await redis_client.ping()
+        # redis-py tipa ping() como `Awaitable[bool] | bool`; con el cliente
+        # asincrono siempre es awaitable.
+        await cast("Awaitable[bool]", redis_client.ping())
         logger.info("Conexión a Redis verificada")
     except Exception as exc:
         logger.warning("Redis no disponible al inicio: %s", exc)

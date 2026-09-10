@@ -5,6 +5,7 @@ Retorna 200 si todo ok, 503 si algo falla.
 """
 
 import logging
+from typing import TYPE_CHECKING, cast
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter
@@ -13,6 +14,9 @@ from sqlalchemy import text
 
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +47,10 @@ async def health_check() -> JSONResponse:
     # Check Redis
     try:
         redis_client = aioredis.from_url(get_settings().REDIS_URL)
-        await redis_client.ping()
-        await redis_client.close()
+        # redis-py tipa ping() como `Awaitable[bool] | bool`; con el cliente
+        # asincrono siempre es awaitable.
+        await cast("Awaitable[bool]", redis_client.ping())
+        await redis_client.aclose()
         checks["redis"] = "ok"
     except Exception as exc:
         logger.warning("Health check Redis failed: %s", exc)
