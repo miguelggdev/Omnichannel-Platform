@@ -194,7 +194,7 @@
 - **Impacto:** Una base creada solo con Alembic queda **sin aislamiento entre tenants**. `SET LOCAL app.current_client_id` se aplica pero no lo filtra nada, y cualquier tenant vería los datos de los demás. Contradice la regla 1 de CLAUDE.md.
 - **Por qué no saltó antes:** `tests/integration/test_rls_all_tables.py` (25 tests) solo corre con `--run-db`, y sin base de datos se omite. La suite pasa en verde con el agujero abierto.
 - **Detectado:** Sprint 4, Dev B, al revisar cómo resolver el `client_id` de los webhooks.
-- **Estado:** ABIERTO — Dev A. `migrations/versions/*` es suyo en la Matriz §6. Debería resolverse antes de que Sprint 4 llegue a un entorno con datos reales.
+- **Estado:** ABIERTO — Dev A, issue [#6](https://github.com/miguelggdev/Omnichannel-Platform/issues/6). `migrations/versions/*` es suyo en la Matriz §6. Debería resolverse antes de que Sprint 4 llegue a un entorno con datos reales.
 
 ### NOTA-001: Los Quality Gates de METHODOLOGY §7 son más laxos que el CI
 - **Descripción:** Verificar en local lo que dice METHODOLOGY §7 no garantiza un CI verde. Dos desajustes reales, ambos me costaron un rebote en el PR #5:

@@ -183,7 +183,7 @@ _(nada en progreso)_
 - [ ] `app/schemas/message.py` — `NormalizedMessage` (el archivo existe pero solo con los schemas CRUD de Message)
 
 ### Bloqueadores
-- **BUG-005 (CRÍTICO):** `migrations/versions/001_baseline.py` no crea RLS (0 `ENABLE ROW LEVEL SECURITY`, 0 `CREATE POLICY`). Una base creada solo con Alembic queda sin aislamiento entre tenants. Asignado a Dev A. Ver MEMORY.md
+- **BUG-005 (CRÍTICO):** `migrations/versions/001_baseline.py` no crea RLS (0 `ENABLE ROW LEVEL SECURITY`, 0 `CREATE POLICY`). Una base creada solo con Alembic queda sin aislamiento entre tenants. Asignado a Dev A en el issue [#6](https://github.com/miguelggdev/Omnichannel-Platform/issues/6). Ver MEMORY.md (BUG-005 y NOTA-002)
 - Sin la entrega de Dev A, el `POST` responde 400 (la factory no existe) — el GET de verificación y todo el worker sí funcionan
 
 ### Notas
