@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.internal.health import router as health_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.webhooks import router as webhooks_router
 from app.core.config import get_settings
 from app.core.database import dispose_db, init_db
 from app.core.exceptions import (
@@ -106,6 +107,9 @@ def create_app() -> FastAPI:
     # ── Routers ──
     app.include_router(health_router, prefix="/internal", tags=["internal"])
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+    # Los webhooks NO pasan por TenantContextMiddleware: se autentican por firma
+    # HMAC. El prefijo debe coincidir con WEBHOOK_PATHS_PREFIX del middleware.
+    app.include_router(webhooks_router, prefix="/api/v1/webhooks", tags=["webhooks"])
 
     return app
 
