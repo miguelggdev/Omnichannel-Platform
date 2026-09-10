@@ -21,6 +21,7 @@ from uuid import UUID
 import redis.asyncio as aioredis
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import tenant_session
@@ -140,6 +141,8 @@ async def persist_dedup(
     client_id: UUID,
     channel: str,
     external_message_id: str,
+    *,
+    session: AsyncSession | None = None,
 ) -> bool:
     """Registra el mensaje en `webhook_dedup` (nivel 2, persistente).
 
@@ -150,20 +153,30 @@ async def persist_dedup(
         client_id: Tenant propietario del mensaje.
         channel: Canal de origen del mensaje.
         external_message_id: ID del mensaje en el proveedor externo.
+        session: Sesion existente con SET LOCAL ya aplicado. El worker la pasa para
+            que el registro entre en la MISMA transaccion que el mensaje: o se
+            guardan ambos o ninguno. Sin ella se abre una transaccion propia.
 
     Returns:
         True si se inserto (mensaje nuevo), False si ya existia.
     """
+    row = WebhookDedup(
+        client_id=client_id,
+        channel=channel,
+        external_message_id=external_message_id,
+    )
+
+    if session is not None:
+        # Sin try/except a proposito: un IntegrityError aqui debe abortar la
+        # transaccion del worker, no quedar tragado a medio guardar el mensaje.
+        session.add(row)
+        await session.flush()
+        return True
+
     try:
-        async with tenant_session(client_id) as session:
-            session.add(
-                WebhookDedup(
-                    client_id=client_id,
-                    channel=channel,
-                    external_message_id=external_message_id,
-                )
-            )
-            await session.flush()
+        async with tenant_session(client_id) as own_session:
+            own_session.add(row)
+            await own_session.flush()
     except IntegrityError:
         logger.info(
             "Mensaje ya registrado en webhook_dedup: channel=%s external_message_id=%s",
@@ -179,6 +192,8 @@ async def is_duplicate_persisted(
     client_id: UUID,
     channel: str,
     external_message_id: str,
+    *,
+    session: AsyncSession | None = None,
 ) -> bool:
     """Consulta si el mensaje ya esta en `webhook_dedup`.
 
@@ -186,15 +201,22 @@ async def is_duplicate_persisted(
         client_id: Tenant propietario del mensaje.
         channel: Canal de origen del mensaje.
         external_message_id: ID del mensaje en el proveedor externo.
+        session: Sesion existente con SET LOCAL ya aplicado. Sin ella se abre una
+            transaccion propia.
 
     Returns:
         True si ya existe un registro para ese (channel, external_message_id).
     """
-    async with tenant_session(client_id) as session:
-        stmt = select(WebhookDedup.id).where(
-            WebhookDedup.client_id == client_id,
-            WebhookDedup.channel == channel,
-            WebhookDedup.external_message_id == external_message_id,
-        )
+    stmt = select(WebhookDedup.id).where(
+        WebhookDedup.client_id == client_id,
+        WebhookDedup.channel == channel,
+        WebhookDedup.external_message_id == external_message_id,
+    )
+
+    if session is not None:
         result = await session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
+    async with tenant_session(client_id) as own_session:
+        result = await own_session.execute(stmt)
         return result.scalar_one_or_none() is not None

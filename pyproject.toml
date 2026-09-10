@@ -70,6 +70,11 @@ plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
 disallow_untyped_defs = true
 no_implicit_optional = true
 
+# Celery no publica stubs: @shared_task es Any y mypy marca la tarea como untyped.
+[[tool.mypy.overrides]]
+module = "app.tasks.*"
+disallow_untyped_decorators = false
+
 [[tool.mypy.overrides]]
 module = "celery.*"
 ignore_missing_imports = true
