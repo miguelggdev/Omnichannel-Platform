@@ -118,6 +118,32 @@
 
 ---
 
+### ADR-028: Deduplicación de webhooks fail-open ante caída de Redis
+- **Fecha:** 2026-09-10
+- **Contexto:** PAT-001 define dedup en dos niveles (Redis rápido + `webhook_dedup` persistente). Falta decidir qué hacer cuando Redis no responde: rechazar el webhook (fail-closed) o dejarlo pasar (fail-open).
+- **Decisión:** `mark_if_new()` devuelve `True` ante cualquier excepción de Redis y deja la unicidad al `UniqueConstraint(channel, external_message_id)` de `webhook_dedup`, que el worker verifica dentro de la misma transacción que el mensaje. Perder mensajes definitivamente es peor que procesar un duplicado, y el nivel 2 existe justamente para eso.
+- **Consecuencia:** Con Redis caído el sistema sigue recibiendo, a costa de más carga en PostgreSQL. Los duplicados se cortan igual, solo que una capa más adentro.
+
+### ADR-029: `release_mark()` al fallar el encolado en Celery
+- **Fecha:** 2026-09-10
+- **Contexto:** El endpoint marca el mensaje en Redis *antes* de encolarlo. Si `delay()` falla (broker caído), la marca queda puesta 24h: el reintento del proveedor se descartaría como duplicado y el mensaje se perdería sin dejar rastro.
+- **Decisión:** Ante un fallo de encolado se borra la marca (`release_mark`) y se responde 503, para que el proveedor reintente.
+- **Consecuencia:** La ventana de duplicado real es mínima y el mensaje no se pierde. Alternativa descartada: escribir primero en `webhook_dedup` — habría metido una escritura en base de datos dentro del presupuesto de <100ms del endpoint.
+
+### ADR-030: Resolución del tenant en webhooks vía `DEFAULT_CLIENT_ID`
+- **Fecha:** 2026-09-10
+- **Contexto:** Los webhooks no llevan JWT, así que `TenantContextMiddleware` los exime y el `client_id` no se puede deducir del request. La spec del Sprint 4 permite resolverlo "por configuración global" en el MVP; la tabla `channel_configs` es de Fase 2.
+- **Decisión:** `_resolve_client_id()` lee `settings.DEFAULT_CLIENT_ID`. Sin valor o con un UUID inválido lanza `ClientResolutionError`, el mensaje agota reintentos y termina en la DLQ. Nunca cae a un tenant por defecto silencioso.
+- **Consecuencia:** El despliegue MVP es efectivamente de un solo tenant para mensajería entrante. `_resolve_client_id()` queda como único punto a cambiar cuando exista `channel_configs`.
+
+### ADR-031: `extra="ignore"` en Settings
+- **Fecha:** 2026-09-10
+- **Contexto:** Ver BUG-004. El `.env` es compartido entre la app y docker-compose, y declara variables que la app nunca lee (`POSTGRES_*`, `GF_*`, `TRAEFIK_*`, `CELERY_*_CONCURRENCY`...).
+- **Decisión:** `extra="ignore"` en el `model_config` de `Settings`, en vez de declarar las 44 claves sobrantes como campos muertos.
+- **Consecuencia:** Un typo en el nombre de una variable de entorno ya no se detecta al arrancar. A cambio, la app arranca con su propio `.env.example`. El precio se considera menor que mantener 44 campos que nadie lee.
+
+---
+
 ## Bugs Conocidos y Pitfalls
 
 ### BUG-001: Alias de SELECT no se puede usar en WHERE (PostgreSQL)
@@ -155,6 +181,20 @@
 - **Estado:** ABIERTO — asignado a Dev A en Sprint 8 (`grafana/dashboards/*.json` es suyo en la Matriz §6, junto con las métricas custom de Prometheus).
 - **Opciones evaluadas:** (a) provisionar un datasource Postgres contra Supabase Cloud — descartado en Sprint 2 por meter credenciales de la BD dentro del provisioning de Grafana; (b) repuntar los paneles a Prometheus — es lo coherente con el stack, pero las métricas de tokens no existen en Prometheus hasta el Sprint 8.
 - **Nota:** El provisioning creado en Sprint 2 (`grafana/provisioning/`) solo declara el datasource Prometheus (`uid: prometheus`). No enmascara este bug.
+
+### BUG-004: `Settings` rechazaba el propio `.env.example` del repo
+- **Descripción:** `Settings` heredaba el `extra="forbid"` por defecto de `BaseSettings`, pero `.env.example` declara 68 claves y la clase solo modelaba 24. Las 44 restantes (`POSTGRES_DB`, `REDIS_HOST`, `S3_*`, `GF_*`, `TRAEFIK_*`, `CELERY_*_CONCURRENCY`, `VAPI_*`, `APP_PORT`, ...) hacían que `Settings()` lanzara `ValidationError` con 44 errores y la app no arrancara.
+- **Impacto:** 12 tests de `tests/unit/test_auth.py` erroraban en setup (`create_app()` importa `Settings`). En CI pasaba inadvertido porque el workflow inyecta solo las variables que la clase declara.
+- **Efecto secundario de seguridad:** el `ValidationError` de Pydantic imprime el *valor* de cada campo rechazado, así que un `.env` real volcaba secretos (incluida `POSTGRES_PASSWORD`) en la salida de pytest y en cualquier log de arranque.
+- **Detectado:** Sprint 4, Dev B.
+- **Estado:** CERRADO — `extra="ignore"` (ADR-031), commit `591e416`. `app/core/config.py` es de Dev A; tocado de forma aislada y marcado en el PR.
+
+### BUG-005: La migración baseline de Alembic no crea RLS (CRÍTICO)
+- **Descripción:** `migrations/versions/001_baseline.py` crea las 24 tablas, FKs e índices, pero no contiene ni un `ENABLE ROW LEVEL SECURITY`, ni un `FORCE`, ni una sola `CREATE POLICY` — 0 coincidencias en todo el archivo. Las políticas viven solo en `supabase/init/init.sql`, que con ADR-020 (Supabase Cloud) ya no se ejecuta: no hay contenedor de Postgres que corra `/docker-entrypoint-initdb.d`.
+- **Impacto:** Una base creada solo con Alembic queda **sin aislamiento entre tenants**. `SET LOCAL app.current_client_id` se aplica pero no lo filtra nada, y cualquier tenant vería los datos de los demás. Contradice la regla 1 de CLAUDE.md.
+- **Por qué no saltó antes:** `tests/integration/test_rls_all_tables.py` (25 tests) solo corre con `--run-db`, y sin base de datos se omite. La suite pasa en verde con el agujero abierto.
+- **Detectado:** Sprint 4, Dev B, al revisar cómo resolver el `client_id` de los webhooks.
+- **Estado:** ABIERTO — Dev A. `migrations/versions/*` es suyo en la Matriz §6. Debería resolverse antes de que Sprint 4 llegue a un entorno con datos reales.
 
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.
