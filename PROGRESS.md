@@ -8,9 +8,9 @@
 ## Estado Actual
 
 - **Fase:** 1 — MVP Core
-- **Sprint Activo:** Sprint 2 — Infraestructura Docker
-- **Última actualización:** 2026-09-09
-- **Última sesión:** Sesión 9 — Sprint 2 slice de Dev B (Traefik ping/métricas, Prometheus, Grafana provisioning, healthcheck.sh) + corrección de este archivo, que seguía describiendo la arquitectura self-hosted previa a ADR-020
+- **Sprint Activo:** Sprint 4 — Webhook Receiver & MessagingProvider
+- **Última actualización:** 2026-09-10
+- **Última sesión:** Sesión 10 — Merge de PR #2 (Sprint 3 FastAPI Core, Dev A) y PR #3 (Sprint 2 infra Dev B). Housekeeping pre-Sprint 4: limpieza de branches, actualización de PROGRESS.md
 
 ---
 
@@ -128,7 +128,38 @@ _(nada en progreso)_
 - El puerto 8080 de Traefik sirve dashboard, `/ping` y `/metrics`: cerrarlo al exterior en el hardening del Sprint 8 (ADR-027)
 - `accessLog` de Traefik va a stdout, desviación consciente de la spec justificada en ADR-026
 - Los tests marcados `db` (34) siguen en `skipped` hasta tener la BD accesible con `--run-db`
-- Sprint 3 (FastAPI Core & Auth) puede comenzar inmediatamente
+- Sprint 3 (FastAPI Core & Auth) completado — PR #2 mergeado
+- Sprint 4 (Webhook Receiver & MessagingProvider) puede comenzar inmediatamente
+
+---
+
+## Sprint 3: FastAPI Core & Auth
+
+### Completado — Dev A (PR #2, 61 archivos, +3460 líneas)
+- [x] `app/main.py` — App factory `create_app()` con lifespan, CORS, exception handlers
+- [x] `app/core/config.py` — `Settings` (Pydantic BaseSettings) con validación de JWT_SECRET y ENCRYPTION_KEY
+- [x] `app/core/database.py` — AsyncEngine + async sessionmaker con pool pre-ping
+- [x] `app/core/security.py` — JWT encode/decode, password hashing (bcrypt), token creation
+- [x] `app/core/dependencies.py` — `get_db`, `get_current_user`, `get_current_active_user`
+- [x] `app/middleware/tenant_context.py` — `TenantContextMiddleware` con `SET LOCAL app.current_client_id`
+- [x] `app/middleware/logging_middleware.py` — Request/response logging con correlation ID
+- [x] `app/models/` — SQLAlchemy 2.0 models: User, Client, Conversation, Message, Contact, KnowledgeDocument, etc.
+- [x] `app/schemas/` — Pydantic v2 schemas para auth, users, tenants, health
+- [x] `app/api/v1/auth.py` — Login, register, refresh, me endpoints
+- [x] `app/api/v1/tenants.py` — CRUD tenants (admin)
+- [x] `app/api/v1/health.py` — Health check endpoint
+- [x] `app/api/deps.py` — Dependency injection helpers
+- [x] `migrations/env.py` — Alembic async config con `run_async_migrations()`
+- [x] `migrations/versions/001_initial_schema.py` — Initial migration (all MVP tables)
+- [x] `tests/unit/` — 27 tests pasando (auth, middleware, health, config, schemas)
+- [x] `.github/workflows/ci.yml` — CI pipeline 8 stages, todas pasando green
+- [x] Docker Build smoke test con env vars dummy
+
+### Notas para la Próxima Sesión
+- `get_settings()` se ejecuta al importar `app/main.py` — requiere env vars incluso para smoke tests
+- Los modelos SQLAlchemy usan `Mapped[]` (SQLAlchemy 2.0 style)
+- Alembic migration corre contra `DATABASE_URL_DIRECT`, no el pooler
+- CI pipeline: lint → typecheck → unit-test → integration → migration-check → security → docker-build → frontend
 
 ---
 
@@ -137,9 +168,9 @@ _(nada en progreso)_
 | Sprint | Nombre | Estado | Notas |
 |---|---|---|---|
 | 1 | Schema DDL & Arquitectura | ✅ Completado | 24 tablas, RLS verificado, DDL idempotente |
-| 2 | Infraestructura Docker | 🔄 En revisión | 12 servicios (ADR-020), Dockerfile multi-stage, Traefik v3, 6 colas Celery. Slice de Dev B en PR |
-| 3 | FastAPI Core & Auth | ⬜ Pendiente | |
-| 4 | Webhook Receiver & MessagingProvider | ⬜ Pendiente | YCloud (WhatsApp) + Meta (Instagram DM + Facebook Messenger) |
+| 2 | Infraestructura Docker | ✅ Completado | 12 servicios (ADR-020), Dockerfile multi-stage, Traefik v3, 6 colas Celery |
+| 3 | FastAPI Core & Auth | ✅ Completado | 61 archivos, +3460 líneas. Auth JWT, middleware multi-tenant, modelos SQLAlchemy, Alembic, CI 8/8 green |
+| 4 | Webhook Receiver & MessagingProvider | 🔄 En progreso | YCloud (WhatsApp) + Meta (Instagram DM + Facebook Messenger) |
 | 5 | Pipeline de Documentos & RAG | ⬜ Pendiente | |
 | 6 | LangGraph — Grafo de Agentes | ⬜ Pendiente | |
 | 7 | Agente de Agendamiento & CRM API | ⬜ Pendiente | |
@@ -177,9 +208,9 @@ Las siguientes 11 features fueron diseñadas e integradas en los sprints existen
 
 ## Métricas de Progreso
 
-- **Tests pasando:** 0 / 9 (RLS tests skip hasta Sprint 2 DB)
+- **Tests pasando:** 27 / 27 (unit + security; 34 RLS/DB tests skip hasta conexión BD)
 - **Tablas creadas:** 26 / 26 (18 MVP + 6 Fase 2 + 1 agent_action_logs + 1 admin_assistant_history)
-- **Endpoints implementados:** 0
+- **Endpoints implementados:** 8 (health, auth x4, tenants x3)
 - **Agentes LangGraph:** 0 / 7 (nodos)
 - **Proveedores de mensajería:** 0 / 2 (YCloud MVP + Meta MVP: Instagram DM + Facebook Messenger)
 - **Cobertura de tests:** N/A
