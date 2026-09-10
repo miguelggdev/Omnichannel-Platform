@@ -1,0 +1,37 @@
+# =============================================================================
+# Grafana — Provisioning de Dashboards
+# =============================================================================
+# Referencia: https://grafana.com/docs/grafana/latest/administration/provisioning/#dashboards
+# Carga automaticamente los dashboards JSON ubicados en options.path dentro
+# de la carpeta "Omnichannel" de Grafana.
+#
+# PENDIENTE (Dev A, docker-compose.yml — fuera de alcance de este cambio):
+#   Hoy docker-compose.yml monta:
+#     ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+#   Ese montaje coloca el JSON del dashboard (token-budget-monitoring.json)
+#   en la ruta donde Grafana espera el YAML *provider* (este archivo), y no
+#   monta nada en /etc/grafana/provisioning/datasources — por lo que este
+#   provisioning (datasources/prometheus.yml y dashboards/dashboards.yml)
+#   NO se aplica con el montaje actual.
+#
+#   El montaje correcto seria:
+#     - ./grafana/provisioning:/etc/grafana/provisioning:ro
+#     - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+#   (coherente con options.path definido abajo). Este cambio vive en
+#   docker-compose.yml, archivo de Dev A (Matriz de Asignacion, METHODOLOGY.md
+#   §6) — no se modifica desde este commit.
+# =============================================================================
+
+apiVersion: 1
+
+providers:
+  - name: omnichannel
+    orgId: 1
+    folder: "Omnichannel"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: true

@@ -419,7 +419,10 @@ services:
       GF_INSTALL_PLUGINS: "grafana-clock-panel,grafana-simple-json-datasource"
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      # Provisioning declarativo (datasource Prometheus + provider de dashboards).
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      # Los JSON de dashboards viven en options.path del provider, no en provisioning/.
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "3000:3000"
     depends_on:

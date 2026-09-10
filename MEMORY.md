@@ -149,6 +149,13 @@
 
 ## Patrones Aprendidos
 
+### BUG-003: Dashboard token-budget apunta a un datasource self-hosted inexistente
+- **Descripción:** `grafana/dashboards/token-budget-monitoring.json` (10 paneles) consulta el datasource `{"type": "postgres", "uid": "supabase-db"}`, el contenedor que ADR-020 eliminó. Con Supabase Cloud ese datasource no existe, así que los 10 paneles no renderizan datos.
+- **Detectado:** Sprint 2, Dev B, al crear el provisioning de Grafana.
+- **Estado:** ABIERTO — asignado a Dev A en Sprint 8 (`grafana/dashboards/*.json` es suyo en la Matriz §6, junto con las métricas custom de Prometheus).
+- **Opciones evaluadas:** (a) provisionar un datasource Postgres contra Supabase Cloud — descartado en Sprint 2 por meter credenciales de la BD dentro del provisioning de Grafana; (b) repuntar los paneles a Prometheus — es lo coherente con el stack, pero las métricas de tokens no existen en Prometheus hasta el Sprint 8.
+- **Nota:** El provisioning creado en Sprint 2 (`grafana/provisioning/`) solo declara el datasource Prometheus (`uid: prometheus`). No enmascara este bug.
+
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.
 - **Razón:** Los proveedores de mensajería (YCloud, Twilio, Meta) pueden reenviar webhooks por timeouts o errores de red.
@@ -388,3 +395,15 @@
 - **Contexto:** El frontend necesita soportar dark/orange (inspirado en BuilderX), dark/blue, light mode, toggle, y acento configurable.
 - **Decisión:** `clients.theme_config` JSONB con: `mode` (dark/light/system), `accent` (hex color), `variant` (default/compact). El frontend Next.js usa CSS custom properties + next-themes.
 - **Consecuencia:** Las CSS variables se generan dinámicamente desde `theme_config`. shadcn/ui soporta theming nativo con HSL variables.
+
+### ADR-026: accessLog de Traefik a stdout en lugar de fichero
+- **Fecha:** 2026-09-09
+- **Contexto:** `specs/sprint-02-docker.md` §3 especifica `accessLog.filePath: "/var/log/traefik/access.log"`. `docker-compose.yml` no declara ningún volumen para esa ruta, así que los logs quedarían dentro del contenedor y se perderían en cada reinicio, además de crecer sin rotación.
+- **Decisión:** Mantener `accessLog` en stdout (formato json, sin `filePath`) — desviación consciente de la spec. Los recoge el driver de logging de Docker, que es la práctica estándar en contenedores y el camino natural hacia la agregación de logs del Sprint 8.
+- **Consecuencia:** La spec del Sprint 2 queda desalineada en este punto; este ADR es la justificación. Si en Sprint 8 se decide agregar logs a fichero, se hace con un volumen nombrado (`traefik_logs`) y rotación explícita, no con el `filePath` suelto de la spec.
+
+### ADR-027: ping y métricas Prometheus habilitados en Traefik
+- **Fecha:** 2026-09-09
+- **Contexto:** El healthcheck de `docker-compose.yml` para traefik es `["CMD","traefik","healthcheck"]`, comando que consulta el endpoint `/ping`. `traefik/traefik.yml` no habilitaba `ping`, por lo que el servicio nunca alcanzaba estado `healthy` y fallaba el criterio de aceptación "todos los servicios healthy en menos de 2 minutos".
+- **Decisión:** Habilitar `ping` y `metrics.prometheus` sobre el entryPoint interno `traefik` (puerto 8080, ya expuesto por `api.insecure: true`). Prometheus scrapea `traefik:8080/metrics`.
+- **Consecuencia:** El puerto 8080 queda sirviendo dashboard, `/ping` y `/metrics`. En producción hay que cerrarlo al exterior (`api.insecure: false` + router autenticado), junto con el hardening del Sprint 8.

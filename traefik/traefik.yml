@@ -31,6 +31,20 @@ providers:
     directory: /etc/traefik/dynamic/
     watch: true
 
+# ─── Healthcheck (ping) ────────────────────────────────────────────────────────
+# Servido por el entryPoint interno "traefik" (puerto 8080, expuesto via api.insecure).
+# Requerido por el healthcheck de docker-compose.yml: ["CMD","traefik","healthcheck"].
+ping:
+  entryPoint: traefik
+
+# ─── Metricas (Prometheus) ─────────────────────────────────────────────────────
+# Expuestas en /metrics del mismo entryPoint interno "traefik" (puerto 8080).
+metrics:
+  prometheus:
+    addEntryPointsLabels: true
+    addServicesLabels: true
+    addRoutersLabels: true
+
 # ─── Logging ─────────────────────────────────────────────────────────────────
 log:
   level: INFO
