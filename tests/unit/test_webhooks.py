@@ -359,6 +359,27 @@ class TestDedupService:
 
         assert await dedup_module.mark_if_new("whatsapp", "id-2", redis_client=fake_redis) is True
 
+    async def test_cliente_redis_es_unico_por_proceso(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """El worker de Celery no tiene app.state: el cliente se cachea en el modulo."""
+        monkeypatch.setattr(dedup_module, "_redis_client", None, raising=False)
+
+        primero = dedup_module.get_redis()
+        segundo = dedup_module.get_redis()
+
+        assert primero is segundo
+        await dedup_module.close_redis()
+        assert dedup_module._redis_client is None
+
+    async def test_close_redis_sin_cliente_no_falla(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cerrar dos veces (o sin haber abierto) es inofensivo."""
+        monkeypatch.setattr(dedup_module, "_redis_client", None, raising=False)
+
+        await dedup_module.close_redis()
+
     async def test_redis_caido_no_bloquea_el_mensaje(self) -> None:
         """Fail-open: si Redis falla se procesa igual y decide PostgreSQL."""
 
