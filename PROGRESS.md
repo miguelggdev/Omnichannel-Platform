@@ -10,7 +10,7 @@
 - **Fase:** 1 — MVP Core
 - **Sprint Activo:** Sprint 4 — Webhook Receiver & MessagingProvider
 - **Última actualización:** 2026-09-10
-- **Última sesión:** Sesión 10 — Merge de PR #2 (Sprint 3 FastAPI Core, Dev A) y PR #3 (Sprint 2 infra Dev B). Housekeeping pre-Sprint 4: limpieza de branches, actualización de PROGRESS.md
+- **Última sesión:** Sesión 11 — Dev B arranca Sprint 4: receptor de webhooks, servicio de dedup, worker de Celery y tests (branch `feature/sprint-04-webhooks`). PR #4 abierto con la deuda de lint/typing preexistente
 
 ---
 
@@ -161,6 +161,37 @@ _(nada en progreso)_
 - Alembic migration corre contra `DATABASE_URL_DIRECT`, no el pooler
 - CI pipeline: lint → typecheck → unit-test → integration → migration-check → security → docker-build → frontend
 
+## Sprint 4: Webhook Receiver & MessagingProvider
+
+### Completado — Dev B (branch `feature/sprint-04-webhooks`, sesión 11)
+- [x] `app/api/v1/webhooks.py` — `POST /api/v1/webhooks/{provider}/{channel}`: firma HMAC → parseo → dedup Redis → encolar → 200. No toca la base de datos (presupuesto <100ms)
+- [x] `app/api/v1/webhooks.py` — `GET` de verificación: Meta (`hub.mode=subscribe` + `hub.verify_token` → `hub.challenge` en text/plain) y YCloud (challenge simple)
+- [x] `app/main.py` — router montado en `/api/v1/webhooks`, que coincide con `WEBHOOK_PATHS_PREFIX` del middleware (los webhooks no pasan por `TenantContextMiddleware`)
+- [x] `app/services/dedup.py` — dedup en dos niveles (PAT-001): Redis `SET NX EX 24h` + `webhook_dedup` en PostgreSQL. Fail-open ante caída de Redis (ADR-028) y `release_mark()` si falla el encolado (ADR-029)
+- [x] `app/tasks/webhook_processor.py` — tarea `app.tasks.webhook_process_incoming` (cola `webhooks`, retry 5s/25s/125s, DLQ en `dlq:webhook_messages`). Todo el flujo en una transacción con `SET LOCAL`
+- [x] `app/tasks/celery_app.py` + `app/tasks/__init__.py` — registro de tareas vía `imports`. Sin esto el worker levantaba las colas pero no conocía ninguna tarea
+- [x] `app/core/config.py` + `.env.example` — vars de Meta/YCloud, `DEFAULT_CLIENT_ID` y `extra="ignore"` (BUG-004)
+- [x] `app/main.py` + `app/api/internal/health.py` — tipado de `redis.ping()`; `mypy app/ --ignore-missing-imports` pasa de 2 errores a 0
+- [x] `tests/unit/test_webhooks.py` (23 tests) y `tests/unit/test_webhook_processor.py` (20 tests) — verdes sin DB
+- [x] `tests/unit/test_meta_provider.py` — contrato de MetaProvider, con `importorskip` hasta que Dev A entregue `meta.py`
+- [x] `tests/integration/test_webhook_flow.py` — flujo completo contra PostgreSQL (marker `db`) para los 3 canales
+- [x] `tests/fixtures/meta_payloads.py` — payloads de Instagram, Facebook y YCloud
+
+### Pendiente — Dev A (prerequisito, aún no entregado)
+- [ ] `app/services/messaging/base.py` — `MessagingProvider` ABC (el directorio solo tiene `.gitkeep`)
+- [ ] `app/services/messaging/ycloud.py`, `meta.py`, `factory.py`
+- [ ] `app/schemas/message.py` — `NormalizedMessage` (el archivo existe pero solo con los schemas CRUD de Message)
+
+### Bloqueadores
+- **BUG-005 (CRÍTICO):** `migrations/versions/001_baseline.py` no crea RLS (0 `ENABLE ROW LEVEL SECURITY`, 0 `CREATE POLICY`). Una base creada solo con Alembic queda sin aislamiento entre tenants. Asignado a Dev A en el issue [#6](https://github.com/miguelggdev/Omnichannel-Platform/issues/6). Ver MEMORY.md (BUG-005 y NOTA-002)
+- Sin la entrega de Dev A, el `POST` responde 400 (la factory no existe) — el GET de verificación y todo el worker sí funcionan
+
+### Notas
+- El endpoint resuelve la factory con import perezoso, para que la app arranque y la suite colecte sin esperar la entrega de Dev A
+- La spec asume campos que los modelos de Dev A no tienen: `Message.contact_id` (se usa `sender_type="contact"` + `sender_id`), `ContactIdentifier.is_primary`, `WebhookDedup.processed`
+- Los identifiers se guardan en claro: `ContactIdentifier.identifier_value` es `String(255)` con unique en `(client_id, channel, identifier_value)`. El cifrado con pgcrypto que pide CLAUDE.md §3 necesita una columna de hash para poder buscar — pendiente de decidir con Dev A
+- Cobertura de los archivos nuevos sin `--run-db`: webhooks.py 93%, dedup.py 78%, webhook_processor.py 85%, celery_app.py 100% (total 86%)
+
 ---
 
 ## Resumen por Sprint
@@ -170,7 +201,7 @@ _(nada en progreso)_
 | 1 | Schema DDL & Arquitectura | ✅ Completado | 24 tablas, RLS verificado, DDL idempotente |
 | 2 | Infraestructura Docker | ✅ Completado | 12 servicios (ADR-020), Dockerfile multi-stage, Traefik v3, 6 colas Celery |
 | 3 | FastAPI Core & Auth | ✅ Completado | 61 archivos, +3460 líneas. Auth JWT, middleware multi-tenant, modelos SQLAlchemy, Alembic, CI 8/8 green |
-| 4 | Webhook Receiver & MessagingProvider | 🔄 En progreso | YCloud (WhatsApp) + Meta (Instagram DM + Facebook Messenger) |
+| 4 | Webhook Receiver & MessagingProvider | 🔄 En progreso | Dev B: endpoint, dedup, worker y tests listos. Falta la entrega de Dev A (ABC, providers, factory, NormalizedMessage) |
 | 5 | Pipeline de Documentos & RAG | ⬜ Pendiente | |
 | 6 | LangGraph — Grafo de Agentes | ⬜ Pendiente | |
 | 7 | Agente de Agendamiento & CRM API | ⬜ Pendiente | |

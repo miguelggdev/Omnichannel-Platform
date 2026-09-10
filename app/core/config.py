@@ -29,6 +29,12 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # `extra="ignore"` es obligatorio, no cosmetico: el `.env` del proyecto es
+        # compartido con docker-compose y declara 44 claves que esta clase no modela
+        # (POSTGRES_*, REDIS_HOST, S3_*, GF_*, CELERY_*_CONCURRENCY, TRAEFIK_*, ...).
+        # Con el `extra="forbid"` que trae BaseSettings por defecto, `Settings()`
+        # lanzaba ValidationError y la app no arrancaba con su propio `.env.example`.
+        extra="ignore",
     )
 
     # Database — Supavisor (Transaction Pooler de Supabase Cloud, puerto 6543)
@@ -52,8 +58,23 @@ class Settings(BaseSettings):
 
     # API Keys
     OPENAI_API_KEY: str = ""
+
+    # YCloud (WhatsApp Business API) — Sprint 4
     YCLOUD_API_KEY: str = ""
     YCLOUD_WEBHOOK_SECRET: str = ""
+    YCLOUD_BASE_URL: str = "https://api.ycloud.com/v2"
+
+    # Meta Graph API (Instagram DM + Facebook Messenger) — Sprint 4
+    META_APP_SECRET: str = ""
+    META_PAGE_ACCESS_TOKEN: str = ""
+    META_WEBHOOK_VERIFY_TOKEN: str = ""
+    META_GRAPH_API_VERSION: str = "v19.0"
+
+    # Tenant por defecto para webhooks entrantes (MVP).
+    # Los webhooks no llevan JWT, asi que el client_id no se puede deducir del request.
+    # Hasta que exista la tabla `channel_configs` (Fase 2), el tenant se resuelve por
+    # esta variable de entorno. Vacio = no se puede resolver -> el mensaje va a la DLQ.
+    DEFAULT_CLIENT_ID: str = ""
 
     # Cifrado
     ENCRYPTION_KEY: str
