@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 # Lista de Redis donde aterrizan los mensajes que agotaron los reintentos.
 DLQ_KEY = "dlq:webhook_messages"
 
+# Backoff exponencial de los reintentos: 5s, 25s, 125s (5 * 5**intento).
+RETRY_BASE_DELAY_SECONDS = 5
+RETRY_BACKOFF_FACTOR = 5
+
 # Estados en los que una conversacion se considera cerrada: si el contacto vuelve a
 # escribir se abre una nueva en lugar de reabrir estas.
 CLOSED_STATUSES = ("resolved", "archived")
@@ -263,7 +267,7 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
         client_id=client_id,
         conversation_id=conversation.id,
         contact_id=contact.id,
-        channel=channel,
+        channel=message_channel,
         message_data=message_data,
     )
 
@@ -337,9 +341,6 @@ async def _send_to_dlq(provider: str, channel: str, message_data: dict[str, Any]
     name="app.tasks.webhook_process_incoming",
     bind=True,
     max_retries=3,
-    default_retry_delay=5,
-    retry_backoff=True,
-    retry_backoff_max=300,
     acks_late=True,
     queue="webhooks",
 )
@@ -367,13 +368,15 @@ def process_incoming_message(
         asyncio.run(_process_message(provider, channel, normalized_message))
     except Exception as exc:
         if self.request.retries < self.max_retries:
+            countdown = RETRY_BASE_DELAY_SECONDS * (RETRY_BACKOFF_FACTOR**self.request.retries)
             logger.warning(
-                "Fallo procesando webhook (intento %s/%s): %s",
+                "Fallo procesando webhook (intento %s/%s, reintento en %ss): %s",
                 self.request.retries + 1,
                 self.max_retries,
+                countdown,
                 exc,
             )
-            raise self.retry(exc=exc) from exc
+            raise self.retry(exc=exc, countdown=countdown) from exc
 
         logger.critical(
             "Mensaje a DLQ tras %s intentos: %s",

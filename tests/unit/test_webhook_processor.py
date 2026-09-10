@@ -80,10 +80,12 @@ class FakeTaskSelf:
         self.request = type("Request", (), {"retries": retries})()
         self.max_retries = max_retries
         self.retry_calls = 0
+        self.last_countdown: float | None = None
 
-    def retry(self, exc: Exception | None = None) -> Exception:
+    def retry(self, exc: Exception | None = None, countdown: float | None = None) -> Exception:
         """Devuelve la excepcion que el codigo relanza como reintento."""
         self.retry_calls += 1
+        self.last_countdown = countdown
         return RuntimeError("retry solicitado")
 
 
@@ -250,6 +252,57 @@ class TestEncoladoDeIA:
         )
 
 
+# ─── Procesamiento de mensaje: canal correcto hacia la IA ────────────────────
+
+
+class TestProcessMessage:
+    """`_process_message` debe encolar la IA con el canal resuelto, no el de la URL."""
+
+    async def test_encola_ia_con_el_canal_resuelto_no_el_de_la_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Meta no separa webhooks por canal: el `channel` de la URL puede no
+        coincidir con el canal real del mensaje (`message_data["channel"]`).
+        La IA debe encolarse con el segundo, igual que el contacto y la
+        conversacion, no con el primero.
+        """
+        client_id = uuid.uuid4()
+        monkeypatch.setattr(wp, "_resolve_client_id", lambda provider, channel: client_id)
+
+        session = FakeSession(results=[None, None])
+
+        class FakeTenantSession:
+            async def __aenter__(self) -> FakeSession:
+                return session
+
+            async def __aexit__(self, *exc: Any) -> None:
+                return None
+
+        monkeypatch.setattr(wp, "tenant_session", lambda _client_id: FakeTenantSession())
+
+        async def sin_duplicado(*args: Any, **kwargs: Any) -> bool:
+            return False
+
+        async def persistido_ok(*args: Any, **kwargs: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(wp, "is_duplicate_persisted", sin_duplicado)
+        monkeypatch.setattr(wp, "persist_dedup", persistido_ok)
+
+        capturado: dict[str, Any] = {}
+        monkeypatch.setattr(wp, "_enqueue_ai_processing", lambda **kw: capturado.update(kw))
+
+        message_data = {
+            "external_message_id": "fb.1",
+            "sender_identifier": "psid123",
+            "channel": "facebook",
+        }
+
+        await wp._process_message("meta", "instagram", message_data)
+
+        assert capturado["channel"] == "facebook"
+
+
 # ─── Tarea Celery: reintentos y DLQ ──────────────────────────────────────────
 
 
@@ -289,6 +342,24 @@ class TestTareaCelery:
             self.cuerpo(task_self, "ycloud", "whatsapp", {"external_message_id": "w.retry"})
 
         assert task_self.retry_calls == 1
+        assert task_self.last_countdown == 5
+
+    @pytest.mark.parametrize(("retries", "countdown_esperado"), [(0, 5), (1, 25), (2, 125)])
+    def test_backoff_exponencial_5_25_125(
+        self, monkeypatch: pytest.MonkeyPatch, retries: int, countdown_esperado: int
+    ) -> None:
+        """El countdown del reintento sigue el backoff documentado 5s -> 25s -> 125s."""
+
+        async def boom(*args: Any, **kwargs: Any) -> None:
+            raise ValueError("fallo temporal")
+
+        monkeypatch.setattr(wp, "_process_message", boom)
+        task_self = FakeTaskSelf(retries=retries)
+
+        with pytest.raises(RuntimeError):
+            self.cuerpo(task_self, "ycloud", "whatsapp", {"external_message_id": "w.retry"})
+
+        assert task_self.last_countdown == countdown_esperado
 
     def test_reintentos_agotados_van_a_dlq(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Al tercer fallo el mensaje se archiva en la DLQ en vez de perderse."""
