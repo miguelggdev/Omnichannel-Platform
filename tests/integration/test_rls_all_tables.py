@@ -103,13 +103,12 @@ class TestRLSMVPTables:
             rls_harness["session_b"],
             table="contacts",
             insert_sql="""
-                INSERT INTO contacts (id, client_id, phone_number, channel)
-                VALUES (:id, :client_id, :phone, 'whatsapp')
+                INSERT INTO contacts (id, client_id, display_name)
+                VALUES (:id, :client_id, 'Contacto Confidencial')
             """,
             params={
                 "id": str(uuid.uuid4()),
                 "client_id": str(rls_harness["tenant_a"]),
-                "phone": f"+521550000{uuid.uuid4().int % 10000:04d}",
             },
         )
 
@@ -122,8 +121,8 @@ class TestRLSMVPTables:
         # Crear contacto padre primero
         await sa.execute(
             text("""
-                INSERT INTO contacts (id, client_id, phone_number, channel)
-                VALUES (:id, :cid, '+5215599990001', 'whatsapp')
+                INSERT INTO contacts (id, client_id, display_name)
+                VALUES (:id, :cid, 'Contacto Base')
             """),
             {"id": contact_id, "cid": cid_a},
         )
@@ -133,8 +132,8 @@ class TestRLSMVPTables:
             rls_harness["session_b"],
             table="contact_identifiers",
             insert_sql="""
-                INSERT INTO contact_identifiers (id, client_id, contact_id, identifier_type, identifier_value)
-                VALUES (:id, :client_id, :contact_id, 'phone', '+5215599990001')
+                INSERT INTO contact_identifiers (id, client_id, contact_id, channel, identifier_value)
+                VALUES (:id, :client_id, :contact_id, 'whatsapp', '+5215599990001')
             """,
             params={
                 "id": str(uuid.uuid4()),
@@ -151,8 +150,8 @@ class TestRLSMVPTables:
 
         await sa.execute(
             text("""
-                INSERT INTO contacts (id, client_id, phone_number, channel)
-                VALUES (:id, :cid, '+5215599990002', 'whatsapp')
+                INSERT INTO contacts (id, client_id, display_name)
+                VALUES (:id, :cid, 'Contacto Conversacion')
             """),
             {"id": contact_id, "cid": cid_a},
         )
@@ -163,7 +162,7 @@ class TestRLSMVPTables:
             table="conversations",
             insert_sql="""
                 INSERT INTO conversations (id, client_id, contact_id, status, channel)
-                VALUES (:id, :client_id, :contact_id, 'active', 'whatsapp')
+                VALUES (:id, :client_id, :contact_id, 'bot_active', 'whatsapp')
             """,
             params={
                 "id": str(uuid.uuid4()),
@@ -181,15 +180,15 @@ class TestRLSMVPTables:
 
         await sa.execute(
             text("""
-                INSERT INTO contacts (id, client_id, phone_number, channel)
-                VALUES (:id, :cid, '+5215599990003', 'whatsapp')
+                INSERT INTO contacts (id, client_id, display_name)
+                VALUES (:id, :cid, 'Contacto Mensajes')
             """),
             {"id": contact_id, "cid": cid_a},
         )
         await sa.execute(
             text("""
                 INSERT INTO conversations (id, client_id, contact_id, status, channel)
-                VALUES (:id, :cid, :contact_id, 'active', 'whatsapp')
+                VALUES (:id, :cid, :contact_id, 'bot_active', 'whatsapp')
             """),
             {"id": conv_id, "cid": cid_a, "contact_id": contact_id},
         )
@@ -199,8 +198,8 @@ class TestRLSMVPTables:
             rls_harness["session_b"],
             table="messages",
             insert_sql="""
-                INSERT INTO messages (id, client_id, conversation_id, direction, content, channel)
-                VALUES (:id, :client_id, :conv_id, 'inbound', 'mensaje secreto', 'whatsapp')
+                INSERT INTO messages (id, client_id, conversation_id, direction, sender_type, content)
+                VALUES (:id, :client_id, :conv_id, 'inbound', 'contact', 'mensaje secreto')
             """,
             params={
                 "id": str(uuid.uuid4()),
@@ -216,7 +215,7 @@ class TestRLSMVPTables:
             rls_harness["session_b"],
             table="documents",
             insert_sql="""
-                INSERT INTO documents (id, client_id, title, doc_type, status)
+                INSERT INTO documents (id, client_id, title, file_type, status)
                 VALUES (:id, :client_id, 'Documento Confidencial', 'pdf', 'active')
             """,
             params={
@@ -233,7 +232,7 @@ class TestRLSMVPTables:
 
         await sa.execute(
             text("""
-                INSERT INTO documents (id, client_id, title, doc_type, status)
+                INSERT INTO documents (id, client_id, title, file_type, status)
                 VALUES (:id, :cid, 'Doc Chunks Test', 'pdf', 'active')
             """),
             {"id": doc_id, "cid": cid_a},
@@ -281,15 +280,15 @@ class TestRLSMVPTables:
 
         await sa.execute(
             text("""
-                INSERT INTO contacts (id, client_id, phone_number, channel)
-                VALUES (:id, :cid, '+5215599990004', 'whatsapp')
+                INSERT INTO contacts (id, client_id, display_name)
+                VALUES (:id, :cid, 'Contacto Notas')
             """),
             {"id": contact_id, "cid": cid_a},
         )
         await sa.execute(
             text("""
-                INSERT INTO users (id, client_id, email, role, full_name)
-                VALUES (:id, :cid, 'test@test.com', 'agent', 'Test User')
+                INSERT INTO users (id, client_id, email, password_hash, first_name, last_name, role)
+                VALUES (:id, :cid, 'test@test.com', 'x', 'Test', 'User', 'agent')
             """),
             {"id": user_id, "cid": cid_a},
         )
@@ -299,7 +298,7 @@ class TestRLSMVPTables:
             rls_harness["session_b"],
             table="internal_notes",
             insert_sql="""
-                INSERT INTO internal_notes (id, client_id, contact_id, user_id, content)
+                INSERT INTO internal_notes (id, client_id, contact_id, author_id, content)
                 VALUES (:id, :client_id, :contact_id, :user_id, 'Nota confidencial')
             """,
             params={
@@ -317,8 +316,8 @@ class TestRLSMVPTables:
             rls_harness["session_b"],
             table="token_budgets",
             insert_sql="""
-                INSERT INTO token_budgets (id, client_id, monthly_limit, used_this_month)
-                VALUES (:id, :client_id, 100000, 0)
+                INSERT INTO token_budgets (id, client_id, month, total_budget, used_tokens)
+                VALUES (:id, :client_id, '2026-09', 100000, 0)
             """,
             params={
                 "id": str(uuid.uuid4()),
@@ -326,15 +325,16 @@ class TestRLSMVPTables:
             },
         )
 
-    async def test_token_usage_log(self, rls_harness: dict) -> None:
-        """token_usage_log: aislamiento por tenant."""
+    async def test_token_usage_logs(self, rls_harness: dict) -> None:
+        """token_usage_logs: aislamiento por tenant."""
         await assert_rls_isolation(
             rls_harness["session_a"],
             rls_harness["session_b"],
-            table="token_usage_log",
+            table="token_usage_logs",
             insert_sql="""
-                INSERT INTO token_usage_log (id, client_id, tokens_used, model, node_name)
-                VALUES (:id, :client_id, 150, 'gpt-4o', 'respond')
+                INSERT INTO token_usage_logs
+                    (id, client_id, model, prompt_tokens, completion_tokens, total_tokens, operation)
+                VALUES (:id, :client_id, 'gpt-4o', 100, 50, 150, 'respond')
             """,
             params={
                 "id": str(uuid.uuid4()),
@@ -398,8 +398,8 @@ class TestRLSMVPTables:
             rls_harness["session_b"],
             table="users",
             insert_sql="""
-                INSERT INTO users (id, client_id, email, role, full_name)
-                VALUES (:id, :client_id, :email, 'agent', 'Agente Test')
+                INSERT INTO users (id, client_id, email, password_hash, first_name, last_name, role)
+                VALUES (:id, :client_id, :email, 'x', 'Agente', 'Test', 'agent')
             """,
             params={
                 "id": str(uuid.uuid4()),
@@ -417,15 +417,15 @@ class TestRLSMVPTables:
 
         await sa.execute(
             text("""
-                INSERT INTO contacts (id, client_id, phone_number, channel)
-                VALUES (:id, :cid, '+5215599990005', 'whatsapp')
+                INSERT INTO contacts (id, client_id, display_name)
+                VALUES (:id, :cid, 'Contacto Pending')
             """),
             {"id": contact_id, "cid": cid_a},
         )
         await sa.execute(
             text("""
                 INSERT INTO conversations (id, client_id, contact_id, status, channel)
-                VALUES (:id, :cid, :contact_id, 'active', 'whatsapp')
+                VALUES (:id, :cid, :contact_id, 'bot_active', 'whatsapp')
             """),
             {"id": conv_id, "cid": cid_a, "contact_id": contact_id},
         )
@@ -435,7 +435,7 @@ class TestRLSMVPTables:
             rls_harness["session_b"],
             table="pending_responses",
             insert_sql="""
-                INSERT INTO pending_responses (id, client_id, conversation_id, question, proposed_answer)
+                INSERT INTO pending_responses (id, client_id, conversation_id, question, generated_response)
                 VALUES (:id, :client_id, :conv_id, 'pregunta test', 'respuesta propuesta')
             """,
             params={
@@ -453,7 +453,7 @@ class TestRLSMVPTables:
             rls_harness["session_b"],
             table="approved_responses",
             insert_sql="""
-                INSERT INTO approved_responses (id, client_id, question, answer, embedding)
+                INSERT INTO approved_responses (id, client_id, question, response, embedding)
                 VALUES (:id, :client_id, 'como reservo', 'puedes reservar en...', :embedding::vector)
             """,
             params={
@@ -467,6 +467,12 @@ class TestRLSMVPTables:
 # ─── Tests por tabla Fase 2 ─────────────────────────────────────────────────
 
 
+@pytest.mark.skip(
+    reason="Tablas de Fase 2 (audit_logs, tenant_templates, tenant_webhooks, "
+    "satisfaction_surveys, channel_configs) aun no existen en ninguna migracion "
+    "de Alembic (solo en supabase/init/phase2_tables.sql, que ADR-020 no ejecuta "
+    "contra Supabase Cloud). Reactivar cuando su migracion se agregue."
+)
 class TestRLSPhase2Tables:
     """Tests de aislamiento RLS para las 6 tablas de Fase 2."""
 
@@ -576,6 +582,10 @@ class TestRLSPhase2Tables:
 # ─── Tests de Feature Enhancement Tables ────────────────────────────────────
 
 
+@pytest.mark.skip(
+    reason="agent_action_logs (logging de actividad de agentes, sprint-06-addendum) "
+    "aun no existe en ninguna migracion de Alembic. Reactivar cuando se agregue."
+)
 class TestRLSFeatureTables:
     """Tests de aislamiento RLS para tablas de features adicionales."""
 
@@ -639,7 +649,7 @@ class TestRLSVectorSearch:
 
         await sa.execute(
             text("""
-                INSERT INTO documents (id, client_id, title, doc_type, status)
+                INSERT INTO documents (id, client_id, title, file_type, status)
                 VALUES (:id, :cid, 'RAG Test Doc', 'pdf', 'active')
             """),
             {"id": doc_id, "cid": cid_a},
@@ -696,7 +706,7 @@ class TestRLSVectorSearch:
         fake_embedding = "[" + ",".join(["0.3"] * 1536) + "]"
         await sa.execute(
             text("""
-                INSERT INTO approved_responses (id, client_id, question, answer, embedding)
+                INSERT INTO approved_responses (id, client_id, question, response, embedding)
                 VALUES (:id, :cid, 'horarios de atención', 'Lunes a Viernes 9-18', :emb::vector)
             """),
             {"id": str(uuid.uuid4()), "cid": cid_a, "emb": fake_embedding},

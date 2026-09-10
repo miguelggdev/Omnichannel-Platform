@@ -206,16 +206,16 @@ async def rls_harness(db_engine, tenant_a_id, tenant_b_id) -> dict:
     # Asegurar que los tenants existen
     await session_a.execute(
         text("""
-            INSERT INTO clients (id, name, slug, plan, max_agents, is_active)
-            VALUES (:id, 'Tenant A Test', 'tenant-a-test', 'free', 1, true)
+            INSERT INTO clients (id, name, slug, plan, is_active)
+            VALUES (:id, 'Tenant A Test', 'tenant-a-test', 'free', true)
             ON CONFLICT (id) DO NOTHING
         """),
         {"id": str(tenant_a_id)},
     )
     await session_b.execute(
         text("""
-            INSERT INTO clients (id, name, slug, plan, max_agents, is_active)
-            VALUES (:id, 'Tenant B Test', 'tenant-b-test', 'free', 1, true)
+            INSERT INTO clients (id, name, slug, plan, is_active)
+            VALUES (:id, 'Tenant B Test', 'tenant-b-test', 'free', true)
             ON CONFLICT (id) DO NOTHING
         """),
         {"id": str(tenant_b_id)},
