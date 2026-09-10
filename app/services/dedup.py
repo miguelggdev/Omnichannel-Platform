@@ -34,7 +34,8 @@ DEDUP_KEY_PREFIX = "webhook_dedup"
 DEDUP_TTL_SECONDS = 86_400  # 24 horas
 
 # Cliente Redis propio del servicio (el worker de Celery no tiene `app.state`).
-_redis_client: aioredis.Redis | None = None
+# Los stubs tipan Redis como generico; con decode_responses=True es Redis[str].
+_redis_client: "aioredis.Redis[str] | None" = None
 
 
 def build_dedup_key(channel: str, external_message_id: str) -> str:
@@ -50,7 +51,7 @@ def build_dedup_key(channel: str, external_message_id: str) -> str:
     return f"{DEDUP_KEY_PREFIX}:{channel}:{external_message_id}"
 
 
-def get_redis() -> aioredis.Redis:
+def get_redis() -> "aioredis.Redis[str]":
     """Devuelve el cliente Redis del servicio, creandolo la primera vez.
 
     Se cachea a nivel de modulo porque el worker de Celery no tiene acceso a
@@ -69,7 +70,9 @@ async def close_redis() -> None:
     """Cierra el cliente Redis del servicio, si fue creado."""
     global _redis_client
     if _redis_client is not None:
-        await _redis_client.aclose()
+        # close() y no aclose(): los stubs de types-redis que instala el CI todavia
+        # no conocen aclose().
+        await _redis_client.close()
         _redis_client = None
 
 
@@ -77,7 +80,7 @@ async def mark_if_new(
     channel: str,
     external_message_id: str,
     *,
-    redis_client: aioredis.Redis | None = None,
+    redis_client: "aioredis.Redis[str] | None" = None,
     ttl_seconds: int = DEDUP_TTL_SECONDS,
 ) -> bool:
     """Marca el mensaje como visto en Redis y dice si era nuevo.
@@ -116,7 +119,7 @@ async def release_mark(
     channel: str,
     external_message_id: str,
     *,
-    redis_client: aioredis.Redis | None = None,
+    redis_client: "aioredis.Redis[str] | None" = None,
 ) -> None:
     """Borra la marca de Redis para que el proveedor pueda reintentar.
 

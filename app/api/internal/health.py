@@ -50,7 +50,8 @@ async def health_check() -> JSONResponse:
         # redis-py tipa ping() como `Awaitable[bool] | bool`; con el cliente
         # asincrono siempre es awaitable.
         await cast("Awaitable[bool]", redis_client.ping())
-        await redis_client.aclose()
+        # close() y no aclose(): los stubs de types-redis del CI no conocen aclose().
+        await redis_client.close()
         checks["redis"] = "ok"
     except Exception as exc:
         logger.warning("Health check Redis failed: %s", exc)
