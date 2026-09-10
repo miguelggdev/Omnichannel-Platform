@@ -21,9 +21,8 @@ Letter Queue de Redis (`dlq:webhook_messages`) para revision manual.
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from celery import shared_task
@@ -37,6 +36,9 @@ from app.models.contact_identifier import ContactIdentifier
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.services.dedup import get_redis, is_duplicate_persisted, persist_dedup
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
 
 logger = logging.getLogger(__name__)
 
