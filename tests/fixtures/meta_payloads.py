@@ -143,3 +143,21 @@ YCLOUD_TEXT: dict[str, Any] = {
         "timestamp": "2026-09-09T20:00:00.000Z",
     },
 }
+
+YCLOUD_IMAGE: dict[str, Any] = {
+    "id": "evt_00000000000000000002",
+    "type": "whatsapp.inbound_message.received",
+    "createTime": "2026-09-09T20:01:00.000Z",
+    "whatsappInboundMessage": {
+        "id": "wamid.TEST0000000000000002",
+        "wabaId": "100000000000001",
+        "from": "573001112233",
+        "to": "573009998877",
+        "type": "image",
+        "image": {
+            "url": "https://media.ycloud.com/ejemplo.jpg",
+            "caption": "Esta es la factura",
+        },
+        "timestamp": "2026-09-09T20:01:00.000Z",
+    },
+}
