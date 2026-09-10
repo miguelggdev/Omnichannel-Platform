@@ -190,9 +190,7 @@ class TestResolverConversacion:
         activa = object()
         session = FakeSession(results=[activa])
 
-        resultado = await wp._resolve_conversation(
-            session, uuid.uuid4(), uuid.uuid4(), "whatsapp"
-        )
+        resultado = await wp._resolve_conversation(session, uuid.uuid4(), uuid.uuid4(), "whatsapp")
 
         assert resultado is activa
         assert session.added == []
@@ -201,9 +199,7 @@ class TestResolverConversacion:
         """Sin hilo abierto se crea uno nuevo listo para el grafo de agentes."""
         session = FakeSession(results=[None])
 
-        resultado = await wp._resolve_conversation(
-            session, uuid.uuid4(), uuid.uuid4(), "instagram"
-        )
+        resultado = await wp._resolve_conversation(session, uuid.uuid4(), uuid.uuid4(), "instagram")
 
         assert resultado.status == "bot_active"
         assert resultado.channel == "instagram"
@@ -305,9 +301,7 @@ class TestTareaCelery:
         monkeypatch.setattr(wp, "get_redis", lambda: fake)
         task_self = FakeTaskSelf(retries=3)
 
-        resultado = self.cuerpo(
-            task_self, "ycloud", "whatsapp", {"external_message_id": "w.dlq"}
-        )
+        resultado = self.cuerpo(task_self, "ycloud", "whatsapp", {"external_message_id": "w.dlq"})
 
         assert resultado == {"status": "dlq"}
         assert task_self.retry_calls == 0
@@ -325,9 +319,7 @@ class TestDedupPersistente:
         session = FakeSession()
         client_id = uuid.uuid4()
 
-        creado = await dedup_module.persist_dedup(
-            client_id, "whatsapp", "wamid.1", session=session
-        )
+        creado = await dedup_module.persist_dedup(client_id, "whatsapp", "wamid.1", session=session)
 
         assert creado is True
         assert len(session.added) == 1

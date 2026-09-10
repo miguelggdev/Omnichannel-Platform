@@ -343,8 +343,7 @@ class TestDedupService:
     def test_patron_de_clave(self) -> None:
         """La clave sigue el patron webhook_dedup:{channel}:{external_message_id}."""
         assert (
-            dedup_module.build_dedup_key("whatsapp", "wamid.X")
-            == "webhook_dedup:whatsapp:wamid.X"
+            dedup_module.build_dedup_key("whatsapp", "wamid.X") == "webhook_dedup:whatsapp:wamid.X"
         )
 
     async def test_primera_marca_es_nueva_y_la_segunda_no(self, fake_redis: FakeRedis) -> None:
@@ -372,9 +371,7 @@ class TestDedupService:
         await dedup_module.close_redis()
         assert dedup_module._redis_client is None
 
-    async def test_close_redis_sin_cliente_no_falla(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_close_redis_sin_cliente_no_falla(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Cerrar dos veces (o sin haber abierto) es inofensivo."""
         monkeypatch.setattr(dedup_module, "_redis_client", None, raising=False)
 
@@ -387,9 +384,7 @@ class TestDedupService:
             async def set(self, *args: Any, **kwargs: Any) -> bool:
                 raise ConnectionError("redis caido")
 
-        resultado = await dedup_module.mark_if_new(
-            "whatsapp", "id-3", redis_client=BrokenRedis()
-        )
+        resultado = await dedup_module.mark_if_new("whatsapp", "id-3", redis_client=BrokenRedis())
 
         assert resultado is True
 

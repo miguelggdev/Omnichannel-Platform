@@ -98,9 +98,7 @@ async def webhook_tenant(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[uuid
                 text(f"DELETE FROM {tabla} WHERE client_id = :cid"),  # noqa: S608
                 {"cid": str(client_id)},
             )
-        await session.execute(
-            text("DELETE FROM clients WHERE id = :cid"), {"cid": str(client_id)}
-        )
+        await session.execute(text("DELETE FROM clients WHERE id = :cid"), {"cid": str(client_id)})
 
 
 async def _contar(client_id: uuid.UUID, tabla: str) -> int:
@@ -184,12 +182,8 @@ async def test_remitentes_distintos_abren_contactos_distintos(
     webhook_tenant: uuid.UUID,
 ) -> None:
     """Cada identifier del canal es un contacto propio."""
-    await _process_message(
-        "ycloud", "whatsapp", _normalized("whatsapp", "573001112233", "wamid.C")
-    )
-    await _process_message(
-        "ycloud", "whatsapp", _normalized("whatsapp", "573004445566", "wamid.D")
-    )
+    await _process_message("ycloud", "whatsapp", _normalized("whatsapp", "573001112233", "wamid.C"))
+    await _process_message("ycloud", "whatsapp", _normalized("whatsapp", "573004445566", "wamid.D"))
 
     assert await _contar(webhook_tenant, "contacts") == 2
     assert await _contar(webhook_tenant, "conversations") == 2
@@ -202,9 +196,7 @@ async def test_mismo_remitente_en_canales_distintos_no_comparte_conversacion(
     await _process_message(
         "meta", "instagram", _normalized("instagram", "6789000000000001", "ig.X")
     )
-    await _process_message(
-        "meta", "facebook", _normalized("facebook", "6789000000000001", "fb.X")
-    )
+    await _process_message("meta", "facebook", _normalized("facebook", "6789000000000001", "fb.X"))
 
     assert await _contar(webhook_tenant, "conversations") == 2
     assert await _contar(webhook_tenant, "messages") == 2
@@ -212,9 +204,7 @@ async def test_mismo_remitente_en_canales_distintos_no_comparte_conversacion(
 
 async def test_conversacion_resuelta_no_se_reabre(webhook_tenant: uuid.UUID) -> None:
     """Si el hilo anterior quedo resolved, el mensaje nuevo abre uno fresco."""
-    await _process_message(
-        "ycloud", "whatsapp", _normalized("whatsapp", "573001112233", "wamid.E")
-    )
+    await _process_message("ycloud", "whatsapp", _normalized("whatsapp", "573001112233", "wamid.E"))
 
     async with tenant_session(webhook_tenant) as session:
         await session.execute(
@@ -222,9 +212,7 @@ async def test_conversacion_resuelta_no_se_reabre(webhook_tenant: uuid.UUID) -> 
             {"cid": str(webhook_tenant)},
         )
 
-    await _process_message(
-        "ycloud", "whatsapp", _normalized("whatsapp", "573001112233", "wamid.F")
-    )
+    await _process_message("ycloud", "whatsapp", _normalized("whatsapp", "573001112233", "wamid.F"))
 
     assert await _contar(webhook_tenant, "contacts") == 1
     assert await _contar(webhook_tenant, "conversations") == 2

@@ -233,16 +233,12 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
 
     async with tenant_session(client_id) as session:
         # Dedup nivel 2: si Redis perdio la clave, aqui se corta igual.
-        if await is_duplicate_persisted(
-            client_id, message_channel, external_id, session=session
-        ):
+        if await is_duplicate_persisted(client_id, message_channel, external_id, session=session):
             logger.info("Mensaje ya procesado (webhook_dedup): %s", external_id)
             return
 
         contact = await _resolve_contact(session, client_id, message_channel, sender_identifier)
-        conversation = await _resolve_conversation(
-            session, client_id, contact.id, message_channel
-        )
+        conversation = await _resolve_conversation(session, client_id, contact.id, message_channel)
 
         session.add(
             Message(
