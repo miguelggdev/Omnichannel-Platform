@@ -7,6 +7,14 @@
 -- =============================================================================
 -- Sprint 1 — Schema DDL & Arquitectura
 -- =============================================================================
+-- ESTADO (2026-09-10, issue #6 / BUG-005): LEGACY, no se ejecuta contra Supabase
+-- Cloud (ADR-020) ni en CI (ver .github/workflows/ci.yml, que ahora siembra el
+-- schema de test vía `alembic upgrade head`). Ya diverge del schema real de
+-- app/models/ (ej. users.full_name aquí vs first_name/last_name en los modelos y
+-- en migrations/versions/001_baseline.py). La fuente de verdad del schema es
+-- app/models/ + migrations/versions/. Conservar solo como referencia histórica
+-- del diseño original hasta que se decida archivarlo o borrarlo.
+-- =============================================================================
 
 BEGIN;
 

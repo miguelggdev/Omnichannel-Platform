@@ -1,10 +1,13 @@
 """Database layer — SQLAlchemy 2.0 async con Supavisor.
 
 El engine se conecta a Supabase Cloud vía el Transaction Pooler (Supavisor,
-puerto 6543). El helper tenant_session() aplica SET LOCAL para RLS.
+puerto 6543). El helper tenant_session() aplica el contexto de tenant para RLS
+con set_config(..., is_local=true) — el equivalente parametrizable de
+SET LOCAL (PostgreSQL no admite bind params en SET).
 
-REGLA CRÍTICA: SIEMPRE SET LOCAL, NUNCA SET.
-Supavisor resetea variables de sesión entre transacciones.
+REGLA CRÍTICA: el contexto SIEMPRE debe quedar con scope de transacción
+(is_local=true), NUNCA de sesión. Supavisor resetea variables de sesión entre
+transacciones.
 """
 
 import logging
@@ -42,11 +45,12 @@ AsyncSessionLocal = async_sessionmaker(
 
 @asynccontextmanager
 async def tenant_session(client_id: UUID) -> AsyncGenerator[AsyncSession, None]:
-    """Context manager que abre una sesión con SET LOCAL para RLS.
+    """Context manager que abre una sesión con el contexto de tenant para RLS.
 
-    SIEMPRE usar SET LOCAL, NUNCA SET. SET LOCAL tiene scope de transacción,
-    compatible con Supavisor en transaction mode. SET sin LOCAL persiste por
-    sesión y puede causar fuga de datos entre tenants.
+    Usa set_config('app.current_client_id', ..., true) — is_local=true le da
+    scope de transacción, igual que SET LOCAL, compatible con Supavisor en
+    transaction mode. is_local=false (o un SET sin LOCAL) persiste por sesión
+    y puede causar fuga de datos entre tenants.
 
     Args:
         client_id: UUID del tenant para filtrado RLS.
@@ -55,8 +59,12 @@ async def tenant_session(client_id: UUID) -> AsyncGenerator[AsyncSession, None]:
         AsyncSession con el contexto de tenant ya configurado.
     """
     async with AsyncSessionLocal() as session, session.begin():
+        # SET LOCAL no admite parametros bind (error de sintaxis de PostgreSQL:
+        # "SET" no acepta placeholders). set_config() si es una funcion normal
+        # y su tercer argumento (is_local=true) da el mismo scope de
+        # transaccion que SET LOCAL.
         await session.execute(
-            text("SET LOCAL app.current_client_id = :client_id"),
+            text("SELECT set_config('app.current_client_id', :client_id, true)"),
             {"client_id": str(client_id)},
         )
         yield session
