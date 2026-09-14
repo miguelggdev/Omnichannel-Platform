@@ -167,6 +167,10 @@ async def upload_document(
         )
         session.add(document)
         await session.flush()
+        # created_at y updated_at son server_default: sin refresh llegan a None y
+        # DocumentResponse falla. Y en async hay que pedirlos explicitamente, no
+        # por carga perezosa al acceder al atributo.
+        await session.refresh(document)
         respuesta = DocumentResponse.model_validate(document)
 
     # Fuera de la transaccion: el worker abre su propia conexion y necesita ver la fila.
