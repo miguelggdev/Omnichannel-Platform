@@ -150,7 +150,7 @@ async def tenant_session_a(db_engine, tenant_a_id) -> AsyncGenerator:
 
     async with AsyncSession(db_engine) as session, session.begin():
         await session.execute(
-            text("SET LOCAL app.current_client_id = :cid"),
+            text("SELECT set_config('app.current_client_id', :cid, true)"),
             {"cid": str(tenant_a_id)},
         )
         yield session
@@ -164,7 +164,7 @@ async def tenant_session_b(db_engine, tenant_b_id) -> AsyncGenerator:
 
     async with AsyncSession(db_engine) as session, session.begin():
         await session.execute(
-            text("SET LOCAL app.current_client_id = :cid"),
+            text("SELECT set_config('app.current_client_id', :cid, true)"),
             {"cid": str(tenant_b_id)},
         )
         yield session
@@ -193,13 +193,13 @@ async def rls_harness(db_engine, tenant_a_id, tenant_b_id) -> dict:
     trans_a = await session_a.begin()
     trans_b = await session_b.begin()
 
-    # Configurar tenant context
+    # Configurar tenant context. set_config() acepta parametros bind; SET LOCAL no.
     await session_a.execute(
-        text("SET LOCAL app.current_client_id = :cid"),
+        text("SELECT set_config('app.current_client_id', :cid, true)"),
         {"cid": str(tenant_a_id)},
     )
     await session_b.execute(
-        text("SET LOCAL app.current_client_id = :cid"),
+        text("SELECT set_config('app.current_client_id', :cid, true)"),
         {"cid": str(tenant_b_id)},
     )
 

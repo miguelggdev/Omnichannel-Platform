@@ -41,8 +41,8 @@ Eres un Senior AI Engineer & Azure Solutions Architect construyendo una platafor
 - **TODA tabla** tiene `client_id UUID NOT NULL REFERENCES clients(id)`.
 - **RLS habilitado con FORCE** en cada tabla.
 - Política: `USING (client_id = current_setting('app.current_client_id')::uuid)`.
-- **SIEMPRE `SET LOCAL`**, nunca `SET`. El Transaction Pooler de Supabase Cloud (Supavisor) resetea variables de sesión entre transacciones; `SET LOCAL` es transaction-scoped y compatible.
-- El middleware `TenantContextMiddleware` ejecuta `SET LOCAL app.current_client_id = '{tenant_id}'` al inicio de cada transacción.
+- **SIEMPRE scope de transacción, nunca de sesión** para `app.current_client_id`. El Transaction Pooler de Supabase Cloud (Supavisor) resetea variables de sesión entre transacciones. PostgreSQL no admite parámetros bind en `SET`, así que se usa `SELECT set_config('app.current_client_id', :client_id, true)` (el tercer argumento `is_local=true` da el mismo scope que `SET LOCAL`), no `SET LOCAL app.current_client_id = :client_id` directamente.
+- `app/core/database.py::tenant_session()` ejecuta ese `set_config(...)` al abrir cada sesión con contexto de tenant (no el middleware `TenantContextMiddleware`, que solo extrae y valida el JWT hacia `request.state`).
 - Las migraciones de Alembic corren contra `DATABASE_URL_DIRECT` (conexión directa), no contra el pooler — el pooler en modo transacción no soporta bien el DDL de sesiones largas de Alembic.
 
 ### 2. Búsquedas Vectoriales
@@ -216,9 +216,11 @@ omnichannel-platform/
 ### Middleware de Tenant (SIEMPRE aplicar)
 ```python
 # En cada request autenticado:
+# PostgreSQL no admite parametros bind en SET — usar set_config() con
+# is_local=true, que da el mismo scope de transaccion que SET LOCAL.
 async with session.begin():
     await session.execute(
-        text("SET LOCAL app.current_client_id = :client_id"),
+        text("SELECT set_config('app.current_client_id', :client_id, true)"),
         {"client_id": str(tenant_id)}
     )
     # ... queries aquí, protegidas por RLS
