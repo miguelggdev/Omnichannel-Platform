@@ -747,3 +747,188 @@ class TestWorkerDeIngesta:
         """El nombre y la cola tienen que casar con celery_config."""
         assert ingestion_module.ingest_document.name == "app.tasks.document_ingest"
         assert ingestion_module.ingest_document.queue == "documents"
+
+
+class FakeResponse:
+    """Respuesta HTTP minima."""
+
+    def __init__(self, status_code: int = 200, content: bytes = b"") -> None:
+        self.status_code = status_code
+        self.content = content
+        self.text = content.decode(errors="replace")
+
+
+class FakeHttpClient:
+    """Sustituto de httpx.AsyncClient que registra las llamadas."""
+
+    ultima: "FakeHttpClient | None" = None
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.llamadas: list[tuple[str, str, dict[str, Any]]] = []
+        self.respuesta = FakeResponse()
+        FakeHttpClient.ultima = self
+
+    async def __aenter__(self) -> "FakeHttpClient":
+        """Entra al contexto."""
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        """Sale del contexto."""
+        return
+
+    async def post(self, url: str, **kwargs: Any) -> FakeResponse:
+        """Registra el POST."""
+        self.llamadas.append(("POST", url, kwargs))
+        return self.respuesta
+
+    async def get(self, url: str, **kwargs: Any) -> FakeResponse:
+        """Registra el GET."""
+        self.llamadas.append(("GET", url, kwargs))
+        return self.respuesta
+
+    async def delete(self, url: str, **kwargs: Any) -> FakeResponse:
+        """Registra el DELETE."""
+        self.llamadas.append(("DELETE", url, kwargs))
+        return self.respuesta
+
+
+@pytest.fixture
+def http_falso(monkeypatch: pytest.MonkeyPatch) -> type[FakeHttpClient]:
+    """Sustituye httpx.AsyncClient y configura credenciales de prueba."""
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "SUPABASE_URL", "https://proyecto.supabase.co")
+    monkeypatch.setattr(settings, "SUPABASE_SECRET_KEY", "sb_secret_test")
+    monkeypatch.setattr(settings, "SUPABASE_STORAGE_BUCKET", "documents")
+    monkeypatch.setattr(storage_module.httpx, "AsyncClient", FakeHttpClient)
+    return FakeHttpClient
+
+
+class TestStorageHttp:
+    """Camino HTTP real contra la API de Supabase Storage."""
+
+    async def test_upload_arma_la_url_y_autentica(self, http_falso: type[FakeHttpClient]) -> None:
+        """La URL sigue el patron de la API y lleva la service key."""
+        ruta = await storage_module.upload_to_storage("tenant/doc/f.txt", b"abc", "text/plain")
+
+        metodo, url, kwargs = http_falso.ultima.llamadas[0]
+        assert ruta == "tenant/doc/f.txt"
+        assert metodo == "POST"
+        assert url == "https://proyecto.supabase.co/storage/v1/object/documents/tenant/doc/f.txt"
+        assert kwargs["headers"]["Authorization"] == "Bearer sb_secret_test"
+        assert kwargs["headers"]["Content-Type"] == "text/plain"
+        assert kwargs["content"] == b"abc"
+
+    async def test_upload_con_error_levanta_storage_error(
+        self, http_falso: type[FakeHttpClient], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Un 403 de Storage no puede pasar por subida correcta."""
+
+        async def _post(self: Any, url: str, **kwargs: Any) -> FakeResponse:
+            return FakeResponse(status_code=403, content=b"denegado")
+
+        monkeypatch.setattr(FakeHttpClient, "post", _post)
+
+        with pytest.raises(storage_module.StorageError):
+            await storage_module.upload_to_storage("t/d/f.txt", b"abc", "text/plain")
+
+    async def test_upload_sin_red_levanta_storage_error(
+        self, monkeypatch: pytest.MonkeyPatch, http_falso: type[FakeHttpClient]
+    ) -> None:
+        """Un fallo de transporte se traduce, no se propaga httpx al endpoint."""
+
+        async def _post(self: Any, url: str, **kwargs: Any) -> FakeResponse:
+            raise httpx.ConnectError("sin red")
+
+        monkeypatch.setattr(FakeHttpClient, "post", _post)
+
+        with pytest.raises(storage_module.StorageError):
+            await storage_module.upload_to_storage("t/d/f.txt", b"abc", "text/plain")
+
+    async def test_download_devuelve_los_bytes(
+        self, http_falso: type[FakeHttpClient], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Lo que baja el pipeline es el contenido del objeto."""
+
+        async def _get(self: Any, url: str, **kwargs: Any) -> FakeResponse:
+            return FakeResponse(content=b"contenido del pdf")
+
+        monkeypatch.setattr(FakeHttpClient, "get", _get)
+
+        assert await storage_module.download_from_storage("t/d/f.pdf") == b"contenido del pdf"
+
+    async def test_download_de_objeto_ausente_levanta(
+        self, http_falso: type[FakeHttpClient], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Un 404 tiene que cortar el pipeline, no devolver bytes vacios."""
+
+        async def _get(self: Any, url: str, **kwargs: Any) -> FakeResponse:
+            return FakeResponse(status_code=404)
+
+        monkeypatch.setattr(FakeHttpClient, "get", _get)
+
+        with pytest.raises(storage_module.StorageError):
+            await storage_module.download_from_storage("t/d/ausente.pdf")
+
+    async def test_delete_ok(self, http_falso: type[FakeHttpClient]) -> None:
+        """El borrado confirmado devuelve True."""
+        assert await storage_module.delete_from_storage("t/d/f.txt") is True
+
+    async def test_delete_con_error_devuelve_false(
+        self, http_falso: type[FakeHttpClient], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Un error de Storage al borrar se registra, no se propaga."""
+
+        async def _delete(self: Any, url: str, **kwargs: Any) -> FakeResponse:
+            return FakeResponse(status_code=500)
+
+        monkeypatch.setattr(FakeHttpClient, "delete", _delete)
+
+        assert await storage_module.delete_from_storage("t/d/f.txt") is False
+
+
+class TestMarcarFallido:
+    """`_mark_document_failed` deja el motivo visible en el documento."""
+
+    async def test_actualiza_status_y_metadata(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """El motivo se guarda reasignando metadata, no mutandola."""
+        doc = FakeDocument(status="processing", metadata_={"storage_path": "t/d/f.txt"})
+        session = FakeSession(doc=doc)
+        monkeypatch.setattr(
+            ingestion_module, "tenant_session", lambda _cid: FakeTenantSession(session)
+        )
+
+        await ingestion_module._mark_document_failed(doc.id, doc.client_id, "OCR reviento")
+
+        assert doc.status == "failed"
+        assert doc.metadata_["error"] == "OCR reviento"
+        assert doc.metadata_["storage_path"] == "t/d/f.txt", "no debe perder lo que ya habia"
+
+    async def test_recorta_motivos_largos(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Lo que ve el usuario no debe ser un traceback entero."""
+        doc = FakeDocument()
+        monkeypatch.setattr(
+            ingestion_module,
+            "tenant_session",
+            lambda _cid: FakeTenantSession(FakeSession(doc=doc)),
+        )
+
+        await ingestion_module._mark_document_failed(doc.id, doc.client_id, "x" * 2000)
+
+        assert len(doc.metadata_["error"]) == 500
+
+    async def test_documento_ya_borrado_no_rompe(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Si el documento se borro mientras se procesaba, no hay nada que marcar."""
+        monkeypatch.setattr(
+            ingestion_module,
+            "tenant_session",
+            lambda _cid: FakeTenantSession(FakeSession(doc=None)),
+        )
+
+        await ingestion_module._mark_document_failed(uuid.uuid4(), uuid.uuid4(), "error")
+
+    async def test_pipeline_ausente_se_detecta(self) -> None:
+        """Sin los servicios de Dev A, _run_pipeline lo dice explicitamente."""
+        with pytest.raises(ingestion_module.PipelineUnavailableError):
+            await ingestion_module._run_pipeline(uuid.uuid4(), uuid.uuid4())
