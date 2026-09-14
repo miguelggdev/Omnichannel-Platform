@@ -20,7 +20,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
-from app.core.database import AsyncSessionLocal, engine, tenant_session
+from app.core.database import engine, tenant_session
 from app.tasks.webhook_processor import _process_message
 
 pytestmark = pytest.mark.db
@@ -81,7 +81,9 @@ async def webhook_tenant(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[uuid
 
     client_id = uuid.uuid4()
 
-    async with AsyncSessionLocal() as session, session.begin():
+    # Con contexto de tenant: la politica RLS de `clients` exige
+    # `id = current_setting('app.current_client_id')::uuid` tambien en el WITH CHECK.
+    async with tenant_session(client_id) as session:
         await session.execute(
             text(
                 "INSERT INTO clients (id, name, slug, plan, is_active) "
@@ -94,8 +96,8 @@ async def webhook_tenant(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[uuid
 
     yield client_id
 
-    # Limpieza en orden inverso al de las FKs.
-    async with AsyncSessionLocal() as session, session.begin():
+    # Limpieza en orden inverso al de las FKs, tambien con contexto de tenant.
+    async with tenant_session(client_id) as session:
         for tabla in (
             "messages",
             "conversations",

@@ -36,8 +36,13 @@ EMBEDDING = "[" + ",".join(["0.1"] * 1536) + "]"
 
 
 async def _crear_cliente(client_id: uuid.UUID, slug: str) -> None:
-    """Inserta un tenant commiteado."""
-    async with AsyncSessionLocal() as session, session.begin():
+    """Inserta un tenant commiteado.
+
+    Va dentro de `tenant_session(client_id)` a proposito: la politica RLS de
+    `clients` exige `id = current_setting('app.current_client_id')::uuid` tambien en
+    el WITH CHECK, asi que el contexto tiene que ser el del tenant que se crea.
+    """
+    async with tenant_session(client_id) as session:
         await session.execute(
             text(
                 "INSERT INTO clients (id, name, slug, plan, is_active) "
@@ -48,8 +53,12 @@ async def _crear_cliente(client_id: uuid.UUID, slug: str) -> None:
 
 
 async def _borrar_cliente(client_id: uuid.UUID) -> None:
-    """Limpia el tenant y todo lo que cuelga de el, en orden de FKs."""
-    async with AsyncSessionLocal() as session, session.begin():
+    """Limpia el tenant y todo lo que cuelga de el, en orden de FKs.
+
+    Con contexto de tenant, igual que el alta: sin el, RLS no deja ver ni una fila
+    que borrar.
+    """
+    async with tenant_session(client_id) as session:
         for tabla in ("document_chunks", "documents"):
             await session.execute(
                 text(f"DELETE FROM {tabla} WHERE client_id = :cid"),  # noqa: S608
