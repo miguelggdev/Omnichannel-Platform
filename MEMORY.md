@@ -234,6 +234,12 @@
 ### PAT-002: NormalizedMessage como contrato interno
 - **Patrón:** Todo mensaje entrante se normaliza a `NormalizedMessage(channel, sender, text, media_url, timestamp, metadata)` inmediatamente en el webhook receiver, antes de cualquier lógica de negocio.
 - **Razón:** Desacopla la lógica de negocio del formato específico de cada proveedor de mensajería.
+- **Implementado:** Sprint 4, Dev A — `app/schemas/message.py`. `ChannelEnum`/`MessageTypeEnum` usan `enum.StrEnum`, no `class X(str, Enum)` — Python 3.11+ y `ruff` (regla UP042) piden `StrEnum` directamente; el comportamiento con Pydantic es identico.
+
+### PAT-002b: MetaProvider no debe exigir credenciales en el constructor
+- **Patrón:** `MetaProvider.__init__(provider_config)` usa `provider_config.get("page_access_token", "")` / `.get("app_secret", "")`, no indexación directa (`provider_config["..."]`).
+- **Razón:** `_resolve_provider()` en `app/api/v1/webhooks.py` (Dev B) construye el provider con `{"channel": channel}` únicamente en el camino real de recepción de webhooks — nunca pasa `page_access_token` ni `app_secret` ahí. `specs/sprint-04-webhooks.md` §4 muestra el constructor con indexación directa (`provider_config["page_access_token"]`), lo que revienta con `KeyError` en todo mensaje entrante de Meta si se sigue al pie de la letra. Ninguno de los dos valores se usa desde `self` en el resto de la clase: `send_message`/`send_template` los reciben por `channel_config` en cada llamada, y `validate_signature` recibe el secreto como parámetro (`settings.META_APP_SECRET`, resuelto por el endpoint).
+- **Detectado:** Sprint 4, Dev A, sesión 12, al contrastar el pseudocódigo de la spec contra la llamada real que ya estaba en `main` (`webhooks.py::_resolve_provider`).
 
 ### PAT-003: ConversationState como TypedDict inmutable por paso
 - **Patrón:** El estado del grafo LangGraph es un `TypedDict` que se pasa entre nodos. Cada nodo retorna un nuevo dict parcial que se mergea (no muta el original).
