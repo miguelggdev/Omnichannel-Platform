@@ -23,7 +23,15 @@ from sqlalchemy import text
 from app.core.database import AsyncSessionLocal, tenant_session
 from app.tasks.webhook_processor import _process_message
 
-pytestmark = pytest.mark.db
+pytestmark = [
+    pytest.mark.db,
+    # app.core.database.engine es un singleton de modulo (una app real vive en
+    # un solo event loop). pytest-asyncio abre un loop nuevo por test por
+    # defecto; compartir un loop de modulo evita que la pool de conexiones
+    # del engine quede atada a un loop ya cerrado en el segundo test
+    # (RuntimeError "attached to a different loop").
+    pytest.mark.asyncio(loop_scope="module"),
+]
 
 
 # ─── Datos de entrada ────────────────────────────────────────────────────────
@@ -75,8 +83,8 @@ async def webhook_tenant(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[uuid
     async with AsyncSessionLocal() as session, session.begin():
         await session.execute(
             text(
-                "INSERT INTO clients (id, name, slug, plan, max_agents, is_active) "
-                "VALUES (:id, 'Tenant Webhook Flow', :slug, 'free', 1, true)"
+                "INSERT INTO clients (id, name, slug, plan, is_active) "
+                "VALUES (:id, 'Tenant Webhook Flow', :slug, 'free', true)"
             ),
             {"id": str(client_id), "slug": f"webhook-flow-{client_id.hex[:8]}"},
         )
