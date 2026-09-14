@@ -141,16 +141,22 @@ jobs:
           pip install pytest pytest-asyncio httpx
 
       - name: Initialize database schema
+        # BUG-005: la suite de integracion (incluida RLS) debe correr contra el
+        # schema real de Alembic, no contra supabase/init/init.sql — ese script
+        # es legacy (ADR-020, no se ejecuta contra Supabase Cloud) y ya diverge
+        # del schema de app/models/ (ej. users.full_name vs first_name/last_name).
         run: |
-          PGPASSWORD=test_password psql -h localhost -U test_user -d test_omnichannel \
-            -f supabase/init/init.sql
+          cd migrations
+          alembic upgrade head
         env:
-          PGPASSWORD: test_password
+          DATABASE_URL: "postgresql+asyncpg://test_user:test_password@localhost:5432/test_omnichannel"
 
       - name: Run RLS isolation tests
+        # --run-db es obligatorio: tests/integration/ (incluye test_webhook_flow.py,
+        # marcado @pytest.mark.db) se saltaba entero sin este flag, sin que CI
+        # fallara ni avisara.
         run: |
-          pytest tests/unit/test_rls_isolation.py -v --tb=short --run-db
-          pytest tests/integration/ -v --tb=short
+          pytest tests/integration/ -v --tb=short --run-db
         env:
           DATABASE_URL: "postgresql+asyncpg://test_user:test_password@localhost:5432/test_omnichannel"
           REDIS_URL: "redis://localhost:6379/0"

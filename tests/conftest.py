@@ -118,9 +118,18 @@ def random_tenant_id() -> uuid.UUID:
 # ─── Database Fixtures (requieren --run-db) ─────────────────────────────────
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture
 async def db_engine():
-    """Crear engine async para tests de integración."""
+    """Crear engine async para tests de integración.
+
+    Scope de funcion, no de sesion: pytest-asyncio abre un event loop nuevo
+    por test por defecto (asyncio_default_test_loop_scope=function), y un
+    engine async de SQLAlchemy queda atado al loop en el que se creo. Un
+    engine "session"-scoped sobrevive a ese loop y las conexiones se
+    corrompen en el siguiente test (RuntimeError "attached to a different
+    loop", o incluso SQL con errores de sintaxis erraticos por buffers de
+    conexion reusados desde el loop equivocado).
+    """
     from sqlalchemy.ext.asyncio import create_async_engine
 
     database_url = os.getenv(
@@ -150,7 +159,7 @@ async def tenant_session_a(db_engine, tenant_a_id) -> AsyncGenerator:
 
     async with AsyncSession(db_engine) as session, session.begin():
         await session.execute(
-            text("SET LOCAL app.current_client_id = :cid"),
+            text("SELECT set_config('app.current_client_id', :cid, true)"),
             {"cid": str(tenant_a_id)},
         )
         yield session
@@ -164,7 +173,7 @@ async def tenant_session_b(db_engine, tenant_b_id) -> AsyncGenerator:
 
     async with AsyncSession(db_engine) as session, session.begin():
         await session.execute(
-            text("SET LOCAL app.current_client_id = :cid"),
+            text("SELECT set_config('app.current_client_id', :cid, true)"),
             {"cid": str(tenant_b_id)},
         )
         yield session
@@ -193,29 +202,29 @@ async def rls_harness(db_engine, tenant_a_id, tenant_b_id) -> dict:
     trans_a = await session_a.begin()
     trans_b = await session_b.begin()
 
-    # Configurar tenant context
+    # Configurar tenant context. set_config() acepta parametros bind; SET LOCAL no.
     await session_a.execute(
-        text("SET LOCAL app.current_client_id = :cid"),
+        text("SELECT set_config('app.current_client_id', :cid, true)"),
         {"cid": str(tenant_a_id)},
     )
     await session_b.execute(
-        text("SET LOCAL app.current_client_id = :cid"),
+        text("SELECT set_config('app.current_client_id', :cid, true)"),
         {"cid": str(tenant_b_id)},
     )
 
     # Asegurar que los tenants existen
     await session_a.execute(
         text("""
-            INSERT INTO clients (id, name, slug, plan, max_agents, is_active)
-            VALUES (:id, 'Tenant A Test', 'tenant-a-test', 'free', 1, true)
+            INSERT INTO clients (id, name, slug, plan, is_active)
+            VALUES (:id, 'Tenant A Test', 'tenant-a-test', 'free', true)
             ON CONFLICT (id) DO NOTHING
         """),
         {"id": str(tenant_a_id)},
     )
     await session_b.execute(
         text("""
-            INSERT INTO clients (id, name, slug, plan, max_agents, is_active)
-            VALUES (:id, 'Tenant B Test', 'tenant-b-test', 'free', 1, true)
+            INSERT INTO clients (id, name, slug, plan, is_active)
+            VALUES (:id, 'Tenant B Test', 'tenant-b-test', 'free', true)
             ON CONFLICT (id) DO NOTHING
         """),
         {"id": str(tenant_b_id)},
