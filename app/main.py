@@ -7,6 +7,7 @@ aisladas (producción y testing).
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, cast
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI
@@ -14,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.internal.health import router as health_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.webhooks import router as webhooks_router
 from app.core.config import get_settings
 from app.core.database import dispose_db, init_db
 from app.core.exceptions import (
@@ -27,6 +29,9 @@ logging.basicConfig(
     level=getattr(logging, get_settings().LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
 )
+if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,7 +57,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Verificar Redis
     redis_client = aioredis.from_url(get_settings().REDIS_URL)
     try:
-        await redis_client.ping()
+        # redis-py tipa ping() como `Awaitable[bool] | bool`; con el cliente
+        # asincrono siempre es awaitable.
+        await cast("Awaitable[bool]", redis_client.ping())
         logger.info("Conexión a Redis verificada")
     except Exception as exc:
         logger.warning("Redis no disponible al inicio: %s", exc)
@@ -106,6 +113,9 @@ def create_app() -> FastAPI:
     # ── Routers ──
     app.include_router(health_router, prefix="/internal", tags=["internal"])
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+    # Los webhooks NO pasan por TenantContextMiddleware: se autentican por firma
+    # HMAC. El prefijo debe coincidir con WEBHOOK_PATHS_PREFIX del middleware.
+    app.include_router(webhooks_router, prefix="/api/v1/webhooks", tags=["webhooks"])
 
     return app
 

@@ -70,6 +70,18 @@ plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
 disallow_untyped_defs = true
 no_implicit_optional = true
 
+# Modulos que todavia no existen y se importan de forma perezosa:
+# app.services.messaging.* lo entrega Dev A en Sprint 4 y ai_processor llega en
+# Sprint 6. Quitar estos overrides cuando esten en main.
+[[tool.mypy.overrides]]
+module = ["app.services.messaging.*", "app.tasks.ai_processor"]
+ignore_missing_imports = true
+
+# Celery no publica stubs: @shared_task es Any y mypy marca la tarea como untyped.
+[[tool.mypy.overrides]]
+module = "app.tasks.*"
+disallow_untyped_decorators = false
+
 [[tool.mypy.overrides]]
 module = "celery.*"
 ignore_missing_imports = true
