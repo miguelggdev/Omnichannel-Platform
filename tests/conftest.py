@@ -118,9 +118,18 @@ def random_tenant_id() -> uuid.UUID:
 # ─── Database Fixtures (requieren --run-db) ─────────────────────────────────
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture
 async def db_engine():
-    """Crear engine async para tests de integración."""
+    """Crear engine async para tests de integración.
+
+    Scope de funcion, no de sesion: pytest-asyncio abre un event loop nuevo
+    por test por defecto (asyncio_default_test_loop_scope=function), y un
+    engine async de SQLAlchemy queda atado al loop en el que se creo. Un
+    engine "session"-scoped sobrevive a ese loop y las conexiones se
+    corrompen en el siguiente test (RuntimeError "attached to a different
+    loop", o incluso SQL con errores de sintaxis erraticos por buffers de
+    conexion reusados desde el loop equivocado).
+    """
     from sqlalchemy.ext.asyncio import create_async_engine
 
     database_url = os.getenv(

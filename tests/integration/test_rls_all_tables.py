@@ -67,9 +67,12 @@ async def assert_rls_isolation(
     rows_b = result.fetchall()
     assert len(rows_b) == 0, f"VIOLACIÓN RLS en {table}: Tenant B ve datos de Tenant A"
 
-    # 3. UPDATE como Tenant B → 0 rows affected
+    # 3. UPDATE como Tenant B → 0 rows affected. Se auto-asigna id_column a si
+    # misma (no-op real, pero pasa por el planner/executor igual que
+    # cualquier UPDATE) en vez de updated_at: no todas las tablas tienen esa
+    # columna (solo clients/contacts/documents/users/conversations/messages).
     result = await session_b.execute(
-        text(f"UPDATE {table} SET updated_at = NOW() WHERE {id_column} = :rid"),  # noqa: S608
+        text(f"UPDATE {table} SET {id_column} = {id_column} WHERE {id_column} = :rid"),  # noqa: S608
         {"rid": rid},
     )
     assert result.rowcount == 0, f"VIOLACIÓN RLS en {table}: Tenant B pudo UPDATE datos de Tenant A"
