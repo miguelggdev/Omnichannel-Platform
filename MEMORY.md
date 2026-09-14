@@ -144,6 +144,22 @@
 
 ---
 
+### ADR-032: Storage con bucket único y aislamiento por prefijo de ruta
+- **Fecha:** 2026-09-14
+- **Contexto:** Los archivos del knowledge base viven en Supabase Storage (ADR-020). Había que decidir entre un bucket por tenant o uno compartido.
+- **Decisión:** Un único bucket privado (`SUPABASE_STORAGE_BUCKET`, por defecto `documents`) con la ruta `{client_id}/{document_id}/{filename}`. `build_object_path()` en `app/services/storage.py` es el único sitio que construye esa ruta. `sanitize_filename()` hace basename manual y filtra caracteres, porque el nombre lo elige el cliente y no debe poder salirse de su prefijo.
+- **Consecuencia:** Como el bucket es privado, `documents.file_url` guarda la **ruta del objeto**, no una URL pública: leerlo pasa siempre por `download_from_storage()`, que autentica con la service key. Si algún día se quiere un bucket por tenant, se cambia una función.
+- **Nota:** `app/services/storage.py` no está asignado a ningún rol en la Matriz §6. Lo necesitan el endpoint de subida (Dev B) y el pipeline de ingesta (Dev A), así que vive fuera de ambos. `download_from_storage()` es exactamente lo que la spec §2 llama desde `DocumentPipeline`.
+
+### ADR-033: Transacción explícita en los endpoints de documentos
+- **Fecha:** 2026-09-14
+- **Contexto:** `app/api/v1/documents.py` tiene que encolar en Celery y borrar archivos de Storage. Con la dependency `get_tenant_session`, la transacción se cierra cuando FastAPI limpia las dependencias, o sea **después** de que el endpoint retorna.
+- **Decisión:** Abrir `tenant_session()` a mano dentro de cada endpoint, para controlar dónde termina la transacción.
+- **Razón:** El `delay()` tiene que ocurrir con la fila ya visible: el worker abre su propia conexión y no vería un documento sin commitear. Y el borrado en Storage va después del commit, porque si la transacción se revirtiera nos quedaríamos con el documento en base y sin su archivo.
+- **Consecuencia:** Estos endpoints no usan `get_tenant_session`. `app/api/v1/auth.py` tampoco la usa, así que no rompe ninguna convención establecida.
+
+---
+
 ## Bugs Conocidos y Pitfalls
 
 ### BUG-001: Alias de SELECT no se puede usar en WHERE (PostgreSQL)
@@ -225,6 +241,17 @@
   4. **`tests/integration/test_rls_all_tables.py`**: bind params pegados directo a un cast `::vector` (`:embedding::vector`) confundían el parser de `text()` de SQLAlchemy (`syntax error at or near ":"`) — fix: parentizar (`(:embedding)::vector`). Y un `Result.scalar()` llamado dos veces sobre el mismo `Result` (`ResourceClosedError`) — un `Result` de SQLAlchemy solo se puede consumir una vez.
 - **Por qué importa:** los 4 bugs son independientes de BUG-005 en sí, pero **ninguno era detectable sin `--run-db` activo**, que es justo lo que NOTA-002 tenía apagado. Vale la pena tenerlo presente: la próxima vez que se agregue código que dependa de una sesión de DB real, no asumir que pasar en CI significa que se ejecutó — confirmar que el job relevante no está silenciosamente saltando tests.
 - **Detectado y cerrado:** 2026-09-14, en la misma sesión que BUG-005.
+
+### BUG-007: El fixture `authenticated_client` emitía un JWT que el middleware no puede leer
+- **Descripción:** `tests/conftest.py` construía el token a mano con la claim `sub`, pero `TenantContextMiddleware` lee `payload["user_id"]` — habría dado `KeyError` y un 500. Además firmaba con `os.getenv("JWT_SECRET", "test-secret-key-for-testing-only")` en vez del `JWT_SECRET` de la app, así que tampoco habría validado.
+- **Por qué no saltó antes:** ningún test usaba el fixture. Existía desde Sprint 3 y los primeros en ejercitarlo fueron los tests de documentos, en Sprint 5.
+- **Estado:** CERRADO — ahora usa `create_access_token()`, la misma función que emite los tokens en producción, así el payload no puede desincronizarse del middleware. Se añadió `authenticated_client_factory` para pedir rol o tenant concretos.
+
+### BUG-008: `DocumentResponse` fallaba porque `created_at` llegaba a None
+- **Descripción:** `created_at` y `updated_at` son `server_default`, así que tras `session.flush()` siguen a `None` hasta que PostgreSQL los rellena. Serializar el documento ahí mismo hacía fallar la validación de Pydantic.
+- **Agravante en async:** no basta con acceder al atributo para que SQLAlchemy los cargue. La carga perezosa necesita IO, y en contexto asíncrono eso revienta con `MissingGreenlet`; hay que pedirlos explícitamente con `await session.refresh(document)`.
+- **Detectado:** Sprint 5, Dev B, por el primer test que ejercitó la subida completa.
+- **Estado:** CERRADO — `await session.refresh(document)` antes de serializar.
 
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.
