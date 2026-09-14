@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_PUBLISHABLE_KEY: str = ""
     SUPABASE_SECRET_KEY: str = ""
+    # Bucket privado del knowledge base. El aislamiento entre tenants es por
+    # prefijo de ruta ({client_id}/...), ver app/services/storage.py.
+    SUPABASE_STORAGE_BUCKET: str = "documents"
 
     # Redis
     REDIS_URL: str = "redis://redis:6379/0"
