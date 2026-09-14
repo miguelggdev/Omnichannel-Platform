@@ -8,9 +8,14 @@
 ## Estado Actual
 
 - **Fase:** 1 — MVP Core
-- **Sprint Activo:** Sprint 4 — Webhook Receiver & MessagingProvider
-- **Última actualización:** 2026-09-10
-- **Última sesión:** Sesión 11 — Dev B arranca Sprint 4: receptor de webhooks, servicio de dedup, worker de Celery y tests (branch `feature/sprint-04-webhooks`). PR #4 abierto con la deuda de lint/typing preexistente
+- **Sprint Activo:** Sprint 4 — Webhook Receiver & MessagingProvider (parcial: falta la entrega de Dev A)
+- **Última actualización:** 2026-09-14
+- **Última sesión:** Sesión 12 —
+  1. Revisión y fix de [PR #5](https://github.com/miguelggdev/Omnichannel-Platform/pull/5) (Sprint 4, Dev B): bug de `channel` en `_enqueue_ai_processing`, `retry_backoff` sin efecto, env vars faltantes en `docker-compose.yml`.
+  2. BUG-005 / issue [#6](https://github.com/miguelggdev/Omnichannel-Platform/issues/6) resuelto de raíz: migración `002_rls_policies.py` con RLS real en las 18 tablas, CI corregido para sembrar el schema vía `alembic upgrade head` (no `init.sql`) y correr `tests/integration/` con `--run-db` (antes se saltaba entero, silenciosamente, desde Sprint 1). De paso salieron a la luz y se arreglaron 4 bugs más que ningún test había ejecutado nunca contra Postgres real: `SET LOCAL` con bind params (sintaxis inválida en Postgres, en el propio `tenant_session()` — ver detalle en la sección Sprint 1), `db_engine` de test con scope de sesión vs. event loop por test de pytest-asyncio, casts `::vector` pegados a un bind param, y doble consumo de un `Result` de SQLAlchemy.
+  3. [PR #4](https://github.com/miguelggdev/Omnichannel-Platform/pull/4) (deuda de lint) revisado y mergeado — se le quitó un override de `kombu.*` duplicado.
+  4. PR #5 actualizado contra `main` (traía el fix de BUG-005) y verificado en vivo: salieron 2 bugs más solo en `test_webhook_flow.py` (mismo patrón de `clients.max_agents` inexistente, y el engine singleton de `app.core.database` reusado entre tests con loops distintos — resuelto con `engine.dispose()` en el fixture). CI 100% verde por primera vez con RLS real activado.
+  5. PR #4 y PR #5 mergeados a `main`, ramas borradas. **0 PRs abiertos.**
 
 ---
 
@@ -198,8 +203,8 @@ _(nada en progreso)_
 - [ ] `app/schemas/message.py` — `NormalizedMessage` (el archivo existe pero solo con los schemas CRUD de Message)
 
 ### Bloqueadores
-- **BUG-005 (CRÍTICO):** `migrations/versions/001_baseline.py` no crea RLS (0 `ENABLE ROW LEVEL SECURITY`, 0 `CREATE POLICY`). Una base creada solo con Alembic queda sin aislamiento entre tenants. Asignado a Dev A en el issue [#6](https://github.com/miguelggdev/Omnichannel-Platform/issues/6). Ver MEMORY.md (BUG-005 y NOTA-002)
-- Sin la entrega de Dev A, el `POST` responde 400 (la factory no existe) — el GET de verificación y todo el worker sí funcionan
+- ~~**BUG-005 (CRÍTICO):** `migrations/versions/001_baseline.py` no crea RLS~~ — **Resuelto 2026-09-14** (issue [#6](https://github.com/miguelggdev/Omnichannel-Platform/issues/6)): `migrations/versions/002_rls_policies.py` agrega RLS a las 18 tablas, y CI ahora lo verifica de verdad (`alembic upgrade head` + `pytest --run-db`, en vez de `init.sql` + tests silenciosamente saltados). Ver MEMORY.md (BUG-005 y NOTA-002) y la nota en Sprint 1 arriba.
+- **Sigue pendiente — bloqueante real de Sprint 4:** sin la entrega de Dev A (`app/services/messaging/`), el `POST /api/v1/webhooks/{provider}/{channel}` responde 400 (la factory no existe). El GET de verificación y todo el worker (dedup, procesamiento, DLQ) sí funcionan y están verificados en CI contra Postgres real.
 
 ### Notas
 - El endpoint resuelve la factory con import perezoso, para que la app arranque y la suite colecte sin esperar la entrega de Dev A
@@ -216,8 +221,8 @@ _(nada en progreso)_
 | 1 | Schema DDL & Arquitectura | ✅ Completado | 24 tablas, RLS verificado, DDL idempotente |
 | 2 | Infraestructura Docker | ✅ Completado | 12 servicios (ADR-020), Dockerfile multi-stage, Traefik v3, 6 colas Celery |
 | 3 | FastAPI Core & Auth | ✅ Completado | 61 archivos, +3460 líneas. Auth JWT, middleware multi-tenant, modelos SQLAlchemy, Alembic, CI 8/8 green |
-| 4 | Webhook Receiver & MessagingProvider | 🔄 En progreso | Dev B: endpoint, dedup, worker y tests listos. Falta la entrega de Dev A (ABC, providers, factory, NormalizedMessage) |
-| 5 | Pipeline de Documentos & RAG | ⬜ Pendiente | |
+| 4 | Webhook Receiver & MessagingProvider | 🔄 Parcial | Dev B completo y mergeado a `main` (PR #5): endpoint, dedup, worker, tests, verificado en CI contra Postgres real. **Falta la entrega de Dev A** (`app/services/messaging/`: ABC, YCloudProvider, MetaProvider, factory, `NormalizedMessage`) — sin eso el `POST` del webhook responde 400 |
+| 5 | Pipeline de Documentos & RAG | ⬜ Pendiente | Spec exige Sprint 4 completo (incl. messaging provider) como prerequisito — revisar si aplica antes de arrancar |
 | 6 | LangGraph — Grafo de Agentes | ⬜ Pendiente | |
 | 7 | Agente de Agendamiento & CRM API | ⬜ Pendiente | |
 | 8 | Observabilidad, Backup & Hardening | ⬜ Pendiente | **Hito MVP** |
@@ -228,6 +233,7 @@ _(nada en progreso)_
 | 13 | Canal de Voz & Agente Clínico | ⬜ Pendiente | Fase 3 |
 | 14 | Sandbox, Multi-idioma & Feature Flags | ⬜ Pendiente | Fase 3 — i18n expandido a 6 idiomas |
 | 15 | Frontend Foundation & Panel Admin | ⬜ Pendiente | Fase 4 — Next.js, theme toggle, responsive, i18n UI |
+| 16-19 | Módulo de Lead Management con IA | ⬜ Pendiente | Fase 5 — captura, enriquecimiento, calificación, asignación, follow-up, agenda (`specs/sprint-16-19-lead-management.md`, ADRs 021-025, tablas #27-36). **No listado en `docs/sprint-map.html` ni `METHODOLOGY.md`** — esos dos quedaron desactualizados (dicen "15 sprints"), la spec ya existe |
 
 ---
 
