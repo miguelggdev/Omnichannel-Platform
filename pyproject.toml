@@ -103,10 +103,6 @@ module = "passlib.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = "kombu.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
 module = "app.models.*"
 disable_error_code = ["name-defined"]
 
