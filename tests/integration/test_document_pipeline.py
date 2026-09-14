@@ -59,6 +59,18 @@ async def _borrar_cliente(client_id: uuid.UUID) -> None:
 
 
 @pytest_asyncio.fixture
+async def motor_limpio() -> AsyncGenerator[None, None]:
+    """Vacia el pool del engine antes del test.
+
+    Mismo motivo que en `dos_tenants`: el engine es un singleton de modulo y
+    pytest-asyncio abre un event loop por test, asi que reusar una conexion abierta
+    en el loop de otro test revienta con "attached to a different loop".
+    """
+    await engine.dispose()
+    yield
+
+
+@pytest_asyncio.fixture
 async def dos_tenants() -> AsyncGenerator[tuple[uuid.UUID, uuid.UUID], None]:
     """Crea dos tenants commiteados para poder probar el aislamiento.
 
@@ -390,7 +402,7 @@ async def test_mark_document_failed_persiste_el_motivo(
 # aislamiento de la suite estan pasando en vacio.
 
 
-async def test_las_tablas_de_documentos_tienen_rls_activo() -> None:
+async def test_las_tablas_de_documentos_tienen_rls_activo(motor_limpio: None) -> None:
     """`documents` y `document_chunks` deben tener RLS con FORCE y su politica."""
     async with AsyncSessionLocal() as session:
         filas = (
@@ -416,7 +428,7 @@ async def test_las_tablas_de_documentos_tienen_rls_activo() -> None:
         assert fila.politicas >= 1, f"{fila.relname} no tiene ninguna politica"
 
 
-async def test_el_rol_de_la_app_no_saltea_rls() -> None:
+async def test_el_rol_de_la_app_no_saltea_rls(motor_limpio: None) -> None:
     """Un rol superusuario o con BYPASSRLS hace vacuos todos los tests de aislamiento.
 
     PostgreSQL ignora las politicas para superusuarios y para roles con BYPASSRLS,
