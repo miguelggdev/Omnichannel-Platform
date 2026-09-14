@@ -248,7 +248,7 @@ class TestRLSMVPTables:
             table="document_chunks",
             insert_sql="""
                 INSERT INTO document_chunks (id, client_id, document_id, content, embedding, chunk_index)
-                VALUES (:id, :client_id, :doc_id, 'contenido secreto', :embedding::vector, 0)
+                VALUES (:id, :client_id, :doc_id, 'contenido secreto', (:embedding)::vector, 0)
             """,
             params={
                 "id": str(uuid.uuid4()),
@@ -457,7 +457,7 @@ class TestRLSMVPTables:
             table="approved_responses",
             insert_sql="""
                 INSERT INTO approved_responses (id, client_id, question, response, embedding)
-                VALUES (:id, :client_id, 'como reservo', 'puedes reservar en...', :embedding::vector)
+                VALUES (:id, :client_id, 'como reservo', 'puedes reservar en...', (:embedding)::vector)
             """,
             params={
                 "id": str(uuid.uuid4()),
@@ -663,7 +663,7 @@ class TestRLSVectorSearch:
         await sa.execute(
             text("""
                 INSERT INTO document_chunks (id, client_id, document_id, content, embedding, chunk_index)
-                VALUES (:id, :cid, :doc_id, 'info confidencial tenant A', :emb::vector, 0)
+                VALUES (:id, :cid, :doc_id, 'info confidencial tenant A', (:emb)::vector, 0)
             """),
             {"id": chunk_id, "cid": cid_a, "doc_id": doc_id, "emb": fake_embedding},
         )
@@ -671,9 +671,9 @@ class TestRLSVectorSearch:
         # Tenant B busca con el mismo embedding — NO debe encontrar nada
         result = await sb.execute(
             text("""
-                SELECT id, 1 - (embedding <=> :query::vector) AS similarity
+                SELECT id, 1 - (embedding <=> (:query)::vector) AS similarity
                 FROM document_chunks
-                WHERE 1 - (embedding <=> :query::vector) > 0.0
+                WHERE 1 - (embedding <=> (:query)::vector) > 0.0
                 ORDER BY embedding <=> :query ASC
                 LIMIT 5
             """),
@@ -687,9 +687,9 @@ class TestRLSVectorSearch:
         # Tenant A SÍ debe encontrar su chunk
         result = await sa.execute(
             text("""
-                SELECT id, 1 - (embedding <=> :query::vector) AS similarity
+                SELECT id, 1 - (embedding <=> (:query)::vector) AS similarity
                 FROM document_chunks
-                WHERE 1 - (embedding <=> :query::vector) > 0.0
+                WHERE 1 - (embedding <=> (:query)::vector) > 0.0
                 ORDER BY embedding <=> :query ASC
                 LIMIT 5
             """),
@@ -710,7 +710,7 @@ class TestRLSVectorSearch:
         await sa.execute(
             text("""
                 INSERT INTO approved_responses (id, client_id, question, response, embedding)
-                VALUES (:id, :cid, 'horarios de atención', 'Lunes a Viernes 9-18', :emb::vector)
+                VALUES (:id, :cid, 'horarios de atención', 'Lunes a Viernes 9-18', (:emb)::vector)
             """),
             {"id": str(uuid.uuid4()), "cid": cid_a, "emb": fake_embedding},
         )
@@ -718,9 +718,9 @@ class TestRLSVectorSearch:
         # Tenant B busca respuestas aprobadas — NO debe ver las de A
         result = await sb.execute(
             text("""
-                SELECT id, 1 - (embedding <=> :query::vector) AS similarity
+                SELECT id, 1 - (embedding <=> (:query)::vector) AS similarity
                 FROM approved_responses
-                WHERE 1 - (embedding <=> :query::vector) > 0.0
+                WHERE 1 - (embedding <=> (:query)::vector) > 0.0
                 ORDER BY embedding <=> :query ASC
                 LIMIT 3
             """),
@@ -751,10 +751,15 @@ class TestSetLocalBehavior:
         sa = rls_harness["session_a"]
         sb = rls_harness["session_b"]
 
-        # Verificar que cada sesión tiene su propio client_id
+        # Verificar que cada sesión tiene su propio client_id. Un Result de
+        # SQLAlchemy solo se puede consumir una vez (scalar() lo cierra), asi
+        # que se guarda el valor en vez de volver a llamar scalar() sobre el
+        # mismo Result.
         result_a = await sa.execute(text("SELECT current_setting('app.current_client_id', true)"))
         result_b = await sb.execute(text("SELECT current_setting('app.current_client_id', true)"))
+        setting_a = result_a.scalar()
+        setting_b = result_b.scalar()
 
-        assert result_a.scalar() == str(rls_harness["tenant_a"])
-        assert result_b.scalar() == str(rls_harness["tenant_b"])
-        assert result_a.scalar() != result_b.scalar()
+        assert setting_a == str(rls_harness["tenant_a"])
+        assert setting_b == str(rls_harness["tenant_b"])
+        assert setting_a != setting_b
