@@ -20,18 +20,10 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
-from app.core.database import AsyncSessionLocal, tenant_session
+from app.core.database import AsyncSessionLocal, engine, tenant_session
 from app.tasks.webhook_processor import _process_message
 
-pytestmark = [
-    pytest.mark.db,
-    # app.core.database.engine es un singleton de modulo (una app real vive en
-    # un solo event loop). pytest-asyncio abre un loop nuevo por test por
-    # defecto; compartir un loop de modulo evita que la pool de conexiones
-    # del engine quede atada a un loop ya cerrado en el segundo test
-    # (RuntimeError "attached to a different loop").
-    pytest.mark.asyncio(loop_scope="module"),
-]
+pytestmark = pytest.mark.db
 
 
 # ─── Datos de entrada ────────────────────────────────────────────────────────
@@ -77,6 +69,15 @@ async def webhook_tenant(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[uuid
     y no puede vivir dentro de una transaccion que luego se revierte.
     """
     from app.core.config import get_settings
+
+    # app.core.database.engine es un singleton de modulo (una app real vive en
+    # un solo event loop). pytest-asyncio abre un loop nuevo por test por
+    # defecto, asi que cualquier conexion que el pool del engine haya abierto
+    # en el loop de un test anterior (ya cerrado) revienta con
+    # "attached to a different loop" al reusarse aqui. dispose() vacia el pool
+    # sin usar ninguna conexion existente; el proximo checkout crea una
+    # conexion nueva en el loop de ESTE test.
+    await engine.dispose()
 
     client_id = uuid.uuid4()
 
