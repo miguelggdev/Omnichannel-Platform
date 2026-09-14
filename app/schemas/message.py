@@ -1,6 +1,7 @@
-"""Schemas de Message — CRUD de mensajes."""
+"""Schemas de Message — CRUD de mensajes y NormalizedMessage."""
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -53,3 +54,63 @@ class MessageListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ChannelEnum(StrEnum):
+    """Canal de origen/destino de un mensaje, independiente del proveedor."""
+
+    whatsapp = "whatsapp"
+    telegram = "telegram"
+    instagram = "instagram"
+    webchat = "webchat"
+    email = "email"
+    phone = "phone"
+    facebook = "facebook"
+
+
+class MessageTypeEnum(StrEnum):
+    """Tipo de contenido de un mensaje normalizado."""
+
+    text = "text"
+    image = "image"
+    audio = "audio"
+    video = "video"
+    document = "document"
+    location = "location"
+    template = "template"
+    interactive = "interactive"
+
+
+class NormalizedMessage(BaseModel):
+    """Mensaje normalizado, independiente del proveedor (PAT-002).
+
+    Todo webhook entrante se convierte a este formato antes de encolarse: el
+    worker de Celery y, mas adelante, el grafo de agentes solo conocen este
+    contrato, nunca el payload crudo de YCloud o Meta.
+
+    Attributes:
+        channel: Canal de origen del mensaje.
+        sender_identifier: Telefono, PSID o username del remitente segun el canal.
+        text: Cuerpo de texto del mensaje, si lo tiene.
+        media_url: URL del recurso multimedia adjunto, si lo hay.
+        media_type: Tipo del recurso multimedia adjunto.
+        timestamp: Momento en que el proveedor registro el mensaje, con timezone.
+        external_message_id: ID unico del mensaje en el proveedor de origen —
+            clave de deduplicacion.
+        raw_payload: Payload original del webhook, para debugging y auditoria.
+        location: Coordenadas `{"latitude": ..., "longitude": ...}` si el
+            mensaje es de ubicacion.
+        interactive_response: Payload de la respuesta a un boton/quick reply.
+    """
+
+    channel: ChannelEnum
+    sender_identifier: str
+    text: str | None = None
+    media_url: str | None = None
+    media_type: MessageTypeEnum | None = None
+    timestamp: datetime
+    external_message_id: str
+    raw_payload: dict[str, Any]
+
+    location: dict[str, Any] | None = None
+    interactive_response: dict[str, Any] | None = None

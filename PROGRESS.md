@@ -8,14 +8,15 @@
 ## Estado Actual
 
 - **Fase:** 1 — MVP Core
-- **Sprint Activo:** Sprint 4 — Webhook Receiver & MessagingProvider (parcial: falta la entrega de Dev A)
+- **Sprint Activo:** Sprint 5 — Pipeline de Documentos & RAG (Sprint 4 completo)
 - **Última actualización:** 2026-09-14
 - **Última sesión:** Sesión 12 —
   1. Revisión y fix de [PR #5](https://github.com/miguelggdev/Omnichannel-Platform/pull/5) (Sprint 4, Dev B): bug de `channel` en `_enqueue_ai_processing`, `retry_backoff` sin efecto, env vars faltantes en `docker-compose.yml`.
   2. BUG-005 / issue [#6](https://github.com/miguelggdev/Omnichannel-Platform/issues/6) resuelto de raíz: migración `002_rls_policies.py` con RLS real en las 18 tablas, CI corregido para sembrar el schema vía `alembic upgrade head` (no `init.sql`) y correr `tests/integration/` con `--run-db` (antes se saltaba entero, silenciosamente, desde Sprint 1). De paso salieron a la luz y se arreglaron 4 bugs más que ningún test había ejecutado nunca contra Postgres real: `SET LOCAL` con bind params (sintaxis inválida en Postgres, en el propio `tenant_session()` — ver detalle en la sección Sprint 1), `db_engine` de test con scope de sesión vs. event loop por test de pytest-asyncio, casts `::vector` pegados a un bind param, y doble consumo de un `Result` de SQLAlchemy.
   3. [PR #4](https://github.com/miguelggdev/Omnichannel-Platform/pull/4) (deuda de lint) revisado y mergeado — se le quitó un override de `kombu.*` duplicado.
   4. PR #5 actualizado contra `main` (traía el fix de BUG-005) y verificado en vivo: salieron 2 bugs más solo en `test_webhook_flow.py` (mismo patrón de `clients.max_agents` inexistente, y el engine singleton de `app.core.database` reusado entre tests con loops distintos — resuelto con `engine.dispose()` en el fixture). CI 100% verde por primera vez con RLS real activado.
-  5. PR #4 y PR #5 mergeados a `main`, ramas borradas. **0 PRs abiertos.**
+  5. PR #4 y PR #5 mergeados a `main`, ramas borradas.
+  6. **Entrega de Dev A del Sprint 4** (`app/services/messaging/`: ABC, `YCloudProvider`, `MetaProvider`, factory, y `NormalizedMessage` en `app/schemas/message.py`), branch `feature/sprint-04-messaging`. Activa los 33 tests que Dev B ya tenía escritos con `importorskip` esperando esta entrega (`test_messaging_provider.py`, `test_meta_provider.py`) — los 100 tests unitarios pasan, `ruff` y `mypy` limpios. **Sprint 4 queda 100% completo.**
 
 ---
 
@@ -197,19 +198,25 @@ _(nada en progreso)_
 - [x] `tests/integration/test_webhook_flow.py` — flujo completo contra PostgreSQL (marker `db`) para los 3 canales
 - [x] `tests/fixtures/meta_payloads.py` — payloads de Instagram, Facebook y YCloud
 
-### Pendiente — Dev A (prerequisito, aún no entregado)
-- [ ] `app/services/messaging/base.py` — `MessagingProvider` ABC (el directorio solo tiene `.gitkeep`)
-- [ ] `app/services/messaging/ycloud.py`, `meta.py`, `factory.py`
-- [ ] `app/schemas/message.py` — `NormalizedMessage` (el archivo existe pero solo con los schemas CRUD de Message)
+### Completado — Dev A (branch `feature/sprint-04-messaging`, sesión 12)
+- [x] `app/services/messaging/base.py` — `MessagingProvider` ABC (5 métodos: `parse_webhook`, `validate_signature`, `send_message`, `send_template`, `get_channel_constraints`) + `ChannelConstraints`/`MessageContent`/`TemplateMessage`
+- [x] `app/schemas/message.py` — `NormalizedMessage`, `ChannelEnum`, `MessageTypeEnum` (usando `enum.StrEnum`, no `(str, Enum)` — `ruff` UP042 en Python 3.11+)
+- [x] `app/services/messaging/ycloud.py` — `YCloudProvider`: parseo texto/media/ubicación, firma HMAC-SHA256 (`X-Ycloud-Signature`, hex sin prefijo), `send_message`/`send_template` contra `settings.YCLOUD_BASE_URL`
+- [x] `app/services/messaging/meta.py` — `MetaProvider`: un solo provider para Instagram DM y Facebook Messenger (subcanal en `provider_config["channel"]`), firma `x-hub-signature-256` (`sha256=<hex>`), `send_template` en Instagram lanza `NotImplementedError`
+- [x] `app/services/messaging/factory.py` — `get_messaging_provider(provider_name, provider_config=None)`, `_PROVIDERS = {"ycloud": ..., "meta": ...}`
+- [x] Activa los 33 tests de Dev B que esperaban esta entrega con `importorskip`: `tests/unit/test_messaging_provider.py` (20) y `tests/unit/test_meta_provider.py` (13). Suite completa: 100/100, `ruff check`/`format` y `mypy app/ --config-file=pyproject.toml` limpios
+
+### Ajuste sobre la spec (`specs/sprint-04-webhooks.md` §5 y §4)
+- La factory de la spec construye `MetaProvider()` sin argumentos cuando `provider_config` es falsy — pero `_resolve_provider()` en `webhooks.py` (Dev B, ya en `main`) **siempre** pasa `{"channel": channel}`, nunca `None` ni `{}`. Se ajustó a `provider_class(provider_config or {})` sin la condición `and provider_config`.
+- El `__init__` de `MetaProvider` en la spec exige `page_access_token`/`app_secret` en el dict (`provider_config["page_access_token"]`, indexación directa) — pero el endpoint real solo pasa `{"channel": channel}` al recibir un webhook, así que con la spec tal cual el constructor reventaría con `KeyError` en **todo** mensaje entrante de Meta. Se cambió a `.get(..., "")`: ninguno de los dos se usa desde `self` en `send_message`/`send_template` (llegan por `channel_config` en cada llamada) ni en `validate_signature` (el secreto llega por parámetro desde `settings.META_APP_SECRET`), así que no hacía falta que fueran obligatorios.
 
 ### Bloqueadores
 - ~~**BUG-005 (CRÍTICO):** `migrations/versions/001_baseline.py` no crea RLS~~ — **Resuelto 2026-09-14** (issue [#6](https://github.com/miguelggdev/Omnichannel-Platform/issues/6)): `migrations/versions/002_rls_policies.py` agrega RLS a las 18 tablas, y CI ahora lo verifica de verdad (`alembic upgrade head` + `pytest --run-db`, en vez de `init.sql` + tests silenciosamente saltados). Ver MEMORY.md (BUG-005 y NOTA-002) y la nota en Sprint 1 arriba.
-- **Sigue pendiente — bloqueante real de Sprint 4:** sin la entrega de Dev A (`app/services/messaging/`), el `POST /api/v1/webhooks/{provider}/{channel}` responde 400 (la factory no existe). El GET de verificación y todo el worker (dedup, procesamiento, DLQ) sí funcionan y están verificados en CI contra Postgres real.
+- ~~**Sin la entrega de Dev A, el POST respondía 400**~~ — **Resuelto 2026-09-14**: con `app/services/messaging/` completo, la factory resuelve `ycloud`/`meta` y el POST ya no depende de un import perezoso que fallaba.
 
 ### Notas
-- El endpoint resuelve la factory con import perezoso, para que la app arranque y la suite colecte sin esperar la entrega de Dev A
 - La spec asume campos que los modelos de Dev A no tienen: `Message.contact_id` (se usa `sender_type="contact"` + `sender_id`), `ContactIdentifier.is_primary`, `WebhookDedup.processed`
-- Los identifiers se guardan en claro: `ContactIdentifier.identifier_value` es `String(255)` con unique en `(client_id, channel, identifier_value)`. El cifrado con pgcrypto que pide CLAUDE.md §3 necesita una columna de hash para poder buscar — pendiente de decidir con Dev A
+- Los identifiers se guardan en claro: `ContactIdentifier.identifier_value` es `String(255)` con unique en `(client_id, channel, identifier_value)`. El cifrado con pgcrypto que pide CLAUDE.md §3 necesita una columna de hash para poder buscar — pendiente de decidir entre Dev A y Dev B
 - Cobertura de los archivos nuevos sin `--run-db`: webhooks.py 93%, dedup.py 78%, webhook_processor.py 85%, celery_app.py 100% (total 86%)
 
 ---
@@ -221,8 +228,8 @@ _(nada en progreso)_
 | 1 | Schema DDL & Arquitectura | ✅ Completado | 24 tablas, RLS verificado, DDL idempotente |
 | 2 | Infraestructura Docker | ✅ Completado | 12 servicios (ADR-020), Dockerfile multi-stage, Traefik v3, 6 colas Celery |
 | 3 | FastAPI Core & Auth | ✅ Completado | 61 archivos, +3460 líneas. Auth JWT, middleware multi-tenant, modelos SQLAlchemy, Alembic, CI 8/8 green |
-| 4 | Webhook Receiver & MessagingProvider | 🔄 Parcial | Dev B completo y mergeado a `main` (PR #5): endpoint, dedup, worker, tests, verificado en CI contra Postgres real. **Falta la entrega de Dev A** (`app/services/messaging/`: ABC, YCloudProvider, MetaProvider, factory, `NormalizedMessage`) — sin eso el `POST` del webhook responde 400 |
-| 5 | Pipeline de Documentos & RAG | ⬜ Pendiente | Spec exige Sprint 4 completo (incl. messaging provider) como prerequisito — revisar si aplica antes de arrancar |
+| 4 | Webhook Receiver & MessagingProvider | ✅ Completado | Dev B (PR #5, mergeado) + Dev A (branch `feature/sprint-04-messaging`, pendiente de PR/merge): endpoint, dedup, worker, MessagingProvider ABC, YCloudProvider, MetaProvider, factory, `NormalizedMessage`. 100/100 tests, RLS verificado en CI real |
+| 5 | Pipeline de Documentos & RAG | ⬜ Pendiente | Prerequisito de la spec (Sprint 4 completo) ya cumplido — listo para arrancar |
 | 6 | LangGraph — Grafo de Agentes | ⬜ Pendiente | |
 | 7 | Agente de Agendamiento & CRM API | ⬜ Pendiente | |
 | 8 | Observabilidad, Backup & Hardening | ⬜ Pendiente | **Hito MVP** |
