@@ -35,6 +35,7 @@ from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.schemas.message import NormalizedMessage
 from app.services.dedup import get_redis, is_duplicate_persisted, persist_dedup
 
 if TYPE_CHECKING:
@@ -214,10 +215,10 @@ def _parse_timestamp(value: Any) -> datetime:
 async def _process_message(provider: str, channel: str, message_data: dict[str, Any]) -> None:
     """Logica asincrona de procesamiento de un mensaje entrante.
 
-    Se trabaja sobre el dict serializado y no sobre `NormalizedMessage` porque ese
-    schema es entrega de Dev A (matriz Sprint 4) y aun no existe. Las claves usadas
-    son las que fija la spec, asi que el cambio a `NormalizedMessage(**message_data)`
-    sera de una linea cuando llegue.
+    El dict llega serializado desde el endpoint (`model_dump(mode="json")`) y aqui
+    se revalida con `NormalizedMessage`: si el payload viene incompleto o con un
+    canal que no existe, salta un ValidationError antes de tocar la base, y la
+    tarea lo trata como fallo reintentable.
 
     Args:
         provider: Proveedor de origen (ycloud, meta).
@@ -226,14 +227,15 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
 
     Raises:
         ClientResolutionError: Si no se puede determinar el tenant.
-        KeyError: Si el mensaje normalizado no trae `external_message_id`.
+        ValidationError: Si el mensaje normalizado no cumple el schema.
     """
     client_id = _resolve_client_id(provider, channel)
 
-    external_id = message_data["external_message_id"]
-    message_channel = str(message_data.get("channel") or channel)
-    sender_identifier = message_data["sender_identifier"]
-    timestamp = _parse_timestamp(message_data.get("timestamp"))
+    normalized = NormalizedMessage(**message_data)
+    external_id = normalized.external_message_id
+    message_channel = normalized.channel.value
+    sender_identifier = normalized.sender_identifier
+    timestamp = _parse_timestamp(normalized.timestamp)
 
     async with tenant_session(client_id) as session:
         # Dedup nivel 2: si Redis perdio la clave, aqui se corta igual.
@@ -249,13 +251,13 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
                 client_id=client_id,
                 conversation_id=conversation.id,
                 direction="inbound",
-                message_type=message_data.get("media_type") or "text",
-                content=message_data.get("text"),
-                media_url=message_data.get("media_url"),
+                message_type=(normalized.media_type.value if normalized.media_type else "text"),
+                content=normalized.text,
+                media_url=normalized.media_url,
                 external_message_id=external_id,
                 sender_type="contact",
                 sender_id=contact.id,
-                metadata_=message_data.get("raw_payload") or {},
+                metadata_=normalized.raw_payload or {},
             )
         )
         conversation.last_message_at = timestamp
