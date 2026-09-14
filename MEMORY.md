@@ -253,6 +253,19 @@
 - **Detectado:** Sprint 5, Dev B, por el primer test que ejercitó la subida completa.
 - **Estado:** CERRADO — `await session.refresh(document)` antes de serializar.
 
+### BUG-009: Los tests de aislamiento RLS pasaban en vacío por dos motivos distintos
+- **Descripción:** Desde Sprint 1, `tests/integration/test_rls_all_tables.py` (22 tests activos) daba verde **sin comprobar RLS en ningún momento**. Dos defectos independientes, cada uno suficiente por sí solo:
+  1. **El rol del CI era superusuario.** `POSTGRES_USER` del contenedor de PostgreSQL se crea como `SUPERUSER`, y PostgreSQL ignora las políticas RLS para superusuarios **incluso con `FORCE`**. Toda la suite corría con ese rol.
+  2. **La lectura cruzada era sobre datos sin commitear.** `assert_rls_isolation()` insertaba con `session_a` sin commitear y leía desde `session_b`, que es otra conexión en otra transacción. Lo que bloqueaba esa lectura era el aislamiento MVCC, no RLS. El test pasaba idéntico con las políticas desactivadas.
+- **Por qué se tardó tanto en ver:** los dos defectos se enmascaraban mutuamente. Con el rol superusuario, RLS no filtraba nada — pero los asserts seguían pasando gracias a MVCC, así que nada delataba el bypass. Y como los asserts pasaban, nadie sospechaba del rol.
+- **Cómo salió:** `tests/integration/test_document_pipeline.py` (Sprint 5) es el primer test del repo que **commitea** la fila y después la lee desde otro tenant, a través de los endpoints. `GET /api/v1/documents/{id}` de un documento ajeno devolvió 200 en vez de 404.
+- **Defecto real que destapó:** `_get_document_or_404()` usaba `session.get()`, delegando el aislamiento entero a RLS. Contradice la restricción 2 de CLAUDE.md: las queries de seguridad deben ser explícitas. Corregido con un filtro por `client_id` en el WHERE; RLS queda como segunda barrera.
+- **Estado:** CERRADO.
+  - `ci.yml` crea `app_user` (`NOSUPERUSER NOBYPASSRLS`) después de las migraciones y la suite de integración se conecta con él. Alembic sigue corriendo como el dueño de las tablas.
+  - `assert_rls_isolation()` simula el otro tenant cambiando `app.current_client_id` **dentro de la misma transacción** que hizo el INSERT. Esa transacción ve su propia fila sin commitear, así que lo único que puede ocultarla es la política. Si alguien desactiva RLS, ahora falla.
+  - Dos tests-guardia en `test_document_pipeline.py` verifican la premisa: que las tablas tengan `ENABLE` + `FORCE` + política, y que el rol de conexión no sea superusuario ni tenga `BYPASSRLS`.
+- **Lección transferible:** un test de aislamiento que nunca ha fallado no prueba nada. Antes de confiar en uno, hay que verlo fallar — desactivando la política, o comprobando que el mecanismo que debería bloquear es realmente el que bloquea. Aplica a los ~30 tests de RLS del repo y a cualquier test de permisos que se escriba de aquí en adelante.
+
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.
 - **Razón:** Los proveedores de mensajería (YCloud, Twilio, Meta) pueden reenviar webhooks por timeouts o errores de red.

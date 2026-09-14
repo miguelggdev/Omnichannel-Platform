@@ -61,44 +61,79 @@ async def assert_rls_isolation(
         siempre de la lista fija de tablas declarada en este módulo de tests,
         nunca de entrada de usuario. Los valores (`rid`) sí se pasan ligados
         vía `params`.
+
+    Note:
+        **Por qué las lecturas cruzadas se hacen sobre `session_a`.**
+        La versión original insertaba con `session_a` sin commitear y leía desde
+        `session_b`, que es otra conexión en otra transacción. Lo que impedía esa
+        lectura era el aislamiento MVCC, no RLS: el test pasaba idéntico con las
+        políticas desactivadas, y así estuvo desde Sprint 1.
+
+        Ahora el rol del otro tenant se simula cambiando `app.current_client_id`
+        dentro de la **misma** transacción que hizo el INSERT. Esa transacción ve
+        su propia fila sin commitear, así que lo único que puede ocultarla es la
+        política RLS. Si alguien desactiva RLS, estos asserts fallan.
+
+        `session_b` se sigue usando para descubrir el id del otro tenant y para una
+        comprobación extremo a extremo, pero la prueba decisiva es la de arriba.
     """
     rid = record_id or params.get("id")
+
+    # Ids de ambos tenants, leídos del contexto de cada sesión.
+    tenant_a_id = await session_a.scalar(text("SELECT current_setting('app.current_client_id')"))
+    tenant_b_id = await session_b.scalar(text("SELECT current_setting('app.current_client_id')"))
+    assert tenant_a_id != tenant_b_id, "el harness debe dar dos tenants distintos"
+
+    async def _como(tenant_id: str) -> None:
+        """Cambia el tenant activo de session_a sin salir de su transacción."""
+        await session_a.execute(
+            text("SELECT set_config('app.current_client_id', :cid, true)"),
+            {"cid": tenant_id},
+        )
 
     # 1. INSERT como Tenant A
     await session_a.execute(text(insert_sql), params)
 
-    # 2. SELECT como Tenant B → 0 rows
-    result = await session_b.execute(
+    # 2. SELECT como Tenant B → 0 rows.
+    # Misma transacción que insertó: sin RLS, la fila sería visible.
+    await _como(tenant_b_id)
+    result = await session_a.execute(
         text(f"SELECT {id_column} FROM {table} WHERE {id_column} = :rid"),  # noqa: S608
         {"rid": rid},
     )
-    rows_b = result.fetchall()
-    assert len(rows_b) == 0, f"VIOLACIÓN RLS en {table}: Tenant B ve datos de Tenant A"
+    assert len(result.fetchall()) == 0, f"VIOLACIÓN RLS en {table}: Tenant B ve datos de Tenant A"
 
     # 3. UPDATE como Tenant B → 0 rows affected. Se auto-asigna id_column a si
     # misma (no-op real, pero pasa por el planner/executor igual que
     # cualquier UPDATE) en vez de updated_at: no todas las tablas tienen esa
     # columna (solo clients/contacts/documents/users/conversations/messages).
-    result = await session_b.execute(
+    result = await session_a.execute(
         text(f"UPDATE {table} SET {id_column} = {id_column} WHERE {id_column} = :rid"),  # noqa: S608
         {"rid": rid},
     )
     assert result.rowcount == 0, f"VIOLACIÓN RLS en {table}: Tenant B pudo UPDATE datos de Tenant A"
 
     # 4. DELETE como Tenant B → 0 rows affected
-    result = await session_b.execute(
+    result = await session_a.execute(
         text(f"DELETE FROM {table} WHERE {id_column} = :rid"),  # noqa: S608
         {"rid": rid},
     )
     assert result.rowcount == 0, f"VIOLACIÓN RLS en {table}: Tenant B pudo DELETE datos de Tenant A"
 
-    # 5. SELECT como Tenant A → integridad
+    # 5. SELECT como Tenant A → integridad: la fila sigue ahí y su dueño la ve.
+    await _como(tenant_a_id)
     result = await session_a.execute(
         text(f"SELECT {id_column} FROM {table} WHERE {id_column} = :rid"),  # noqa: S608
         {"rid": rid},
     )
-    rows_a = result.fetchall()
-    assert len(rows_a) == 1, f"INTEGRIDAD en {table}: Tenant A no ve su propio registro"
+    assert len(result.fetchall()) == 1, f"INTEGRIDAD en {table}: Tenant A no ve su propio registro"
+
+    # 6. Comprobación extremo a extremo: otra conexión, otro tenant, sigue sin verla.
+    result = await session_b.execute(
+        text(f"SELECT {id_column} FROM {table} WHERE {id_column} = :rid"),  # noqa: S608
+        {"rid": rid},
+    )
+    assert len(result.fetchall()) == 0, f"VIOLACIÓN RLS en {table}: sesión de B ve datos de A"
 
 
 # ─── Tests por tabla MVP ────────────────────────────────────────────────────
