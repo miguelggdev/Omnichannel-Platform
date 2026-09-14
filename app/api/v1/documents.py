@@ -68,15 +68,21 @@ VALID_STATUSES = ("pending", "processing", "completed", "failed")
 STORAGE_UNAVAILABLE = "STORAGE_UNAVAILABLE"
 
 
-async def _get_document_or_404(session: AsyncSession, document_id: UUID) -> Document:
+async def _get_document_or_404(
+    session: AsyncSession, document_id: UUID, client_id: UUID
+) -> Document:
     """Obtiene un documento del tenant activo o levanta 404.
 
-    La sesion ya trae el contexto de tenant aplicado, asi que RLS garantiza que
-    un documento de otro tenant se comporte igual que uno inexistente.
+    El filtro por `client_id` va explicito en el WHERE, no delegado a RLS. CLAUDE.md
+    (restriccion 2) pide que las queries de seguridad sean explicitas, y `session.get()`
+    no deja ver el filtro por ningun lado: si la politica no estuviera activa en esa
+    tabla, un documento de otro tenant se devolveria sin que nada avisara. RLS queda
+    como segunda barrera, no como la unica.
 
     Args:
         session: Sesion con contexto de tenant.
         document_id: Documento buscado.
+        client_id: Tenant propietario.
 
     Returns:
         El documento.
@@ -84,7 +90,11 @@ async def _get_document_or_404(session: AsyncSession, document_id: UUID) -> Docu
     Raises:
         AppException: 404 si no existe para este tenant.
     """
-    document = await session.get(Document, document_id)
+    stmt = select(Document).where(
+        Document.id == document_id,
+        Document.client_id == client_id,
+    )
+    document = (await session.execute(stmt)).scalar_one_or_none()
     if document is None:
         raise AppException(
             status_code=404,
@@ -258,7 +268,7 @@ async def get_document(
     client_id: UUID = user["client_id"]
 
     async with tenant_session(client_id) as session:
-        document = await _get_document_or_404(session, document_id)
+        document = await _get_document_or_404(session, document_id, client_id)
 
         chunks = await session.scalar(
             select(func.count())
@@ -297,7 +307,7 @@ async def delete_document(
     client_id: UUID = user["client_id"]
 
     async with tenant_session(client_id) as session:
-        document = await _get_document_or_404(session, document_id)
+        document = await _get_document_or_404(session, document_id, client_id)
         object_path = document.file_url
 
         await session.execute(
@@ -346,7 +356,7 @@ async def reprocess_document(
     client_id: UUID = user["client_id"]
 
     async with tenant_session(client_id) as session:
-        document = await _get_document_or_404(session, document_id)
+        document = await _get_document_or_404(session, document_id, client_id)
 
         if document.status == "processing":
             raise AppException(

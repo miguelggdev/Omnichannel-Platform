@@ -379,3 +379,62 @@ async def test_mark_document_failed_persiste_el_motivo(
 
     assert fila.status == "failed"
     assert fila.metadata["error"] == "OCR reviento"
+
+
+# ─── Guardia: que RLS este realmente activo ──────────────────────────────────
+#
+# NOTA-002 en MEMORY.md: durante varios sprints el CI daba verde en RLS sin
+# ejercitarlo de verdad. Estos dos tests comprueban la premisa de la que dependen
+# todos los tests de aislamiento del repo: que las politicas existan y que el rol
+# con el que se conecta la app no las saltee. Si alguno falla, los ~30 tests de
+# aislamiento de la suite estan pasando en vacio.
+
+
+async def test_las_tablas_de_documentos_tienen_rls_activo() -> None:
+    """`documents` y `document_chunks` deben tener RLS con FORCE y su politica."""
+    async with AsyncSessionLocal() as session:
+        filas = (
+            await session.execute(
+                text(
+                    "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity, "
+                    "       (SELECT count(*) FROM pg_policies p "
+                    "        WHERE p.tablename = c.relname) AS politicas "
+                    "FROM pg_class c "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = 'public' "
+                    "  AND c.relname IN ('documents', 'document_chunks')"
+                )
+            )
+        ).all()
+
+    assert len(filas) == 2, f"faltan tablas: {[f.relname for f in filas]}"
+    for fila in filas:
+        assert fila.relrowsecurity, f"{fila.relname} no tiene ROW LEVEL SECURITY activo"
+        assert fila.relforcerowsecurity, (
+            f"{fila.relname} no tiene FORCE: el dueno de la tabla se saltaria las politicas"
+        )
+        assert fila.politicas >= 1, f"{fila.relname} no tiene ninguna politica"
+
+
+async def test_el_rol_de_la_app_no_saltea_rls() -> None:
+    """Un rol superusuario o con BYPASSRLS hace vacuos todos los tests de aislamiento.
+
+    PostgreSQL ignora las politicas para superusuarios y para roles con BYPASSRLS,
+    incluso con FORCE. Si el CI se conecta con uno de esos, el verde de RLS no
+    significa nada.
+    """
+    async with AsyncSessionLocal() as session:
+        fila = (
+            await session.execute(
+                text(
+                    "SELECT current_user AS usuario, rolsuper, rolbypassrls "
+                    "FROM pg_roles WHERE rolname = current_user"
+                )
+            )
+        ).one()
+
+    assert not fila.rolsuper, (
+        f"el rol '{fila.usuario}' es superusuario y se saltea RLS: los tests de "
+        f"aislamiento de toda la suite estan pasando en vacio"
+    )
+    assert not fila.rolbypassrls, f"el rol '{fila.usuario}' tiene BYPASSRLS"

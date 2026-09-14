@@ -67,9 +67,10 @@ class FakeSession:
         return self._scalars.pop(0) if self._scalars else 0
 
     async def execute(self, *args: Any, **kwargs: Any) -> Any:
-        """Registra la sentencia y devuelve las filas programadas."""
+        """Registra la sentencia y devuelve filas o el documento, segun se pida."""
         self.executed.append(args[0] if args else None)
         filas = self._rows.pop(0) if self._rows else []
+        doc = self.doc
 
         class _Result:
             def scalars(self) -> Any:
@@ -77,6 +78,9 @@ class FakeSession:
 
             def all(self) -> list[Any]:
                 return filas
+
+            def scalar_one_or_none(self) -> Any:
+                return doc
 
         return _Result()
 
@@ -156,6 +160,13 @@ def fake_storage(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(documents_module, "upload_to_storage", _upload)
     monkeypatch.setattr(documents_module, "delete_from_storage", _delete)
     return registro
+
+
+def _cuenta_deletes(session: FakeSession) -> int:
+    """Cuenta las sentencias DELETE que emitio el endpoint."""
+    from sqlalchemy.sql.dml import Delete
+
+    return sum(1 for stmt in session.executed if isinstance(stmt, Delete))
 
 
 def _use_session(monkeypatch: pytest.MonkeyPatch, session: FakeSession) -> None:
@@ -451,7 +462,7 @@ class TestBorrado:
         response = await authenticated_client.delete(f"{UPLOAD_URL}/{doc.id}")
 
         assert response.status_code == 200
-        assert len(session.executed) == 1, "debe emitirse el DELETE de chunks"
+        assert _cuenta_deletes(session) == 1, "debe emitirse el DELETE de chunks"
         assert session.deleted == [doc]
         assert fake_storage["borrados"] == ["tenant/doc/faq.txt"]
 
@@ -508,7 +519,7 @@ class TestReprocesado:
         assert response.json()["status"] == "pending"
         assert doc.status == "pending"
         assert doc.chunk_count == 0
-        assert len(session.executed) == 1
+        assert _cuenta_deletes(session) == 1, "los chunks previos deben borrarse"
         assert len(fake_ingest.calls) == 1
 
     async def test_documento_en_proceso_devuelve_400(
