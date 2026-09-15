@@ -283,9 +283,11 @@ def _enqueue_ai_processing(
 ) -> None:
     """Encola el procesamiento de IA de la conversacion.
 
-    Stub hasta Sprint 6: `app.tasks.ai_processor` lo entrega ese sprint. Mientras
-    no exista, se registra y se sigue — el mensaje ya quedo guardado, que no haya
-    respuesta automatica todavia no es un fallo del webhook.
+    Desde Sprint 6 `app.tasks.ai_processor` existe y el mensaje entra al grafo de
+    agentes. El import sigue siendo perezoso y el ImportError sigue tratandose
+    como "no encolado, pero el webhook no falla": el mensaje entrante ya quedo
+    guardado, y una respuesta automatica que no sale no es motivo para reintentar
+    todo el webhook (y acabar duplicando el mensaje en la conversacion).
 
     Args:
         client_id: Tenant propietario.
@@ -297,9 +299,8 @@ def _enqueue_ai_processing(
     try:
         from app.tasks.ai_processor import process_ai_response
     except ImportError:
-        logger.info(
-            "ai_processor no disponible todavia (Sprint 6); mensaje guardado sin "
-            "encolar IA: conversation_id=%s",
+        logger.error(
+            "ai_processor no importable; mensaje guardado sin encolar IA: conversation_id=%s",
             conversation_id,
         )
         return
