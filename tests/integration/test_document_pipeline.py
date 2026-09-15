@@ -59,7 +59,7 @@ async def _borrar_cliente(client_id: uuid.UUID) -> None:
     que borrar.
     """
     async with tenant_session(client_id) as session:
-        for tabla in ("document_chunks", "documents"):
+        for tabla in ("document_chunks", "documents", "approved_responses"):
             await session.execute(
                 text(f"DELETE FROM {tabla} WHERE client_id = :cid"),  # noqa: S608
                 {"cid": str(client_id)},
