@@ -10,9 +10,11 @@ REGLA CRÍTICA: el contexto SIEMPRE debe quedar con scope de transacción
 transacciones.
 """
 
+import asyncio
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Coroutine
 from contextlib import asynccontextmanager
+from typing import Any, TypeVar
 from uuid import UUID
 
 from sqlalchemy import text
@@ -23,6 +25,8 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.core.config import get_settings
+
+_T = TypeVar("_T")
 
 logger = logging.getLogger(__name__)
 
@@ -93,3 +97,35 @@ async def dispose_db() -> None:
     """Cierra el pool de conexiones al apagar la app."""
     await engine.dispose()
     logger.info("Pool de conexiones cerrado")
+
+
+def run_isolated(coro: Coroutine[Any, Any, _T]) -> _T:
+    """Ejecuta una corrutina en un event loop nuevo y descarta el pool al terminar.
+
+    BUG-006 (ver MEMORY.md) encontro que un engine async de SQLAlchemy queda
+    atado al event loop donde se creo: reusarlo desde otro loop revienta con
+    "attached to a different loop". Ahi se arreglo en los fixtures de test
+    (engine de scope de funcion / dispose antes de cada test), pero el mismo
+    riesgo existe en produccion: los workers de Celery (`bind=True`, funciones
+    sincronas) llaman `asyncio.run()` una vez por ejecucion de tarea, y un
+    worker prefork procesa muchas tareas secuenciales en el mismo proceso —
+    cada `asyncio.run()` abre un loop nuevo, pero `engine` es un singleton de
+    modulo cuyo pool de conexiones sobrevive entre llamadas.
+
+    Todo el codigo de tareas de Celery (`app/tasks/*.py`) debe llamar a esta
+    funcion en vez de `asyncio.run()` directamente.
+
+    Args:
+        coro: Corrutina a ejecutar de punta a punta.
+
+    Returns:
+        El resultado de la corrutina.
+    """
+
+    async def _con_limpieza() -> _T:
+        try:
+            return await coro
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_con_limpieza())
