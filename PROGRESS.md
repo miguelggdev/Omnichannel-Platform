@@ -10,7 +10,7 @@
 - **Fase:** 1 — MVP Core
 - **Sprint Activo:** Sprint 6 — LangGraph, Grafo de Agentes
 - **Última actualización:** 2026-09-15
-- **Última sesión:** Sesión 15 — **Entrega de Dev B del Sprint 6** (branch `feature/sprint-06-nodes`): los 6 nodos del grafo, `TokenBudgetGuard` completo y el worker `ai_processor`. 74 tests unitarios nuevos (229 en total, `ruff`/`mypy` limpios) y 8 de integración contra Postgres real con RLS, pendientes de correr en CI. Falta la entrega de Dev A (`app/agents/state.py`, `app/agents/graph.py`).
+- **Última sesión:** Sesión 15 — **Entrega de Dev B del Sprint 6** (branch `feature/sprint-06-nodes`): los 6 nodos del grafo, `TokenBudgetGuard` completo y el worker `ai_processor`. 74 tests unitarios nuevos y 8 de integración contra Postgres real con RLS ([PR #13](https://github.com/miguelggdev/Omnichannel-Platform/pull/13)). Verificado en CI leyendo el log, no el checkmark: **253 unitarios passed** y **56 passed / 6 skipped** en integración con el rol `app_user`. De paso salió un efecto que no estaba previsto: al dejar de ser un stub, `_enqueue_ai_processing()` hacía que los 8 tests de `test_webhook_flow.py` se colgaran contra el broker de Celery, que el job de integración no levanta. Falta la entrega de Dev A (`app/agents/state.py`, `app/agents/graph.py`).
 - **Sesión 14** — Revisión general de bugs sobre `main` post-Sprint 5 (pedida por el usuario). Encontrados y arreglados los cuatro hallazgos:
   - **BUG-010** — `RAGService` rompía contra Postgres real por falta de cast `::vector` ([PR #11](https://github.com/miguelggdev/Omnichannel-Platform/pull/11), verificado en CI real con 5 tests de integración nuevos: 46 passed, 6 skipped).
   - **BUG-011** — el engine async de `app/core/database.py` (singleton de módulo) se reusaba entre `asyncio.run()` de cada tarea de Celery, mismo root cause que BUG-006 pero sin mitigar en producción ([PR #12](https://github.com/miguelggdev/Omnichannel-Platform/pull/12), `run_isolated()` nuevo).
@@ -298,7 +298,8 @@ _(nada en progreso)_
 
 ### Notas
 - Los nodos **no** atrapan las excepciones del LLM ni de la base: suben a `ai_processor`, que reintenta y, agotados los intentos, escala a un humano. Mismo criterio que `DocumentPipeline` en Sprint 5.
-- Los 8 tests de integración están escritos pero **no verificados en CI todavía** (no hay Postgres local en esta sesión): se leerá el log real del PR antes de dar el sprint por cerrado.
+- Los 8 tests de integración corrieron en CI contra Postgres real (`tests/integration/test_graph_flow.py ........`, run 34973790825): 56 passed, 6 skipped en el job completo.
+- `_enqueue_ai_processing()` ya no propaga un fallo de encolado: cuando se llega ahí, el mensaje está commiteado y marcado en `webhook_dedup`, así que un reintento se cortaría en la comprobación de duplicado sin volver a encolar. Queda un CRITICAL en el log.
 
 ---
 
