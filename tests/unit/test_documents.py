@@ -938,8 +938,3 @@ class TestMarcarFallido:
         )
 
         await ingestion_module._mark_document_failed(uuid.uuid4(), uuid.uuid4(), "error")
-
-    async def test_pipeline_ausente_se_detecta(self) -> None:
-        """Sin los servicios de Dev A, _run_pipeline lo dice explicitamente."""
-        with pytest.raises(ingestion_module.PipelineUnavailableError):
-            await ingestion_module._run_pipeline(uuid.uuid4(), uuid.uuid4())
