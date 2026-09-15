@@ -8,9 +8,10 @@
 ## Estado Actual
 
 - **Fase:** 1 — MVP Core
-- **Sprint Activo:** Sprint 5 — Pipeline de Documentos & RAG (Dev B completo, falta Dev A)
+- **Sprint Activo:** Sprint 6 — LangGraph, Grafo de Agentes
 - **Última actualización:** 2026-09-15
-- **Última sesión:** Sesión 12 —
+- **Última sesión:** Sesión 13 — **Entrega de Dev A del Sprint 5** ([PR #10](https://github.com/miguelggdev/Omnichannel-Platform/pull/10)): `app/services/{chunker,embedding,ocr,document_pipeline,rag}.py`. Sprint 5 completo (Dev A + Dev B). Verificado en CI real: 41 passed contra el rol `app_user` (no-superusuario, `NOBYPASSRLS`) — confirma que la RLS de BUG-009 sigue genuina en este PR también. 173 tests unitarios, `ruff`/`mypy` limpios.
+- **Sesión 12** —
   1. Revisión y fix de [PR #5](https://github.com/miguelggdev/Omnichannel-Platform/pull/5) (Sprint 4, Dev B): bug de `channel` en `_enqueue_ai_processing`, `retry_backoff` sin efecto, env vars faltantes en `docker-compose.yml`.
   2. BUG-005 / issue [#6](https://github.com/miguelggdev/Omnichannel-Platform/issues/6) resuelto de raíz: migración `002_rls_policies.py` con RLS en las 18 tablas, CI corregido para sembrar el schema vía `alembic upgrade head` (no `init.sql`) y correr `tests/integration/` con `--run-db` (antes se saltaba entero, silenciosamente, desde Sprint 1). De paso salieron a la luz y se arreglaron 4 bugs más que ningún test había ejecutado nunca contra Postgres real: `SET LOCAL` con bind params, `db_engine` de test con scope de sesión vs. event loop por test, casts `::vector` pegados a un bind param, y doble consumo de un `Result` de SQLAlchemy.
   3. [PR #4](https://github.com/miguelggdev/Omnichannel-Platform/pull/4) (deuda de lint) revisado y mergeado.
@@ -236,15 +237,25 @@ _(nada en progreso)_
 - [x] Deuda de Sprint 4 cerrada: el worker de webhooks usa `NormalizedMessage(**message_data)` y `app.services.messaging.*` sale del override de mypy
 - [x] BUG-007 y BUG-008 (ver MEMORY.md)
 
-### Pendiente — Dev A
-- [ ] `app/services/document_pipeline.py` — orquestador del pipeline
-- [ ] `app/services/chunker.py`, `embedding.py`, `ocr.py`, `rag.py`
+### Completado — Dev A (branch `feature/sprint-05-pipeline`, sesión 13, [PR #10](https://github.com/miguelggdev/Omnichannel-Platform/pull/10))
+- [x] `app/services/chunker.py` — `DocumentChunker`: FAQ (par pregunta/respuesta), tablas (bloques con "|"/tab preservados enteros) y texto general vía `RecursiveCharacterTextSplitter` (chunk_size/overlap en **caracteres**, no tokens — ver desviación de spec abajo)
+- [x] `app/services/embedding.py` — `EmbeddingService` (OpenAI `text-embedding-3-small` por defecto), `embed_batch()` con pausa de 0.5s entre lotes de 100
+- [x] `app/services/ocr.py` — `OCRService` (Tesseract `spa+eng`), preprocesa a escala de grises + binarización + filtro de mediana; PDFs se rasterizan a 300dpi con PyMuPDF antes de OCR
+- [x] `app/services/document_pipeline.py` — `DocumentPipeline.process()`: descarga → detecta si necesita OCR (imagen siempre; PDF con <50 caracteres extraídos) → extrae/OCR → chunkea → embebe → guarda. No atrapa excepciones (las deja subir al manejador de `document_ingestion.py`, que decide reintento o `failed`)
+- [x] `app/services/rag.py` — `RAGService.retrieve()` con filtro pre-vectorial de `client_id` y umbral de similitud repetidos en el WHERE (BUG-001-safe, sin alias de SELECT), `retrieve_few_shot_examples()`, `build_grounded_prompt()`
+- [x] Activa los 18 tests de contrato de Dev B (`tests/unit/test_rag.py`, `importorskip`). Suite completa: 173 tests unitarios, `ruff`/`mypy` limpios
+- [x] CI real verificado: `Integration Tests (RLS + DB)` corrió 41 passed contra el rol `app_user` (no-superusuario, `NOBYPASSRLS`) — no es un checkmark ciego, se leyó el log
+
+### Ajuste sobre la spec (`specs/sprint-05-rag.md`)
+- **Chunking por caracteres, no por tokens:** el spec sugiere un `length_function` basado en tokens; el test de contrato de Dev B (`test_respeta_el_tamano_maximo`) verifica `len(chunk.content) <= chunk_size * 1.2` en caracteres. Se dejó el default de `RecursiveCharacterTextSplitter` (`len`); `token_count` se calcula aparte con `tiktoken`, solo como metadata para `document_chunks.token_count`.
+- **PyMuPDF en vez de `pdf2image`** para rasterizar PDFs a imagen antes de OCR: `pdf2image` depende del binario de sistema `poppler-utils`, ausente del `Dockerfile`; PyMuPDF es una dependencia de pip autocontenida (motor MuPDF embebido).
 
 ### Notas
-- Mientras el pipeline de Dev A no esté, los documentos subidos quedan en `failed` con el motivo explícito en `metadata.error`; se recuperan con `POST /documents/{id}/reprocess` sin volver a subir el archivo
+- Mientras el pipeline de Dev A no estuvo, los documentos subidos quedaban en `failed` con el motivo explícito en `metadata.error`; se recuperaban con `POST /documents/{id}/reprocess` sin volver a subir el archivo
 - La spec asume campos que el modelo no tiene (`file_path`, `file_size_bytes`, `uploaded_by`): se usan `file_url`, `file_size` y `metadata.uploaded_by`
 - `document_chunks` no declara `ON DELETE CASCADE`, así que el borrado los elimina explícitamente
 - Cobertura de los archivos nuevos: `documents.py` 97%, `storage.py` 97%, `document_ingestion.py` 87% (total 95%)
+- Se eliminó `test_pipeline_ausente_se_detecta` de `tests/unit/test_documents.py`: su premisa ("Dev A no entregó, el import falla") dejó de ser cierta y el test empezaba a intentar una conexión real a Postgres inexistente en CI unitario
 
 ---
 
@@ -256,8 +267,8 @@ _(nada en progreso)_
 | 2 | Infraestructura Docker | ✅ Completado | 12 servicios (ADR-020), Dockerfile multi-stage, Traefik v3, 6 colas Celery |
 | 3 | FastAPI Core & Auth | ✅ Completado | 61 archivos, +3460 líneas. Auth JWT, middleware multi-tenant, modelos SQLAlchemy, Alembic, CI 8/8 green |
 | 4 | Webhook Receiver & MessagingProvider | ✅ Completado | Dev B (PR #5, mergeado) + Dev A (branch `feature/sprint-04-messaging`, pendiente de PR/merge): endpoint, dedup, worker, MessagingProvider ABC, YCloudProvider, MetaProvider, factory, `NormalizedMessage`. 100/100 tests, RLS verificado en CI real |
-| 5 | Pipeline de Documentos & RAG | 🔄 En progreso | Dev B: CRUD de documentos, Storage y worker de ingesta listos. Falta el pipeline de Dev A (chunker, embedding, OCR, RAG) |
-| 6 | LangGraph — Grafo de Agentes | ⬜ Pendiente | |
+| 5 | Pipeline de Documentos & RAG | ✅ Completado | Dev B (PR #9): CRUD de documentos, Storage, worker de ingesta. Dev A (PR #10): chunker, embedding, OCR, DocumentPipeline, RAGService. 173 tests, RLS verificado en CI real (`app_user`, 41 passed) |
+| 6 | LangGraph — Grafo de Agentes | 🔄 En progreso | |
 | 7 | Agente de Agendamiento & CRM API | ⬜ Pendiente | |
 | 8 | Observabilidad, Backup & Hardening | ⬜ Pendiente | **Hito MVP** |
 | 9 | Canales Adicionales | ⬜ Pendiente | Fase 2 — Telegram, Webchat, Email, Audio (Instagram/Facebook movidos a Sprint 4) |

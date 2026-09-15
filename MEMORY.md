@@ -289,6 +289,21 @@
 - **Patrón:** Traefik v3 con middleware de rate limiting configurado por labels de Docker. Cada servicio expone su propio rate limit basado en el plan del tenant.
 - **Razón:** Evita que un tenant abuse del sistema y afecte a otros. El rate limiting se aplica antes de llegar a FastAPI.
 
+### PAT-005: Chunking por caracteres, no por tokens, pese al pseudocódigo del spec
+- **Patrón:** `DocumentChunker` usa `RecursiveCharacterTextSplitter` con su `length_function` por defecto (`len`, cuenta caracteres). No se sobreescribe con una función basada en tokens.
+- **Razón:** `specs/sprint-05-rag.md` §4 sugiere en su pseudocódigo un `length_function` basado en tokens de tiktoken. Pero el test de contrato que Dev B ya había comprometido (`tests/unit/test_rag.py::TestChunking::test_respeta_el_tamano_maximo`) verifica `len(chunk.content) <= chunk_size * 1.2`, es decir caracteres. Seguir el spec al pie de la letra habría roto ese test. `token_count` se calcula aparte con `tiktoken` (`cl100k_base`), solo como metadata para `document_chunks.token_count` — no influye en dónde se corta.
+- **Detectado:** Sprint 5, Dev A, sesión 13, al leer `test_rag.py` antes de implementar (práctica ya establecida: el test comprometido es la fuente de verdad, no el pseudocódigo del spec).
+
+### PAT-006: PyMuPDF en vez de pdf2image para rasterizar PDFs
+- **Patrón:** `OCRService._pdf_to_images()` usa `pymupdf.open(...).get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))` a 300dpi, no `pdf2image.convert_from_bytes()`.
+- **Razón:** `pdf2image` depende del binario de sistema `poppler-utils`, que no está instalado en el `Dockerfile` (Sprint 2). Agregarlo es más invasivo que sumar `pymupdf`, que trae su propio motor de render (MuPDF) embebido como dependencia de pip pura, sin binarios de sistema adicionales.
+- **Detectado:** Sprint 5, Dev A, sesión 13.
+
+### PAT-007: Overrides de mypy para libs sin stubs van en el módulo que llama, no en la lib
+- **Patrón:** Cuando una librería sin stubs (PyMuPDF, pytesseract) tiene alguna firma parcialmente tipada que dispara `disallow_untyped_calls`, el override de `pyproject.toml` debe listar el **módulo propio que la llama** (`app.services.ocr`, `app.services.document_pipeline`), no la librería (`pymupdf.*`).
+- **Razón:** Un override de mypy se aplica al código del módulo listado que mypy está chequeando, no a quién lo importa. Poner `disallow_untyped_calls = false` en `pymupdf.*` no silencia nada porque mypy no analiza el código interno de esa librería con esa opción — sigue exigiendo tipos estrictos en el módulo llamante. Mismo patrón que ya existía para `app.tasks.*`/`disallow_untyped_decorators` con `@shared_task` de Celery.
+- **Detectado:** Sprint 5, Dev A, sesión 13 — primer intento (override en `pymupdf.*`) no eliminó los errores; corregido apuntando a los módulos llamantes.
+
 ---
 
 ## Modelo de Datos — Resumen de Tablas
@@ -425,6 +440,7 @@
 | 2026-09-06 | Sesión 7 | Análisis del proyecto voz existente (AGENTE CONVERSACIONAL). Diseño de feature #12: Admin Assistant (chat+voz) con Claude + Edge TTS + Web Speech API. Spec completa (`specs/sprint-03-addendum-admin-assistant.md`). DDL: nueva tabla `admin_assistant_history` (#26), campos `admin_assistant_enabled`/`admin_assistant_voice_enabled` en `clients`, RLS + índices. ADR-019 |
 | 2026-09-06 | Sesión 8 | Sprint 2 completo: docker-compose.yml (16 servicios), Dockerfile multi-stage, Traefik v3 (static + dynamic config + TLS), Celery config (5 colas + beat schedule), wait-for-it.sh, .dockerignore, .env.example actualizado (ANTHROPIC_API_KEY, ADMIN_ASSISTANT_*, META vars, REALTIME_SECRET_KEY_BASE). Actualización de Admin Assistant spec con patrón WebMCP/UI Actions (F6) |
 | 2026-09-08 | Sesión 9 | Merge PR #1 (Supabase Cloud migration, ADR-020) a main. Diseño completo del módulo Lead Management (Sprints 5-8): análisis de BuilderX/AI CRM, pipeline de 8 etapas (CAPTURA→ENRIQUECE→CALIFICA→ASIGNA→FOLLOW-UP→AGENDA→MIDE→CIERRA), 10 tablas nuevas (#27-36), triple scoring (FIT+Behavioral+AI), secuencias multi-canal con RAG, integración Vapi/Bland.ai para voz IA, theming configurable por tenant. 5 ADRs nuevos (#021-025). Spec en `specs/sprint-16-19-lead-management.md` |
+| 2026-09-14/15 | Sesiones 11-13 | Sprint 4 y 5 cerrados de punta a punta. PR #5/#4/#7/#8/#9/#10 revisados y mergeados. BUG-005 (RLS nunca habilitado en Alembic) y BUG-006 (4 bugs nunca ejecutados por `--run-db` silenciosamente saltado) resueltos. BUG-009 (RLS testeando MVCC + rol superusuario en CI) encontrado por Dev B, revisado y verificado a fondo. Sprint 4 Dev A (messaging providers) y Sprint 5 Dev A (chunker/embedding/OCR/pipeline/RAG) implementados y entregados vía PR #8 y #10. Ver PAT-002b, BUG-009, PAT-005/006/007 |
 
 ---
 
