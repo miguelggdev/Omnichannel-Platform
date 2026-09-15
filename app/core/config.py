@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     YCLOUD_API_KEY: str = ""
     YCLOUD_WEBHOOK_SECRET: str = ""
     YCLOUD_BASE_URL: str = "https://api.ycloud.com/v2"
+    # Numero de WhatsApp desde el que responde el bot (`from` de la API de
+    # YCloud). Lo necesita el nodo `respond` del grafo (Sprint 6); hasta que
+    # exista la tabla `channel_configs` (Fase 2) es global, no por tenant.
+    YCLOUD_PHONE_NUMBER_ID: str = ""
 
     # Meta Graph API (Instagram DM + Facebook Messenger) — Sprint 4
     META_APP_SECRET: str = ""
