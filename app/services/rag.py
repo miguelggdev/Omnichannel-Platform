@@ -13,11 +13,18 @@ Dos reglas absolutas de CLAUDE.md se aplican aqui:
   manipular.
 - **BUG-001:** PostgreSQL no admite el alias de SELECT (`similarity`) dentro del
   propio WHERE. El threshold repite la expresion completa
-  `1 - (embedding <=> :query_embedding)`.
+  `1 - (embedding <=> (:query_embedding)::vector)`.
 
 `tenant_session` se importa al nivel de modulo (no dentro de los metodos) para
 que los tests puedan sustituirlo con `monkeypatch.setattr(rag, "tenant_session",
 ...)` sin tocar una sesion real.
+
+Cast `::vector` obligatorio en cada `:query_embedding`: el parametro llega como
+`str` (bindeado como `text` por asyncpg) y `vector <=> text` no tiene cast
+implicito, asi que sin el cast la query falla en Postgres real. Ningun test
+unitario lo detecta porque `tests/unit/test_rag.py` sustituye la sesion por un
+espia que solo inspecciona el SQL emitido, sin ejecutarlo — la cobertura contra
+Postgres real vive en `tests/integration/test_document_pipeline.py`.
 """
 
 from dataclasses import dataclass
@@ -102,12 +109,12 @@ class RAGService:
                 dc.content,
                 dc.metadata,
                 d.title AS document_title,
-                1 - (dc.embedding <=> :query_embedding) AS similarity
+                1 - (dc.embedding <=> (:query_embedding)::vector) AS similarity
             FROM document_chunks dc
             JOIN documents d ON dc.document_id = d.id
             WHERE dc.client_id = current_setting('app.current_client_id')::uuid
               AND d.status = 'completed'
-              AND 1 - (dc.embedding <=> :query_embedding) > :threshold
+              AND 1 - (dc.embedding <=> (:query_embedding)::vector) > :threshold
         """
         params: dict[str, Any] = {
             "query_embedding": str(query_embedding),
@@ -116,10 +123,10 @@ class RAGService:
         }
 
         if document_ids:
-            sql += " AND dc.document_id = ANY(:document_ids)"
+            sql += " AND dc.document_id = ANY((:document_ids)::uuid[])"
             params["document_ids"] = [str(doc_id) for doc_id in document_ids]
 
-        sql += " ORDER BY dc.embedding <=> :query_embedding LIMIT :top_k"
+        sql += " ORDER BY dc.embedding <=> (:query_embedding)::vector LIMIT :top_k"
 
         async with tenant_session(client_id) as session:
             rows = (await session.execute(sql_text(sql), params)).fetchall()
@@ -168,11 +175,11 @@ class RAGService:
             SELECT
                 question,
                 response,
-                1 - (embedding <=> :query_embedding) AS similarity
+                1 - (embedding <=> (:query_embedding)::vector) AS similarity
             FROM approved_responses
             WHERE client_id = current_setting('app.current_client_id')::uuid
-              AND 1 - (embedding <=> :query_embedding) > :threshold
-            ORDER BY embedding <=> :query_embedding
+              AND 1 - (embedding <=> (:query_embedding)::vector) > :threshold
+            ORDER BY embedding <=> (:query_embedding)::vector
             LIMIT :top_k
         """
         params = {

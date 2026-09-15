@@ -402,6 +402,159 @@ async def test_mark_document_failed_persiste_el_motivo(
     assert fila.metadata["error"] == "OCR reviento"
 
 
+# ─── RAGService.retrieve() contra pgvector real ──────────────────────────────
+#
+# tests/unit/test_rag.py sustituye la sesion por un espia que solo captura el
+# texto del SQL: nunca lo ejecuta contra Postgres. Eso dejo pasar un bug real:
+# `:query_embedding` se bindeaba como texto plano, sin `::vector`, y `vector <=>
+# text` no tiene cast implicito con el driver asyncpg (mismo root cause que el
+# `::vector` que hubo que agregar en `_insertar_chunks` de este archivo y en
+# los tests de RLS). Estos tests ejecutan `retrieve()` de verdad.
+
+
+class _EmbeddingFalso:
+    """Devuelve un vector fijo sin llamar a OpenAI."""
+
+    def __init__(self, vector: list[float]) -> None:
+        self._vector = vector
+
+    async def embed_single(self, texto: str) -> list[float]:
+        """Ignora el texto de la query; devuelve siempre el mismo vector."""
+        return self._vector
+
+
+def _vector_constante(valor: float) -> list[float]:
+    """Vector de 1536 componentes iguales, coherente con `EMBEDDING` de este archivo."""
+    return [valor] * 1536
+
+
+async def test_retrieve_ejecuta_contra_pgvector_real(
+    dos_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """El cast `::vector` es obligatorio.
+
+    Sin el, `<=>` contra un bind sin tipar revienta con Postgres real — algo que
+    un test con sesion mockeada, como los de `tests/unit/test_rag.py`, no puede ver.
+    """
+    from app.services.rag import RAGService
+
+    tenant_a, _ = dos_tenants
+    documento = await _insertar_documento(tenant_a, "Manual de RAG")
+    await _insertar_chunks(tenant_a, documento, cantidad=1)
+
+    rag_service = RAGService(embedding_service=_EmbeddingFalso(_vector_constante(0.1)))
+    resultados = await rag_service.retrieve("cualquier pregunta", tenant_a, threshold=0.5)
+
+    assert len(resultados) == 1
+    assert resultados[0].similarity == pytest.approx(1.0, abs=1e-6)
+    assert resultados[0].citation.startswith("[Fuente: Manual de RAG")
+
+
+async def test_retrieve_aplica_el_threshold_con_pgvector_real(
+    dos_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Un chunk lejano al embedding de la query queda fuera del threshold.
+
+    Ejercita el cast en las tres posiciones donde aparece `:query_embedding`
+    (SELECT, WHERE y ORDER BY): si alguna quedara sin castear, la query entera
+    falla antes de llegar a filtrar nada.
+    """
+    from app.services.rag import RAGService
+
+    tenant_a, _ = dos_tenants
+    documento = await _insertar_documento(tenant_a, "Manual cercano")
+    await _insertar_chunks(tenant_a, documento, cantidad=1)  # embedding [0.1]*1536
+
+    lejano = await _insertar_documento(tenant_a, "Manual lejano")
+    async with tenant_session(tenant_a) as session:
+        await session.execute(
+            text(
+                "INSERT INTO document_chunks "
+                "(client_id, document_id, chunk_index, content, embedding) "
+                "VALUES (:cid, :did, 0, 'chunk lejano', CAST(:emb AS vector))"
+            ),
+            {
+                "cid": str(tenant_a),
+                "did": str(lejano),
+                "emb": "[" + ",".join(["-0.9"] * 1536) + "]",
+            },
+        )
+
+    rag_service = RAGService(embedding_service=_EmbeddingFalso(_vector_constante(0.1)))
+    resultados = await rag_service.retrieve("cualquier pregunta", tenant_a, threshold=0.9)
+
+    assert [r.citation for r in resultados] == ["[Fuente: Manual cercano, pag. ?]"]
+
+
+async def test_retrieve_respeta_el_filtro_de_document_ids_con_pgvector_real(
+    dos_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """`document_ids` acota la busqueda: tambien pasa por asyncpg sin cast explicito."""
+    from app.services.rag import RAGService
+
+    tenant_a, _ = dos_tenants
+    incluido = await _insertar_documento(tenant_a, "Incluido")
+    await _insertar_chunks(tenant_a, incluido, cantidad=1)
+    excluido = await _insertar_documento(tenant_a, "Excluido")
+    await _insertar_chunks(tenant_a, excluido, cantidad=1)
+
+    rag_service = RAGService(embedding_service=_EmbeddingFalso(_vector_constante(0.1)))
+    resultados = await rag_service.retrieve(
+        "cualquier pregunta", tenant_a, threshold=0.5, document_ids=[incluido]
+    )
+
+    assert [r.citation for r in resultados] == ["[Fuente: Incluido, pag. ?]"]
+
+
+async def test_retrieve_few_shot_examples_ejecuta_contra_pgvector_real(
+    dos_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """`retrieve_few_shot_examples()` tiene el mismo bug de casteo, sobre `approved_responses`."""
+    from app.services.rag import RAGService
+
+    tenant_a, _ = dos_tenants
+    async with tenant_session(tenant_a) as session:
+        await session.execute(
+            text(
+                "INSERT INTO approved_responses (client_id, question, response, embedding) "
+                "VALUES (:cid, :pregunta, :respuesta, CAST(:emb AS vector))"
+            ),
+            {
+                "cid": str(tenant_a),
+                "pregunta": "como reservo",
+                "respuesta": "puedes reservar en la app",
+                "emb": EMBEDDING,
+            },
+        )
+
+    rag_service = RAGService(embedding_service=_EmbeddingFalso(_vector_constante(0.1)))
+    ejemplos = await rag_service.retrieve_few_shot_examples("como reservo", tenant_a, threshold=0.5)
+
+    assert ejemplos == [
+        {
+            "question": "como reservo",
+            "answer": "puedes reservar en la app",
+            "similarity": pytest.approx(1.0, abs=1e-6),
+        }
+    ]
+
+
+async def test_retrieve_no_ve_chunks_de_otro_tenant_con_pgvector_real(
+    dos_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Regla 2 de CLAUDE.md: el filtro pre-vectorial por client_id va antes que todo."""
+    from app.services.rag import RAGService
+
+    tenant_a, tenant_b = dos_tenants
+    documento_a = await _insertar_documento(tenant_a, "Solo de A")
+    await _insertar_chunks(tenant_a, documento_a, cantidad=1)
+
+    rag_service = RAGService(embedding_service=_EmbeddingFalso(_vector_constante(0.1)))
+    resultados = await rag_service.retrieve("cualquier pregunta", tenant_b, threshold=0.5)
+
+    assert resultados == []
+
+
 # ─── Guardia: que RLS este realmente activo ──────────────────────────────────
 #
 # NOTA-002 en MEMORY.md: durante varios sprints el CI daba verde en RLS sin
