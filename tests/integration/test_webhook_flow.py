@@ -112,6 +112,24 @@ async def webhook_tenant(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[uuid
         await session.execute(text("DELETE FROM clients WHERE id = :cid"), {"cid": str(client_id)})
 
 
+@pytest.fixture(autouse=True)
+def ia_encolada(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Sustituye el `.delay()` del worker de IA: aqui se prueba la base, no el broker.
+
+    Desde Sprint 6 `_enqueue_ai_processing()` encola de verdad
+    (`app.tasks.ai_processor`). El job de integracion no levanta el broker de
+    Celery, asi que sin este doble cada test se colgaba reintentando conectarse
+    al result backend hasta agotar el limite. Lo que interesa verificar aqui es
+    que el mensaje llega a la cola con los ids serializados, no que Celery sepa
+    hablar con Redis.
+    """
+    from app.tasks.ai_processor import process_ai_response
+
+    encoladas: list[dict[str, Any]] = []
+    monkeypatch.setattr(process_ai_response, "delay", lambda **kw: encoladas.append(kw))
+    return encoladas
+
+
 async def _contar(client_id: uuid.UUID, tabla: str) -> int:
     """Cuenta filas del tenant en la tabla indicada, con SET LOCAL aplicado."""
     async with tenant_session(client_id) as session:
@@ -128,6 +146,7 @@ async def _contar(client_id: uuid.UUID, tabla: str) -> int:
 @pytest.mark.parametrize(("provider", "channel", "sender", "external_id"), CASOS)
 async def test_flujo_completo_por_canal(
     webhook_tenant: uuid.UUID,
+    ia_encolada: list[dict[str, Any]],
     provider: str,
     channel: str,
     sender: str,
@@ -160,6 +179,12 @@ async def test_flujo_completo_por_canal(
     assert fila.sender_type == "contact"
     assert fila.status == "bot_active"
     assert fila.channel == channel
+
+    # El mensaje sigue su camino hacia el grafo, con el canal resuelto del
+    # mensaje (no el de la URL) y los ids ya serializados para Celery.
+    assert len(ia_encolada) == 1
+    assert ia_encolada[0]["channel"] == channel
+    assert ia_encolada[0]["client_id"] == str(webhook_tenant)
 
 
 async def test_mismo_mensaje_dos_veces_no_duplica(webhook_tenant: uuid.UUID) -> None:
