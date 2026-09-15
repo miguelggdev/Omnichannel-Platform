@@ -274,6 +274,28 @@ class TestEncoladoDeIA:
             "message_data": {"text": "Hola"},
         }
 
+    def test_broker_caido_no_rompe_el_webhook(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """El mensaje ya esta guardado y marcado como procesado: reintentar no ayuda.
+
+        Para cuando se encola la IA, `webhook_dedup` ya tiene la entrada, asi que
+        un reintento de la tarea completa se cortaria ahi sin volver a encolar.
+        Propagar el error solo agregaria ruido; queda un CRITICAL en el log.
+        """
+        from app.tasks import ai_processor
+
+        def _sin_broker(**kwargs: Any) -> None:
+            raise ConnectionError("broker caido")
+
+        monkeypatch.setattr(ai_processor.process_ai_response, "delay", _sin_broker)
+
+        wp._enqueue_ai_processing(
+            client_id=uuid.uuid4(),
+            conversation_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
+            channel="whatsapp",
+            message_data={"text": "Hola"},
+        )
+
 
 # ─── Procesamiento de mensaje: canal correcto hacia la IA ────────────────────
 
