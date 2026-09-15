@@ -17,7 +17,6 @@ importa de forma perezosa: asi el worker arranca y el endpoint encola aunque esa
 pieza todavia no este en `main`.
 """
 
-import asyncio
 import logging
 from typing import Any
 from uuid import UUID
@@ -26,7 +25,7 @@ from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
 
 from app.core.config import get_settings
-from app.core.database import tenant_session
+from app.core.database import run_isolated, tenant_session
 from app.models.document import Document
 
 logger = logging.getLogger(__name__)
@@ -129,21 +128,33 @@ def ingest_document(self: Any, document_id: str, client_id: str) -> dict[str, st
     client_uuid = UUID(client_id)
 
     try:
-        asyncio.run(_run_pipeline(doc_uuid, client_uuid))
+        run_isolated(_run_pipeline(doc_uuid, client_uuid))
 
     except SoftTimeLimitExceeded:
         # No se reintenta: si no cupo en 9 minutos, otro intento tampoco va a caber.
         logger.error("Timeout procesando el documento %s", document_id)
-        asyncio.run(_mark_document_failed(doc_uuid, client_uuid, "Timeout de procesamiento"))
+        run_isolated(_mark_document_failed(doc_uuid, client_uuid, "Timeout de procesamiento"))
         return {"status": "timeout"}
 
     except PipelineUnavailableError as exc:
         # Tampoco se reintenta: reintentar no instala el modulo que falta.
         logger.error("Documento %s sin procesar: %s", document_id, exc)
-        asyncio.run(_mark_document_failed(doc_uuid, client_uuid, str(exc)))
+        run_isolated(_mark_document_failed(doc_uuid, client_uuid, str(exc)))
         return {"status": "failed"}
 
     except Exception as exc:
+        # Import perezoso pero seguro: para llegar aca, _run_pipeline ya importo
+        # app.services.document_pipeline sin error (sino habria caido en el
+        # except PipelineUnavailableError de arriba), asi que Python ya lo tiene
+        # cacheado en sys.modules.
+        from app.services.document_pipeline import EmptyDocumentError
+
+        if isinstance(exc, EmptyDocumentError):
+            # No se reintenta: el mismo archivo va a dar el mismo resultado vacio.
+            logger.error("Documento %s sin contenido para RAG: %s", document_id, exc)
+            run_isolated(_mark_document_failed(doc_uuid, client_uuid, str(exc)))
+            return {"status": "failed"}
+
         if self.request.retries < self.max_retries:
             logger.warning(
                 "Fallo procesando el documento %s (intento %s/%s): %s",
@@ -161,7 +172,7 @@ def ingest_document(self: Any, document_id: str, client_id: str) -> dict[str, st
             exc,
             exc_info=True,
         )
-        asyncio.run(_mark_document_failed(doc_uuid, client_uuid, str(exc)))
+        run_isolated(_mark_document_failed(doc_uuid, client_uuid, str(exc)))
         return {"status": "failed"}
 
     return {"status": "completed"}

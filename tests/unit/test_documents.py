@@ -677,6 +677,36 @@ class TestWorkerDeIngesta:
         assert resultado == {"status": "failed"}
         assert len(marcados) == 1
 
+    def test_documento_sin_chunks_marca_failed_sin_reintentar(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """El mismo archivo va a dar el mismo resultado vacio: reintentar no ayuda."""
+        from app.services.document_pipeline import EmptyDocumentError
+
+        async def sin_contenido(*args: Any, **kwargs: Any) -> None:
+            raise EmptyDocumentError("el documento X no genero ningun chunk de texto")
+
+        marcados: list[tuple[Any, ...]] = []
+
+        async def marcar(document_id: Any, client_id: Any, error: str) -> None:
+            marcados.append((document_id, client_id, error))
+
+        monkeypatch.setattr(ingestion_module, "_run_pipeline", sin_contenido)
+        monkeypatch.setattr(ingestion_module, "_mark_document_failed", marcar)
+
+        class TaskSelf:
+            request = type("R", (), {"retries": 0})()
+            max_retries = 2
+
+            def retry(self, exc: Exception | None = None) -> Exception:
+                raise AssertionError("no debe reintentarse")
+
+        resultado = self.cuerpo(TaskSelf(), str(uuid.uuid4()), str(uuid.uuid4()))
+
+        assert resultado == {"status": "failed"}
+        assert len(marcados) == 1
+        assert "no genero ningun chunk" in marcados[0][2]
+
     def test_timeout_marca_failed_sin_reintentar(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Si no cupo en 9 minutos, otro intento tampoco va a caber."""
         from celery.exceptions import SoftTimeLimitExceeded
