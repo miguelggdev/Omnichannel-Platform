@@ -239,17 +239,40 @@ class TestDeadLetterQueue:
 
 
 class TestEncoladoDeIA:
-    """El paso de IA es opcional hasta Sprint 6."""
+    """Desde Sprint 6 el mensaje entra al grafo de agentes.
 
-    def test_sin_ai_processor_no_falla(self) -> None:
-        """El mensaje ya esta guardado: que no exista ai_processor no es un error."""
-        wp._enqueue_ai_processing(
-            client_id=uuid.uuid4(),
-            conversation_id=uuid.uuid4(),
-            contact_id=uuid.uuid4(),
-            channel="whatsapp",
-            message_data={},
+    El viejo `test_sin_ai_processor_no_falla` se elimino: su premisa ("Sprint 6
+    todavia no entrego ai_processor") dejo de ser cierta y el test empezaba a
+    intentar una conexion real con el broker de Celery.
+    """
+
+    def test_encola_la_tarea_del_grafo_con_ids_serializados(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Celery serializa a JSON: los UUID viajan como string, no como objeto."""
+        from app.tasks import ai_processor
+
+        capturado: dict[str, Any] = {}
+        monkeypatch.setattr(
+            ai_processor.process_ai_response, "delay", lambda **kw: capturado.update(kw)
         )
+
+        client_id, conversation_id, contact_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        wp._enqueue_ai_processing(
+            client_id=client_id,
+            conversation_id=conversation_id,
+            contact_id=contact_id,
+            channel="whatsapp",
+            message_data={"text": "Hola"},
+        )
+
+        assert capturado == {
+            "client_id": str(client_id),
+            "conversation_id": str(conversation_id),
+            "contact_id": str(contact_id),
+            "channel": "whatsapp",
+            "message_data": {"text": "Hola"},
+        }
 
 
 # ─── Procesamiento de mensaje: canal correcto hacia la IA ────────────────────
