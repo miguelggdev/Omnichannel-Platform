@@ -14,7 +14,10 @@ porque `app/tasks/__init__.py` importa este modulo al cargar el paquete.
 from app.tasks.celery_config import celery_app
 
 # Modulos que el worker debe importar al arrancar para registrar sus tareas.
-TASK_MODULES = ("app.tasks.webhook_processor",)
+TASK_MODULES = (
+    "app.tasks.webhook_processor",
+    "app.tasks.document_ingestion",
+)
 
 celery_app.conf.update(imports=TASK_MODULES)
 

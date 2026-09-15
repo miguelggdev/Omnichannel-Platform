@@ -144,6 +144,22 @@
 
 ---
 
+### ADR-032: Storage con bucket único y aislamiento por prefijo de ruta
+- **Fecha:** 2026-09-14
+- **Contexto:** Los archivos del knowledge base viven en Supabase Storage (ADR-020). Había que decidir entre un bucket por tenant o uno compartido.
+- **Decisión:** Un único bucket privado (`SUPABASE_STORAGE_BUCKET`, por defecto `documents`) con la ruta `{client_id}/{document_id}/{filename}`. `build_object_path()` en `app/services/storage.py` es el único sitio que construye esa ruta. `sanitize_filename()` hace basename manual y filtra caracteres, porque el nombre lo elige el cliente y no debe poder salirse de su prefijo.
+- **Consecuencia:** Como el bucket es privado, `documents.file_url` guarda la **ruta del objeto**, no una URL pública: leerlo pasa siempre por `download_from_storage()`, que autentica con la service key. Si algún día se quiere un bucket por tenant, se cambia una función.
+- **Nota:** `app/services/storage.py` no está asignado a ningún rol en la Matriz §6. Lo necesitan el endpoint de subida (Dev B) y el pipeline de ingesta (Dev A), así que vive fuera de ambos. `download_from_storage()` es exactamente lo que la spec §2 llama desde `DocumentPipeline`.
+
+### ADR-033: Transacción explícita en los endpoints de documentos
+- **Fecha:** 2026-09-14
+- **Contexto:** `app/api/v1/documents.py` tiene que encolar en Celery y borrar archivos de Storage. Con la dependency `get_tenant_session`, la transacción se cierra cuando FastAPI limpia las dependencias, o sea **después** de que el endpoint retorna.
+- **Decisión:** Abrir `tenant_session()` a mano dentro de cada endpoint, para controlar dónde termina la transacción.
+- **Razón:** El `delay()` tiene que ocurrir con la fila ya visible: el worker abre su propia conexión y no vería un documento sin commitear. Y el borrado en Storage va después del commit, porque si la transacción se revirtiera nos quedaríamos con el documento en base y sin su archivo.
+- **Consecuencia:** Estos endpoints no usan `get_tenant_session`. `app/api/v1/auth.py` tampoco la usa, así que no rompe ninguna convención establecida.
+
+---
+
 ## Bugs Conocidos y Pitfalls
 
 ### BUG-001: Alias de SELECT no se puede usar en WHERE (PostgreSQL)
@@ -225,6 +241,30 @@
   4. **`tests/integration/test_rls_all_tables.py`**: bind params pegados directo a un cast `::vector` (`:embedding::vector`) confundían el parser de `text()` de SQLAlchemy (`syntax error at or near ":"`) — fix: parentizar (`(:embedding)::vector`). Y un `Result.scalar()` llamado dos veces sobre el mismo `Result` (`ResourceClosedError`) — un `Result` de SQLAlchemy solo se puede consumir una vez.
 - **Por qué importa:** los 4 bugs son independientes de BUG-005 en sí, pero **ninguno era detectable sin `--run-db` activo**, que es justo lo que NOTA-002 tenía apagado. Vale la pena tenerlo presente: la próxima vez que se agregue código que dependa de una sesión de DB real, no asumir que pasar en CI significa que se ejecutó — confirmar que el job relevante no está silenciosamente saltando tests.
 - **Detectado y cerrado:** 2026-09-14, en la misma sesión que BUG-005.
+
+### BUG-007: El fixture `authenticated_client` emitía un JWT que el middleware no puede leer
+- **Descripción:** `tests/conftest.py` construía el token a mano con la claim `sub`, pero `TenantContextMiddleware` lee `payload["user_id"]` — habría dado `KeyError` y un 500. Además firmaba con `os.getenv("JWT_SECRET", "test-secret-key-for-testing-only")` en vez del `JWT_SECRET` de la app, así que tampoco habría validado.
+- **Por qué no saltó antes:** ningún test usaba el fixture. Existía desde Sprint 3 y los primeros en ejercitarlo fueron los tests de documentos, en Sprint 5.
+- **Estado:** CERRADO — ahora usa `create_access_token()`, la misma función que emite los tokens en producción, así el payload no puede desincronizarse del middleware. Se añadió `authenticated_client_factory` para pedir rol o tenant concretos.
+
+### BUG-008: `DocumentResponse` fallaba porque `created_at` llegaba a None
+- **Descripción:** `created_at` y `updated_at` son `server_default`, así que tras `session.flush()` siguen a `None` hasta que PostgreSQL los rellena. Serializar el documento ahí mismo hacía fallar la validación de Pydantic.
+- **Agravante en async:** no basta con acceder al atributo para que SQLAlchemy los cargue. La carga perezosa necesita IO, y en contexto asíncrono eso revienta con `MissingGreenlet`; hay que pedirlos explícitamente con `await session.refresh(document)`.
+- **Detectado:** Sprint 5, Dev B, por el primer test que ejercitó la subida completa.
+- **Estado:** CERRADO — `await session.refresh(document)` antes de serializar.
+
+### BUG-009: Los tests de aislamiento RLS pasaban en vacío por dos motivos distintos
+- **Descripción:** Desde Sprint 1, `tests/integration/test_rls_all_tables.py` (22 tests activos) daba verde **sin comprobar RLS en ningún momento**. Dos defectos independientes, cada uno suficiente por sí solo:
+  1. **El rol del CI era superusuario.** `POSTGRES_USER` del contenedor de PostgreSQL se crea como `SUPERUSER`, y PostgreSQL ignora las políticas RLS para superusuarios **incluso con `FORCE`**. Toda la suite corría con ese rol.
+  2. **La lectura cruzada era sobre datos sin commitear.** `assert_rls_isolation()` insertaba con `session_a` sin commitear y leía desde `session_b`, que es otra conexión en otra transacción. Lo que bloqueaba esa lectura era el aislamiento MVCC, no RLS. El test pasaba idéntico con las políticas desactivadas.
+- **Por qué se tardó tanto en ver:** los dos defectos se enmascaraban mutuamente. Con el rol superusuario, RLS no filtraba nada — pero los asserts seguían pasando gracias a MVCC, así que nada delataba el bypass. Y como los asserts pasaban, nadie sospechaba del rol.
+- **Cómo salió:** `tests/integration/test_document_pipeline.py` (Sprint 5) es el primer test del repo que **commitea** la fila y después la lee desde otro tenant, a través de los endpoints. `GET /api/v1/documents/{id}` de un documento ajeno devolvió 200 en vez de 404.
+- **Defecto real que destapó:** `_get_document_or_404()` usaba `session.get()`, delegando el aislamiento entero a RLS. Contradice la restricción 2 de CLAUDE.md: las queries de seguridad deben ser explícitas. Corregido con un filtro por `client_id` en el WHERE; RLS queda como segunda barrera.
+- **Estado:** CERRADO.
+  - `ci.yml` crea `app_user` (`NOSUPERUSER NOBYPASSRLS`) después de las migraciones y la suite de integración se conecta con él. Alembic sigue corriendo como el dueño de las tablas.
+  - `assert_rls_isolation()` simula el otro tenant cambiando `app.current_client_id` **dentro de la misma transacción** que hizo el INSERT. Esa transacción ve su propia fila sin commitear, así que lo único que puede ocultarla es la política. Si alguien desactiva RLS, ahora falla.
+  - Dos tests-guardia en `test_document_pipeline.py` verifican la premisa: que las tablas tengan `ENABLE` + `FORCE` + política, y que el rol de conexión no sea superusuario ni tenga `BYPASSRLS`.
+- **Lección transferible:** un test de aislamiento que nunca ha fallado no prueba nada. Antes de confiar en uno, hay que verlo fallar — desactivando la política, o comprobando que el mecanismo que debería bloquear es realmente el que bloquea. Aplica a los ~30 tests de RLS del repo y a cualquier test de permisos que se escriba de aquí en adelante.
 
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.

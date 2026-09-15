@@ -151,14 +151,34 @@ jobs:
         env:
           DATABASE_URL: "postgresql+asyncpg://test_user:test_password@localhost:5432/test_omnichannel"
 
+      - name: Crear rol de aplicacion que no saltee RLS
+        # POSTGRES_USER del contenedor (test_user) se crea como SUPERUSER, y
+        # PostgreSQL ignora las politicas RLS para superusuarios incluso con FORCE.
+        # Corriendo la suite como test_user, todo test de aislamiento pasaba en
+        # vacio. Las migraciones siguen corriendo como test_user (es el dueno de
+        # las tablas); los tests se conectan como app_user, que si esta sujeto a
+        # las politicas.
+        run: |
+          PGPASSWORD=test_password psql -h localhost -U test_user -d test_omnichannel -v ON_ERROR_STOP=1 <<'SQL'
+            CREATE ROLE app_user LOGIN PASSWORD 'app_password' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+            GRANT USAGE ON SCHEMA public TO app_user;
+            GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
+            GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;
+            ALTER DEFAULT PRIVILEGES IN SCHEMA public
+              GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
+          SQL
+
       - name: Run RLS isolation tests
         # --run-db es obligatorio: tests/integration/ (incluye test_webhook_flow.py,
         # marcado @pytest.mark.db) se saltaba entero sin este flag, sin que CI
         # fallara ni avisara.
+        #
+        # DATABASE_URL apunta a app_user, NO a test_user: ver el paso anterior. Los
+        # tests-guardia de test_document_pipeline.py verifican esta premisa.
         run: |
           pytest tests/integration/ -v --tb=short --run-db
         env:
-          DATABASE_URL: "postgresql+asyncpg://test_user:test_password@localhost:5432/test_omnichannel"
+          DATABASE_URL: "postgresql+asyncpg://app_user:app_password@localhost:5432/test_omnichannel"
           REDIS_URL: "redis://localhost:6379/0"
           TESTING: "true"
 

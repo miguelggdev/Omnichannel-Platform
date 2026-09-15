@@ -263,26 +263,52 @@ async def api_client() -> AsyncGenerator:
 @pytest_asyncio.fixture
 async def authenticated_client(api_client, tenant_a_id) -> AsyncGenerator:
     """
-    Cliente HTTP con JWT de Tenant A.
+    Cliente HTTP con JWT de Tenant A y rol admin.
 
-    Incluye header Authorization con un token válido.
-    El token se genera con el JWT_SECRET de testing.
+    El token se genera con `create_access_token`, no a mano: el payload tiene que
+    traer exactamente las claims que lee `TenantContextMiddleware`
+    (`user_id`, `client_id`, `role`) y firmarse con el `JWT_SECRET` de la app.
+
+    Para otro rol, usar la factory `authenticated_client_factory`.
     """
-    import jwt
+    from app.core.security import create_access_token
 
-    secret = os.getenv("JWT_SECRET", "test-secret-key-for-testing-only")
-    token = jwt.encode(
+    token = create_access_token(
         {
-            "sub": str(uuid.uuid4()),
+            "user_id": str(uuid.uuid4()),
             "client_id": str(tenant_a_id),
+            "email": "test@example.com",
             "role": "admin",
-            "exp": 9999999999,
-        },
-        secret,
-        algorithm="HS256",
+        }
     )
     api_client.headers["Authorization"] = f"Bearer {token}"
     yield api_client
+
+
+@pytest_asyncio.fixture
+async def authenticated_client_factory(api_client, tenant_a_id):
+    """
+    Factory de clientes autenticados con el rol que pida el test.
+
+    Uso:
+        client = authenticated_client_factory(role="agent")
+    """
+    from app.core.security import create_access_token
+
+    def _make(role: str = "admin", client_id=None, user_id=None):
+        """Devuelve el cliente con un token del rol y tenant indicados."""
+        token = create_access_token(
+            {
+                "user_id": str(user_id or uuid.uuid4()),
+                "client_id": str(client_id or tenant_a_id),
+                "email": "test@example.com",
+                "role": role,
+            }
+        )
+        api_client.headers["Authorization"] = f"Bearer {token}"
+        return api_client
+
+    yield _make
 
 
 # ─── Factory Helpers ─────────────────────────────────────────────────────────

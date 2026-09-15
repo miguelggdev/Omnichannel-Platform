@@ -292,10 +292,15 @@ class TestProcessMessage:
         capturado: dict[str, Any] = {}
         monkeypatch.setattr(wp, "_enqueue_ai_processing", lambda **kw: capturado.update(kw))
 
+        # Payload completo: desde que _process_message revalida con
+        # NormalizedMessage, un dict parcial ya no llega a la logica que se prueba.
         message_data = {
             "external_message_id": "fb.1",
             "sender_identifier": "psid123",
             "channel": "facebook",
+            "text": "hola",
+            "timestamp": "2026-09-09T20:00:00+00:00",
+            "raw_payload": {},
         }
 
         await wp._process_message("meta", "instagram", message_data)

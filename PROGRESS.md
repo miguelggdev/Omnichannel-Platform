@@ -221,6 +221,32 @@ _(nada en progreso)_
 
 ---
 
+## Sprint 5: Pipeline de Documentos & RAG
+
+### Completado — Dev B (branch `feature/sprint-05-rag`, sesión 13)
+- [x] `app/api/v1/documents.py` — CRUD completo: subida (valida tipo y 50 MB), listado paginado con filtro por status, detalle con recuento real de chunks, borrado (documento + chunks + archivo) y reprocesado
+- [x] `app/services/storage.py` — cliente de Supabase Storage (upload/download/delete) con aislamiento por prefijo de ruta (ADR-032). `download_from_storage()` es la que consumirá el pipeline de Dev A
+- [x] `app/tasks/document_ingestion.py` — tarea `app.tasks.document_ingest` (cola documents, 2 reintentos, time_limit 600s / soft 540s). Timeout y ausencia del pipeline no se reintentan: dejan el documento en `failed` con el motivo visible
+- [x] `app/main.py` — router montado en `/api/v1/documents`
+- [x] `app/core/config.py` + `.env.example` — `SUPABASE_STORAGE_BUCKET`
+- [x] `tests/unit/test_documents.py` — 56 tests verdes sin DB (endpoint, permisos por rol, Storage con httpx sustituido, worker)
+- [x] `tests/unit/test_rag.py` — contrato del retrieval, con `importorskip` hasta que Dev A entregue `rag.py`
+- [x] `tests/integration/test_document_pipeline.py` — flujo contra PostgreSQL real con RLS: aislamiento entre dos tenants a través de los endpoints, borrado de chunks, reprocesado, filtros y paginación
+- [x] Deuda de Sprint 4 cerrada: el worker de webhooks usa `NormalizedMessage(**message_data)` y `app.services.messaging.*` sale del override de mypy
+- [x] BUG-007 y BUG-008 (ver MEMORY.md)
+
+### Pendiente — Dev A
+- [ ] `app/services/document_pipeline.py` — orquestador del pipeline
+- [ ] `app/services/chunker.py`, `embedding.py`, `ocr.py`, `rag.py`
+
+### Notas
+- Mientras el pipeline de Dev A no esté, los documentos subidos quedan en `failed` con el motivo explícito en `metadata.error`; se recuperan con `POST /documents/{id}/reprocess` sin volver a subir el archivo
+- La spec asume campos que el modelo no tiene (`file_path`, `file_size_bytes`, `uploaded_by`): se usan `file_url`, `file_size` y `metadata.uploaded_by`
+- `document_chunks` no declara `ON DELETE CASCADE`, así que el borrado los elimina explícitamente
+- Cobertura de los archivos nuevos: `documents.py` 97%, `storage.py` 97%, `document_ingestion.py` 87% (total 95%)
+
+---
+
 ## Resumen por Sprint
 
 | Sprint | Nombre | Estado | Notas |
@@ -229,7 +255,7 @@ _(nada en progreso)_
 | 2 | Infraestructura Docker | ✅ Completado | 12 servicios (ADR-020), Dockerfile multi-stage, Traefik v3, 6 colas Celery |
 | 3 | FastAPI Core & Auth | ✅ Completado | 61 archivos, +3460 líneas. Auth JWT, middleware multi-tenant, modelos SQLAlchemy, Alembic, CI 8/8 green |
 | 4 | Webhook Receiver & MessagingProvider | ✅ Completado | Dev B (PR #5, mergeado) + Dev A (branch `feature/sprint-04-messaging`, pendiente de PR/merge): endpoint, dedup, worker, MessagingProvider ABC, YCloudProvider, MetaProvider, factory, `NormalizedMessage`. 100/100 tests, RLS verificado en CI real |
-| 5 | Pipeline de Documentos & RAG | ⬜ Pendiente | Prerequisito de la spec (Sprint 4 completo) ya cumplido — listo para arrancar |
+| 5 | Pipeline de Documentos & RAG | 🔄 En progreso | Dev B: CRUD de documentos, Storage y worker de ingesta listos. Falta el pipeline de Dev A (chunker, embedding, OCR, RAG) |
 | 6 | LangGraph — Grafo de Agentes | ⬜ Pendiente | |
 | 7 | Agente de Agendamiento & CRM API | ⬜ Pendiente | |
 | 8 | Observabilidad, Backup & Hardening | ⬜ Pendiente | **Hito MVP** |
