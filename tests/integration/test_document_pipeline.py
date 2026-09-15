@@ -137,7 +137,7 @@ def sin_celery(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
 
 
 async def _insertar_documento(
-    client_id: uuid.UUID, titulo: str, status: str = "completed"
+    client_id: uuid.UUID, titulo: str, status: str = "completed", file_type: str = "txt"
 ) -> uuid.UUID:
     """Crea un documento directamente en base, con contexto de tenant."""
     document_id = uuid.uuid4()
@@ -146,7 +146,7 @@ async def _insertar_documento(
             text(
                 "INSERT INTO documents (id, client_id, title, file_url, file_type, "
                 "file_size, status, chunk_count) "
-                "VALUES (:id, :cid, :titulo, :url, 'txt', 10, :status, 0)"
+                "VALUES (:id, :cid, :titulo, :url, :file_type, 10, :status, 0)"
             ),
             {
                 "id": str(document_id),
@@ -154,6 +154,7 @@ async def _insertar_documento(
                 "titulo": titulo,
                 "url": f"{client_id}/{document_id}/faq.txt",
                 "status": status,
+                "file_type": file_type,
             },
         )
     return document_id
@@ -400,6 +401,97 @@ async def test_mark_document_failed_persiste_el_motivo(
 
     assert fila.status == "failed"
     assert fila.metadata["error"] == "OCR reviento"
+
+
+# ─── DocumentPipeline.process() contra base real ─────────────────────────────
+#
+# Un documento que no produce ningun chunk (OCR ilegible, archivo corrupto)
+# antes quedaba silenciosamente "completed" con chunk_count=0 -- indistinguible
+# de un documento sin contenido relevante para RAG. process() ahora lanza
+# EmptyDocumentError antes de guardar nada; el worker (document_ingestion.py)
+# la trata como no-reintentable y marca failed con el motivo visible.
+
+
+class _ChunkerVacio:
+    """Devuelve siempre cero chunks, sin importar el texto de entrada."""
+
+    def chunk(self, **kwargs: Any) -> list[Any]:
+        return []
+
+
+class _EmbedderNoLlamado:
+    """Falla si se le pide embeber: no deberia llegar a llamarse sin chunks."""
+
+    async def embed_batch(self, texts: list[str], batch_size: int = 100) -> list[list[float]]:
+        raise AssertionError("no debe llamarse: no hay chunks que embeber")
+
+
+class _OcrNoUsado:
+    """Falla si se le pide OCR: el tipo de archivo del test no lo necesita."""
+
+    async def extract_text(self, content: bytes, file_type: str) -> list[dict[str, Any]]:
+        raise AssertionError("csv no necesita OCR")
+
+
+async def test_process_sin_chunks_lanza_empty_document_error(
+    dos_tenants: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sin chunks, process() debe fallar explicito en vez de marcar completed."""
+    from app.services import document_pipeline as pipeline_module
+    from app.services.document_pipeline import DocumentPipeline, EmptyDocumentError
+
+    tenant_a, _ = dos_tenants
+    documento = await _insertar_documento(tenant_a, "Vacio", status="pending", file_type="csv")
+
+    async def _descarga_vacia(object_path: str) -> bytes:
+        return b""
+
+    monkeypatch.setattr(pipeline_module, "download_from_storage", _descarga_vacia)
+
+    pipeline = DocumentPipeline(
+        chunker=_ChunkerVacio(),  # type: ignore[arg-type]
+        embedder=_EmbedderNoLlamado(),  # type: ignore[arg-type]
+        ocr=_OcrNoUsado(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(EmptyDocumentError, match="no genero ningun chunk"):
+        await pipeline.process(documento, tenant_a)
+
+
+async def test_process_sin_chunks_no_deja_el_documento_completed(
+    dos_tenants: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`_guardar_resultado()` nunca debe correr si no hay chunks que guardar."""
+    from app.services import document_pipeline as pipeline_module
+    from app.services.document_pipeline import DocumentPipeline, EmptyDocumentError
+
+    tenant_a, _ = dos_tenants
+    documento = await _insertar_documento(tenant_a, "Vacio", status="pending", file_type="csv")
+
+    async def _descarga_vacia(object_path: str) -> bytes:
+        return b""
+
+    monkeypatch.setattr(pipeline_module, "download_from_storage", _descarga_vacia)
+
+    pipeline = DocumentPipeline(
+        chunker=_ChunkerVacio(),  # type: ignore[arg-type]
+        embedder=_EmbedderNoLlamado(),  # type: ignore[arg-type]
+        ocr=_OcrNoUsado(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(EmptyDocumentError):
+        await pipeline.process(documento, tenant_a)
+
+    async with tenant_session(tenant_a) as session:
+        fila = (
+            await session.execute(
+                text("SELECT status, chunk_count FROM documents WHERE id = :id"),
+                {"id": str(documento)},
+            )
+        ).one()
+
+    assert fila.status == "processing", "process() marco processing y ahi debe quedar"
+    assert fila.chunk_count == 0
 
 
 # ─── RAGService.retrieve() contra pgvector real ──────────────────────────────
