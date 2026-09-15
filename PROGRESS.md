@@ -11,7 +11,12 @@
 - **Sprint Activo:** Sprint 6 — LangGraph, Grafo de Agentes
 - **Última actualización:** 2026-09-15
 - **Última sesión:** Sesión 15 — **Entrega de Dev B del Sprint 6** (branch `feature/sprint-06-nodes`): los 6 nodos del grafo, `TokenBudgetGuard` completo y el worker `ai_processor`. 74 tests unitarios nuevos (229 en total, `ruff`/`mypy` limpios) y 8 de integración contra Postgres real con RLS, pendientes de correr en CI. Falta la entrega de Dev A (`app/agents/state.py`, `app/agents/graph.py`).
-- **Sesión 14** — Revisión general de bugs sobre `main` post-Sprint 5 (pedida por el usuario). Encontrados y arreglados: **BUG-010** (`RAGService` rompía contra Postgres real por falta de cast `::vector`, ver MEMORY.md — [PR #11](https://github.com/miguelggdev/Omnichannel-Platform/pull/11) mergeado, verificado en CI real con 5 tests de integración nuevos: 46 passed, 6 skipped). También se identificaron dos riesgos que quedan pendientes de decisión del usuario, no arreglados aún: el engine async de `app/core/database.py` es un singleton de módulo reusado por `asyncio.run()` en cada tarea de Celery (`webhook_processor.py`, `document_ingestion.py`) — mismo root cause que BUG-006, sin mitigar en producción — y `DocumentPipeline` marca `completed` con `chunk_count=0` cuando OCR no extrae texto, sin señalizarlo como fallo. Una sospecha inicial de bug en el pin de `redis` (mypy fallaba en un venv local sin `types-redis`) se descartó: es un falso positivo, CI ya instala `types-redis` aparte y con eso mypy queda limpio.
+- **Sesión 14** — Revisión general de bugs sobre `main` post-Sprint 5 (pedida por el usuario). Encontrados y arreglados los cuatro hallazgos:
+  - **BUG-010** — `RAGService` rompía contra Postgres real por falta de cast `::vector` ([PR #11](https://github.com/miguelggdev/Omnichannel-Platform/pull/11), verificado en CI real con 5 tests de integración nuevos: 46 passed, 6 skipped).
+  - **BUG-011** — el engine async de `app/core/database.py` (singleton de módulo) se reusaba entre `asyncio.run()` de cada tarea de Celery, mismo root cause que BUG-006 pero sin mitigar en producción ([PR #12](https://github.com/miguelggdev/Omnichannel-Platform/pull/12), `run_isolated()` nuevo).
+  - **BUG-012** — `DocumentPipeline` marcaba `completed` con `chunk_count=0` cuando OCR/extracción no producía texto ([PR #12](https://github.com/miguelggdev/Omnichannel-Platform/pull/12), `EmptyDocumentError` nuevo). Al escribir el test se destapó un bug relacionado sin arreglar: `_TEXT_EXTRACTORS` no soporta `"txt"` pese a que `ALLOWED_TYPES` lo acepta en la subida — todo `.txt` falla hoy con "tipo no soportado". Ver MEMORY.md, nota en BUG-012.
+  - Ver MEMORY.md (BUG-010/011/012) para el detalle de cada uno. Verificado en CI real (Postgres), no solo checkmarks: PR #12 dejó la suite de integración en 48 passed, 6 skipped.
+  - Una sospecha inicial de bug en el pin de `redis` (mypy fallaba en un venv local sin `types-redis`) se descartó: es un falso positivo, CI ya instala `types-redis` aparte y con eso mypy queda limpio.
 - **Sesión 13** — **Entrega de Dev A del Sprint 5** ([PR #10](https://github.com/miguelggdev/Omnichannel-Platform/pull/10)): `app/services/{chunker,embedding,ocr,document_pipeline,rag}.py`. Sprint 5 completo (Dev A + Dev B). Verificado en CI real: 41 passed contra el rol `app_user` (no-superusuario, `NOBYPASSRLS`) — confirma que la RLS de BUG-009 sigue genuina en este PR también. 173 tests unitarios, `ruff`/`mypy` limpios.
 - **Sesión 12** —
   1. Revisión y fix de [PR #5](https://github.com/miguelggdev/Omnichannel-Platform/pull/5) (Sprint 4, Dev B): bug de `channel` en `_enqueue_ai_processing`, `retry_backoff` sin efecto, env vars faltantes en `docker-compose.yml`.
@@ -272,11 +277,11 @@ _(nada en progreso)_
 - [x] `app/agents/nodes/human_handoff.py` — `waiting_human` + motivo y métricas en `conversations.metadata.handoff` + aviso al contacto + notificación al equipo
 - [x] `app/agents/nodes/training_approval.py` — la respuesta candidata queda en `pending_responses`; al contacto solo le llega el aviso de revisión
 - [x] `app/agents/nodes/_tenant.py`, `_delivery.py`, `_llm.py`, `_notifications.py`, `_state.py` — base compartida (config del tenant, envío + persistencia, cliente de chat, avisos, contrato del estado)
-- [x] `app/tasks/ai_processor.py` — tarea `app.tasks.ai_process_response` (cola `ai_inference`, 2 reintentos, 120s/100s). Agotados los intentos, o si el grafo no está, escala a un humano en vez de dejar la conversación muda
+- [x] `app/tasks/ai_processor.py` — tarea `app.tasks.ai_process_response` (cola `ai_inference`, 2 reintentos, 120s/100s), con `run_isolated()` de PR #12. Agotados los intentos, o si el grafo no está, escala a un humano en vez de dejar la conversación muda
 - [x] `app/core/config.py` + `.env.example` — `YCLOUD_PHONE_NUMBER_ID` (sin él el nodo `respond` no puede enviar por WhatsApp)
 - [x] Deuda de Sprint 4 cerrada: `_enqueue_ai_processing()` deja de ser un stub y encola el grafo de verdad
 - [x] 74 tests unitarios nuevos + 8 de integración (`tests/integration/test_graph_flow.py`) contra Postgres real con RLS
-- [x] ADR-034, ADR-035 y BUG-011 registrados en MEMORY.md
+- [x] ADR-034, ADR-035 y BUG-013 registrados en MEMORY.md
 
 ### Pendiente — Dev A
 - [ ] `app/agents/state.py` — `ConversationState` (mientras tanto, el contrato vive copiado en `app/agents/nodes/_state.py`, que se reemplaza por un re-export cuando llegue)
@@ -286,9 +291,9 @@ _(nada en progreso)_
 ### Ajustes sobre la spec (`specs/sprint-06-langgraph.md`)
 - **Configuración del agente:** el spec asume `agent_configs.agent_type` / `is_enabled` / `settings`, que no existen. Se usa la fila activa del tenant y su JSONB `config` (ADR-034).
 - **Presupuesto:** `token_budgets` se busca por `month` (YYYY-MM), no por `period_start`/`period_end`; `token_usage_logs` no tiene `cost_usd`, así que el costo estimado va al log y no a la base.
-- **Nota interna del handoff:** `internal_notes.author_id` es NOT NULL y una nota del bot no tiene autor; el motivo va a `conversations.metadata.handoff` (BUG-011, decisión pendiente).
+- **Nota interna del handoff:** `internal_notes.author_id` es NOT NULL y una nota del bot no tiene autor; el motivo va a `conversations.metadata.handoff` (BUG-013, decisión pendiente).
 - **`pending_responses.generated_response`**, no `suggested_answer`.
-- **Sin cache del grafo compilado** (spec §12): reusarlo entre tareas de Celery es BUG-006. La tarea además vacía el pool del engine al terminar (ADR-035).
+- **Sin cache del grafo compilado** (spec §12): reusarlo entre tareas de Celery es BUG-006 / BUG-011. La tarea usa `run_isolated()` (PR #12), no `asyncio.run()` (ADR-035).
 - **Notificaciones** (`notify_handoff`, `notify_pending_response`): `app/tasks/notifications.py` es de Sprint 8; hasta entonces el aviso se registra en el log y el flujo sigue.
 
 ### Notas

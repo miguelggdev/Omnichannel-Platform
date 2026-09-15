@@ -42,6 +42,18 @@ _IMAGE_FILE_TYPES = ("png", "jpg", "webp")
 _PDF_MIN_TEXT_CHARS = 50
 
 
+class EmptyDocumentError(ValueError):
+    """El documento no produjo ningun chunk de texto (extraccion u OCR vacios).
+
+    Un escaneo ilegible o un archivo corrupto no deben quedar como `completed`
+    con `chunk_count=0`: eso es indistinguible de un documento sin contenido
+    relevante, y RAG nunca podria citarlo. `app/tasks/document_ingestion.py` la
+    trata como `PipelineUnavailableError`: no se reintenta (el mismo archivo
+    va a dar el mismo resultado) y el documento queda `failed` con el motivo
+    visible en `metadata.error`.
+    """
+
+
 def extract_pdf_pages(content: bytes) -> list[dict[str, Any]]:
     """Extrae el texto nativo de cada pagina de un PDF (sin OCR).
 
@@ -156,6 +168,9 @@ class DocumentPipeline:
         Raises:
             ValueError: Si el documento no existe (para este tenant o para
                 ninguno: desaparecio entre el encolado y el procesamiento).
+            EmptyDocumentError: Si la extraccion (u OCR) no produjo texto
+                utilizable en ninguna pagina y por lo tanto no hay nada que
+                chunkear ni embeber.
         """
         file_url, file_type, title = await self._marcar_procesando(document_id, client_id)
 
@@ -171,6 +186,12 @@ class DocumentPipeline:
             document_title=title,
             file_type=file_type,
         )
+
+        if not chunks:
+            raise EmptyDocumentError(
+                f"El documento {document_id} no genero ningun chunk de texto "
+                "(extraccion u OCR vacios)"
+            )
 
         embeddings = await self.embedder.embed_batch(
             texts=[chunk.content for chunk in chunks],

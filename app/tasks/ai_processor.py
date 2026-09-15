@@ -20,13 +20,16 @@ visible en `conversations.metadata.handoff`.
 
 **El grafo compilado no se cachea entre invocaciones, a proposito.** La spec
 propone un `_graph_cache` por tenant (§12), pero cada tarea de Celery abre su
-propio event loop con `asyncio.run()`: un grafo compilado guarda el checkpointer
-—y sus conexiones a PostgreSQL— atado al loop en el que se creo, y reusarlo en
-el siguiente loop es exactamente BUG-006. Compilar cuesta microsegundos; el
-checkpointer es lo unico que abre conexiones, y esas se cierran al terminar.
+propio event loop: un grafo compilado guarda el checkpointer —y sus conexiones a
+PostgreSQL— atado al loop en el que se creo, y reusarlo en el siguiente loop es
+exactamente BUG-006 / BUG-011. Compilar cuesta microsegundos; el checkpointer es
+lo unico que abre conexiones, y `run_isolated()` las cierra al terminar.
+
+Por eso la tarea no llama a `asyncio.run()` sino a `run_isolated()`
+(`app/core/database.py`, BUG-011): vacia el pool del engine en el mismo loop que
+lo lleno, que es la regla para todo `app/tasks/*.py` desde PR #12.
 """
 
-import asyncio
 import logging
 from typing import Any
 
@@ -35,7 +38,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 from app.agents.nodes._state import ConversationState
 from app.core.config import get_settings
-from app.core.database import engine
+from app.core.database import run_isolated
 
 logger = logging.getLogger(__name__)
 
@@ -200,27 +203,6 @@ async def _emergency_handoff(
     )
 
 
-async def _run(coro: Any) -> Any:
-    """Ejecuta una corrutina y deja el pool del engine vacio al terminar.
-
-    Cada tarea de Celery corre en su propio event loop (`asyncio.run`), y el
-    engine de `app/core/database.py` es un singleton de modulo: sus conexiones
-    quedarian atadas a un loop ya cerrado y la siguiente tarea las tomaria rotas
-    (BUG-006). Vaciar el pool dentro del mismo loop que las abrio cierra el
-    agujero para esta tarea; la decision global sobre el engine sigue pendiente.
-
-    Args:
-        coro: Corrutina a ejecutar.
-
-    Returns:
-        Lo que devuelva la corrutina.
-    """
-    try:
-        return await coro
-    finally:
-        await engine.dispose()
-
-
 @shared_task(
     name="app.tasks.ai_process_response",
     bind=True,
@@ -255,27 +237,21 @@ def process_ai_response(
         Retry: Reintento (2 como maximo) ante un fallo transitorio.
     """
     try:
-        asyncio.run(
-            _run(
-                _invoke_graph(
-                    client_id=client_id,
-                    conversation_id=conversation_id,
-                    contact_id=contact_id,
-                    channel=channel,
-                    message_data=message_data,
-                )
+        run_isolated(
+            _invoke_graph(
+                client_id=client_id,
+                conversation_id=conversation_id,
+                contact_id=contact_id,
+                channel=channel,
+                message_data=message_data,
             )
         )
     except (GraphUnavailableError, SoftTimeLimitExceeded) as exc:
         # Ninguno de los dos mejora reintentando: el modulo no va a aparecer y un
         # grafo que agoto 100s volveria a agotarlos.
         logger.error("Grafo no ejecutable en %s: %s", conversation_id, exc)
-        asyncio.run(
-            _run(
-                _emergency_handoff(
-                    client_id, conversation_id, contact_id, channel, GRAPH_ERROR_REASON
-                )
-            )
+        run_isolated(
+            _emergency_handoff(client_id, conversation_id, contact_id, channel, GRAPH_ERROR_REASON)
         )
         return {"status": "handoff"}
     except Exception as exc:
@@ -296,12 +272,8 @@ def process_ai_response(
             exc,
             exc_info=True,
         )
-        asyncio.run(
-            _run(
-                _emergency_handoff(
-                    client_id, conversation_id, contact_id, channel, GRAPH_ERROR_REASON
-                )
-            )
+        run_isolated(
+            _emergency_handoff(client_id, conversation_id, contact_id, channel, GRAPH_ERROR_REASON)
         )
         return {"status": "handoff"}
 

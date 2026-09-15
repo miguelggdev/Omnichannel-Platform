@@ -18,7 +18,6 @@ Reintentos: 5s -> 25s -> 125s (exponencial). Tras 3 fallos el mensaje va a la De
 Letter Queue de Redis (`dlq:webhook_messages`) para revision manual.
 """
 
-import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -30,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.database import tenant_session
+from app.core.database import run_isolated, tenant_session
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.conversation import Conversation
@@ -368,7 +367,7 @@ def process_incoming_message(
         Retry: Reintento con backoff exponencial (5s, 25s, 125s).
     """
     try:
-        asyncio.run(_process_message(provider, channel, normalized_message))
+        run_isolated(_process_message(provider, channel, normalized_message))
     except Exception as exc:
         if self.request.retries < self.max_retries:
             countdown = RETRY_BASE_DELAY_SECONDS * (RETRY_BACKOFF_FACTOR**self.request.retries)
@@ -387,7 +386,7 @@ def process_incoming_message(
             exc,
             exc_info=True,
         )
-        asyncio.run(_send_to_dlq(provider, channel, normalized_message))
+        run_isolated(_send_to_dlq(provider, channel, normalized_message))
         return {"status": "dlq"}
 
     return {"status": "processed"}
