@@ -68,9 +68,12 @@ _DIRECT_RESPONSE_INTENTS = frozenset({"greeting", "farewell"})
 # Intents que siempre escalan a un humano sin intentar RAG.
 _HUMAN_INTENTS = frozenset({"human_request", "complaint"})
 
-# Maximo de conexiones que el pool del checkpointer abre para un solo mensaje.
-# El grafo encadena a lo sumo dos escrituras de checkpoint (entrada y salida);
-# no hace falta un pool grande para una sola tarea de Celery.
+# Conexiones que el pool del checkpointer abre para un solo mensaje. El grafo
+# encadena a lo sumo dos escrituras de checkpoint (entrada y salida); no hace
+# falta un pool grande para una sola tarea de Celery. min_size no puede ser
+# mayor que max_size (psycopg_pool lo valida en el constructor), y el default
+# de min_size es 4 -- hay que fijar los dos, no solo max_size.
+CHECKPOINTER_POOL_MIN_SIZE = 1
 CHECKPOINTER_POOL_MAX_SIZE = 3
 
 
@@ -231,6 +234,7 @@ class _CheckpointedGraph:
         # en runtime), asi que se declara a mano.
         pool: AsyncConnectionPool[AsyncConnection[dict[str, Any]]] = AsyncConnectionPool(
             conninfo=_checkpointer_conninfo(),
+            min_size=CHECKPOINTER_POOL_MIN_SIZE,
             max_size=CHECKPOINTER_POOL_MAX_SIZE,
             kwargs=conn_kwargs,
             open=False,
