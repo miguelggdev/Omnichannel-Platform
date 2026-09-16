@@ -330,6 +330,7 @@ _(nada en progreso)_
 - [x] `app/main.py` — 20 endpoints nuevos montados; `app/tasks/celery_app.py` — `app.tasks.auto_close` sumado a `TASK_MODULES` (la lección de BUG-014)
 - [x] 163 tests unitarios nuevos (`test_conversation_lifecycle`, `test_contacts`, `test_conversations`, `test_tags_notes`, `test_agent_logging`, `test_auto_close`, más los dobles de `crm_doubles.py`) y 26 de integración (`tests/integration/test_crm_api.py`) contra Postgres real con RLS
 - [x] ADR-037, ADR-038 y ADR-039 registrados en MEMORY.md
+- [x] Verificado en CI real leyendo el log, no el checkmark ([PR #16](https://github.com/miguelggdev/Omnichannel-Platform/pull/16), run 35149784591): **464 unitarios passed, 1 skipped** (cobertura 86.68%, antes 280) y **83 de integración passed, 6 skipped** contra el rol `app_user` (`NOBYPASSRLS`, antes 57). Los 9 jobs en verde, incluidos `alembic check` y el smoke de Docker
 
 ### Pendiente — Dev A
 - [ ] `app/agents/tools/calendar_tools.py`, `app/agents/nodes/scheduling.py`, `app/services/calendar.py`
