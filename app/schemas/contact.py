@@ -47,3 +47,47 @@ class ContactListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class IdentifierResponse(BaseModel):
+    """Identificador de un contacto en un canal concreto.
+
+    El modelo `ContactIdentifier` de Sprint 1 no tiene `is_primary` ni
+    `verified_at`, que la spec (§13) da por hechos: solo `channel` y
+    `identifier_value`.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    channel: str
+    identifier_value: str
+    created_at: datetime
+
+
+class ContactTagResponse(BaseModel):
+    """Etiqueta asignada a un contacto, con el nombre y color resueltos."""
+
+    id: UUID
+    name: str
+    color: str | None
+
+
+class ContactNoteResponse(BaseModel):
+    """Nota interna tal como aparece dentro del detalle de un contacto."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    author_id: UUID
+    content: str
+    created_at: datetime
+
+
+class ContactDetailResponse(ContactResponse):
+    """Contacto con sus identificadores, etiquetas y notas recientes."""
+
+    metadata: dict[str, Any] = {}
+    identifiers: list[IdentifierResponse] = []
+    tags: list[ContactTagResponse] = []
+    notes: list[ContactNoteResponse] = []

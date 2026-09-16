@@ -50,3 +50,43 @@ class ConversationListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ConversationMessageResponse(BaseModel):
+    """Mensaje tal como aparece dentro del detalle de una conversacion."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    direction: str
+    message_type: str
+    content: str | None
+    media_url: str | None
+    sender_type: str
+    sender_id: UUID | None
+    created_at: datetime
+
+
+class ConversationDetailResponse(ConversationResponse):
+    """Conversacion con una pagina de mensajes en orden cronologico.
+
+    `started_at` (spec §13) no existe en el modelo: el inicio de la conversacion
+    es `created_at`, que ya viene heredado de `ConversationResponse`.
+    """
+
+    messages: list[ConversationMessageResponse] = []
+    total_messages: int = 0
+    page: int = 1
+    page_size: int = 50
+
+
+class ConversationAssignRequest(BaseModel):
+    """Body para asignar una conversacion a un agente humano."""
+
+    user_id: UUID = Field(description="UUID del agente humano a asignar")
+
+
+class ConversationStatusChangeRequest(BaseModel):
+    """Body para cambiar el estado de una conversacion."""
+
+    status: str = Field(description="Nuevo estado de la conversacion")
