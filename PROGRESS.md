@@ -9,7 +9,9 @@
 
 - **Fase:** 1 — MVP Core
 - **Sprint Activo:** Sprint 7 — Agente de Agendamiento & CRM API (Dev B arranca; Dev A espera)
-- **Coordinación Sprint 7:** la migración de `service_types` (nueva, no estaba en el schema de Sprint 1 — ver `specs/sprint-07-scheduling-crm.md` §1) la crea **Dev A** cuando arranque con `calendar_tools.py`, no Dev B. Decisión del usuario 2026-09-16, para no pisarse.
+- **Coordinación Sprint 7:**
+  - La migración de `service_types` (nueva, no estaba en el schema de Sprint 1 — ver `specs/sprint-07-scheduling-crm.md` §1) la crea **Dev A** cuando arranque con `calendar_tools.py`, no Dev B. Decisión del usuario 2026-09-16, para no pisarse.
+  - El Sprint 7 suma el addendum de Agent Activity Logging (`specs/sprint-07-addendum-agent-logging.md`, reprogramado desde Sprint 6 a pedido del usuario 2026-09-16): `agent_action_log.py` (modelo), `agent_logger.py` (servicio), la migración de la tabla y el middleware que envuelve los nodos del grafo (`app/agents/graph.py`/`state.py`) van con **Dev A**; los endpoints (`app/api/v1/agent_logs.py`) y sus tests van con **Dev B**. Matriz completa en METHODOLOGY.md §Sprint 7.
 - **Última actualización:** 2026-09-16
 - **Última sesión:** Sesión 17 — Revisión de bugs pedida por el usuario al cerrar el Sprint 6. Dos hallazgos, ambos cerrados ([PR #15](https://github.com/miguelggdev/Omnichannel-Platform/pull/15)):
   - **BUG-015** — `_tenant.py::_as_agents()` trataba `config.enabled_agents: []` (deshabilitar todos los agentes a propósito) igual que "no configurado", y caía al default (`["rag"]`). Ahora distingue ausente/tipo inválido (default) de lista vacía real (se respeta). Se agregó `tests/unit/test_tenant_settings.py`, cobertura que no existía.
@@ -349,7 +351,7 @@ Las siguientes 11 features fueron diseñadas e integradas en los sprints existen
 | 5 | Multi-idioma (6 idiomas) | Sprint 14 + 15 | `specs/sprint-14-sandbox-i18n.md` (backend) + `specs/sprint-15-frontend.md` (UI) |
 | 6 | Celery/Redis Admin Panel | Sprint 8 | `specs/sprint-08-addendum-ops.md` |
 | 7 | Super Admin Telegram Bot | Sprint 8 | `specs/sprint-08-addendum-ops.md` |
-| 8 | Agent Activity Logging | Sprint 6 | `specs/sprint-06-addendum-agent-logging.md` |
+| 8 | Agent Activity Logging | Sprint 7 (reprogramado 2026-09-16, ver nota en el spec) | `specs/sprint-07-addendum-agent-logging.md` |
 | 9 | Client Management (deactivation/alerts) | Sprint 3 | `specs/sprint-03-addendum-onboarding.md` |
 | 10 | Backup & Replication (VPS) | Sprint 8 | `specs/sprint-08-addendum-ops.md` |
 | 11 | Security Policies (Cloudflare, firewall) | Sprint 8 | `specs/sprint-08-addendum-ops.md` |

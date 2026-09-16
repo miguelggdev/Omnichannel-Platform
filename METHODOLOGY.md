@@ -387,10 +387,13 @@ El stub se reemplaza por el import real en cuanto Dev A pushee el modelo. Claude
 | **A** | Google Calendar tools (LangGraph tools) | `app/agents/tools/calendar_tools.py` |
 | **A** | Scheduling node (nuevo nodo en el grafo) | `app/agents/nodes/scheduling.py` |
 | **A** | Contact unifier service (merge duplicados) | `app/services/contact_unifier.py` |
+| **A** | Migración de `service_types` (nueva tabla, no estaba en Sprint 1) | `migrations/versions/` |
 | **B** | Contacts CRUD endpoints | `app/api/v1/contacts.py` |
 | **B** | Conversations CRUD + lifecycle (7 estados) | `app/api/v1/conversations.py` |
 | **B** | Auto-close worker (Celery beat) | `app/tasks/auto_close.py` |
 | **B** | Tests: scheduling, contact merge, conversation lifecycle | `tests/` |
+| **A** | Addendum Agent Activity Logging — modelo, servicio, migración, middleware que envuelve los nodos del grafo (reprogramado de Sprint 6, ver `specs/sprint-07-addendum-agent-logging.md`) | `app/models/agent_action_log.py`, `app/services/agent_logger.py`, `app/agents/middleware/logging_middleware.py`, `migrations/versions/` |
+| **B** | Addendum Agent Activity Logging — endpoints de consulta + tests | `app/api/v1/agent_logs.py`, `tests/unit/test_agent_logging.py` |
 
 ### Sprint 8 — Observabilidad, Backup & Hardening (HITO MVP)
 | Dev | Tareas | Archivos |

@@ -87,7 +87,7 @@ omnichannel-platform/
 │   ├── sprint-01-schema.md
 │   ├── sprint-02-docker.md
 │   ├── sprint-03-addendum-onboarding.md  # Onboarding, personalización, client mgmt
-│   ├── sprint-06-addendum-agent-logging.md  # Agent activity logging
+│   ├── sprint-07-addendum-agent-logging.md  # Agent activity logging
 │   ├── sprint-08-addendum-ops.md  # Celery admin, Telegram bot, backup, security
 │   ├── sprint-15-frontend.md     # Frontend Foundation (Fase 4)
 │   └── ...

@@ -1,4 +1,21 @@
-# Sprint 6 — Addendum: Logging de Actividad de Agentes (LangGraph)
+# Sprint 7 — Addendum: Logging de Actividad de Agentes (LangGraph)
+
+> **Reprogramado 2026-09-16:** este addendum se diseñó junto con el resto de las
+> 11 features extra (Sesión 5) y quedó asignado al Sprint 6 desde el principio,
+> pero no se construyó ahí — el grafo (`app/agents/graph.py`, `state.py`) recién
+> quedó completo y verificado contra Postgres real al cerrar ese sprint, y nadie
+> lo pidió como parte del alcance mínimo. El usuario pidió moverlo al Sprint 7,
+> en paralelo al resto del trabajo de agendamiento/CRM. El archivo se renombró
+> de `sprint-06-addendum-agent-logging.md` a este.
+>
+> El pseudocódigo de abajo referencia el `ConversationState`/`graph.py` tal como
+> se diseñaron originalmente (antes de Sprint 6 Dev A): nombres de nodos, campos
+> del estado y el propio mecanismo de inyectar `_db_session` en el estado van a
+> necesitar ajustarse contra el código real (`app/agents/state.py` es
+> `total=False`, no tiene `_db_session` ni `_action_log_ids`, y los nodos ya
+> resuelven su propia sesión vía `tenant_session()` en vez de recibirla
+> inyectada) — mismo patrón que en todos los sprints anteriores: la spec es
+> ilustrativa, el modelo y los tests ya comprometidos son la fuente de verdad.
 
 ## Objetivo
 
@@ -6,7 +23,7 @@ Agregar un sistema completo de logging de actividad para cada nodo del grafo Lan
 
 ## Prerequisitos
 
-- Sprint 6 base completado (grafo LangGraph funcional)
+- Sprint 6 base completado (grafo LangGraph funcional) — **cumplido**, PR #13/#14
 - Sprint 3 completado (modelos SQLAlchemy, async sessions)
 
 ## Archivos a Crear/Modificar
