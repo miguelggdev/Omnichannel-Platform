@@ -115,12 +115,19 @@ class TestDegradacion:
 
         Es la razon de ser del guard: un `from app.models.agent_action_log import ...`
         en la cabecera del router tumbaria `create_app()` entero.
+
+        Se mira el esquema de OpenAPI y no `app.routes` porque lo segundo es
+        estructura interna: entre FastAPI 0.136 y 0.141 cambio donde acaban las
+        rutas incluidas y `app.routes` paso a devolver solo las de la
+        documentacion. `openapi()["paths"]` es el contrato publico y no depende
+        de esa version.
         """
         from app.main import create_app
 
-        rutas = {r.path for r in create_app().routes if hasattr(r, "path")}
+        rutas = create_app().openapi()["paths"]
         assert f"{URL}/stats" in rutas
         assert f"{URL}/errors" in rutas
+        assert f"{URL}/conversations/{{conversation_id}}" in rutas
 
 
 # ─── Traza de una conversacion ───────────────────────────────────────────────

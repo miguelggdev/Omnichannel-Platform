@@ -148,7 +148,12 @@ async def delete_tag(
                 message="Etiqueta no encontrada",
             )
 
-        borradas = await session.execute(
+        # `borradas` se anota como Any a proposito: `AsyncSession.execute()` esta
+        # tipado como `Result[Any]`, y segun la version de SQLAlchemy ese tipo
+        # expone `rowcount` (un DML siempre devuelve un `CursorResult`) o no. Con
+        # `cast` a `CursorResult` mypy falla en una version por atributo
+        # inexistente y en la otra por cast redundante; `Any` vale en ambas.
+        borradas: Any = await session.execute(
             sa_delete(ContactTag).where(
                 ContactTag.client_id == client_id,
                 ContactTag.tag_id == tag_id,

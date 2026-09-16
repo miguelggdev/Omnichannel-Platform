@@ -352,6 +352,8 @@ _(nada en progreso)_
 - Los 20 endpoints nuevos abren `tenant_session()` a mano en vez de usar la dependency `get_tenant_session`, igual que `documents.py` (ADR-033): la transacción cierra dentro del endpoint y no cuando FastAPI limpia las dependencias.
 - Todas las consultas llevan el `client_id` explícito en el WHERE además de correr bajo RLS (CLAUDE.md, restricción 2). Hay un test por endpoint que lo verifica sobre el SQL compilado.
 - `tests/unit/crm_doubles.py` extiende los dobles de Sprint 6 (`agent_doubles.py`) con `scalar()`, `refresh()`, `delete()` y el `rowcount` de un UPDATE masivo.
+- **Hallazgo de CI (no local):** `requirements.txt` declara `fastapi>=0.110.0` sin techo, así que CI instala 0.141 mientras el entorno local tenía 0.136. Entre esas dos versiones cambió dónde acaban las rutas incluidas: `app.routes` pasó a devolver solo las de la documentación. La app funciona igual (los endpoints responden), pero cualquier test que inspeccione `app.routes` es frágil — el de este sprint mira `openapi()["paths"]`, que es el contrato público. Vale la pena revisar si conviene poner techo a esa dependencia.
+- **Hallazgo de CI (no local):** `AsyncSession.execute()` está tipado como `Result[Any]`; según la versión de SQLAlchemy ese tipo expone `rowcount` o no. Un `cast` a `CursorResult` falla en una versión por atributo inexistente y en la otra por cast redundante, así que las dos lecturas de `rowcount` (auto-cierre y borrado de etiquetas) anotan la variable como `Any` con el motivo al lado.
 - `tests/unit/test_agent_logging.py` prueba las dos mitades del addendum: el 503 de hoy y el comportamiento completo con un doble del modelo de Dev A, para que su entrega no llegue a ciegas.
 
 ---

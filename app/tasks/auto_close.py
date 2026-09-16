@@ -184,7 +184,12 @@ async def _resolve_stale_waiting_client(session: AsyncSession, client_id: UUID) 
     """
     corte = func.now() - literal(timedelta(hours=WAITING_CLIENT_HOURS), Interval)
 
-    resultado = await session.execute(
+    # `resultado` se anota como Any a proposito: `AsyncSession.execute()` esta
+    # tipado como `Result[Any]`, y segun la version de SQLAlchemy ese tipo expone
+    # `rowcount` (un DML siempre devuelve un `CursorResult`) o no. Con `cast` a
+    # `CursorResult` mypy falla en una version por atributo inexistente y en la
+    # otra por cast redundante; `Any` es lo unico que ambas aceptan.
+    resultado: Any = await session.execute(
         sa_update(Conversation)
         .where(
             Conversation.client_id == client_id,
@@ -212,7 +217,7 @@ async def _archive_old_resolved(session: AsyncSession, client_id: UUID) -> int:
     """
     corte = func.now() - literal(timedelta(days=RESOLVED_DAYS), Interval)
 
-    resultado = await session.execute(
+    resultado: Any = await session.execute(  # Any: ver _resolve_stale_waiting_client
         sa_update(Conversation)
         .where(
             Conversation.client_id == client_id,
