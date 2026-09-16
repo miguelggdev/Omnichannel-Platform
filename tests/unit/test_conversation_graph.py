@@ -110,25 +110,17 @@ class TestGetGraphWithCheckpointer:
         assert hasattr(compilado, "ainvoke")
         assert callable(compilado.ainvoke)
 
-    def test_checkpointer_conninfo_prefiere_database_url_direct(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """`DATABASE_URL_DIRECT`, cuando esta configurada, gana sobre el pooler."""
+    def test_checkpointer_conninfo_usa_database_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """El checkpointer usa `DATABASE_URL` (el pooler), nunca `DATABASE_URL_DIRECT`.
+
+        Es lo unico que le llega a los workers de Celery en `docker-compose.yml`
+        (ver el docstring del modulo).
+        """
         settings = graph_module.get_settings()
-        monkeypatch.setattr(settings, "DATABASE_URL_DIRECT", "postgresql+asyncpg://direct/db")
         monkeypatch.setattr(settings, "DATABASE_URL", "postgresql+asyncpg://pooler/db")
+        monkeypatch.setattr(settings, "DATABASE_URL_DIRECT", "postgresql+asyncpg://direct/db")
 
-        assert graph_module._checkpointer_conninfo() == "postgresql://direct/db"
-
-    def test_checkpointer_conninfo_cae_a_database_url(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Sin `DATABASE_URL_DIRECT` (como en CI), se usa `DATABASE_URL`."""
-        settings = graph_module.get_settings()
-        monkeypatch.setattr(settings, "DATABASE_URL_DIRECT", "")
-        monkeypatch.setattr(settings, "DATABASE_URL", "postgresql+asyncpg://ci/db")
-
-        assert graph_module._checkpointer_conninfo() == "postgresql://ci/db"
+        assert graph_module._checkpointer_conninfo() == "postgresql://pooler/db"
 
     def test_checkpointer_conninfo_no_es_un_driver_de_sqlalchemy(self) -> None:
         """`psycopg` no entiende el sufijo `+asyncpg` que usa SQLAlchemy."""
