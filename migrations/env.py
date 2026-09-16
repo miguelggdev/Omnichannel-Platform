@@ -47,6 +47,31 @@ if config.config_file_name is not None:
 # MetaData para autogenerate
 target_metadata = Base.metadata
 
+# Tablas de app/models/ (Base.metadata) creadas fuera del ORM, via
+# migrations/versions/003_langgraph_checkpoints.py: son de la libreria
+# langgraph-checkpoint-postgres, no de nuestros modelos SQLAlchemy. Sin este
+# filtro, `alembic check`/autogenerate las ve en la base pero no en la
+# metadata y las marca como pendientes de borrar en cada corrida.
+CHECKPOINT_TABLES = frozenset(
+    {"checkpoint_migrations", "checkpoints", "checkpoint_blobs", "checkpoint_writes"}
+)
+
+
+def include_name(name: str | None, type_: str, parent_names: dict[str, str | None]) -> bool:
+    """Excluye del diff de autogenerate las tablas del checkpointer de LangGraph.
+
+    Args:
+        name: Nombre del objeto que Alembic esta considerando.
+        type_: Tipo de objeto (`"table"`, `"column"`, etc.).
+        parent_names: Nombres de los objetos contenedores (schema, tabla, ...).
+
+    Returns:
+        False para las tablas del checkpointer; True para todo lo demas.
+    """
+    if type_ == "table" and name in CHECKPOINT_TABLES:
+        return False
+    return True
+
 
 def get_url() -> str:
     """Obtener URL de base de datos para migraciones.
@@ -71,6 +96,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_name=include_name,
     )
 
     with context.begin_transaction():
@@ -91,6 +117,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            include_name=include_name,
         )
 
         with context.begin_transaction():
