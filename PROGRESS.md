@@ -8,7 +8,8 @@
 ## Estado Actual
 
 - **Fase:** 1 — MVP Core
-- **Sprint Activo:** Sprint 7 — Agente de Agendamiento & CRM API
+- **Sprint Activo:** Sprint 7 — Agente de Agendamiento & CRM API (Dev B arranca; Dev A espera)
+- **Coordinación Sprint 7:** la migración de `service_types` (nueva, no estaba en el schema de Sprint 1 — ver `specs/sprint-07-scheduling-crm.md` §1) la crea **Dev A** cuando arranque con `calendar_tools.py`, no Dev B. Decisión del usuario 2026-09-16, para no pisarse.
 - **Última actualización:** 2026-09-16
 - **Última sesión:** Sesión 17 — Revisión de bugs pedida por el usuario al cerrar el Sprint 6. Dos hallazgos, ambos cerrados ([PR #15](https://github.com/miguelggdev/Omnichannel-Platform/pull/15)):
   - **BUG-015** — `_tenant.py::_as_agents()` trataba `config.enabled_agents: []` (deshabilitar todos los agentes a propósito) igual que "no configurado", y caía al default (`["rag"]`). Ahora distingue ausente/tipo inválido (default) de lista vacía real (se respeta). Se agregó `tests/unit/test_tenant_settings.py`, cobertura que no existía.
