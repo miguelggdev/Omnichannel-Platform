@@ -22,11 +22,16 @@ de `psycopg`, compila el grafo con ese checkpointer y cierra el pool al terminar
 -- todo dentro de la misma llamada, así ninguna conexion sobrevive al event loop
 que la abrio (mismo motivo que ADR-035 y BUG-006/BUG-011).
 
-Se usa `DATABASE_URL_DIRECT` si esta configurada (Supabase Cloud: psycopg tiene
-prepared statements por conexion, algo que el Transaction Pooler de Supavisor no
-soporta bien -- mismo motivo por el que Alembic tampoco pasa por el pooler) y
-cae a `DATABASE_URL` si no -- que es exactamente lo que hay en CI, donde no
-existe un pooler real detras.
+Usa `DATABASE_URL` (el Transaction Pooler de Supavisor), no `DATABASE_URL_DIRECT`:
+es la unica variable que `docker-compose.yml` le pasa a los workers de Celery
+(incluido `celery-ai`), y ademas es la eleccion correcta para un pool que se
+abre y cierra en cada mensaje -- los slots de conexion directa de Supabase
+Cloud son limitados, mientras que el pooler esta pensado justo para este
+patron de conexiones cortas y frecuentes. `prepare_threshold=0` (ver
+`conn_kwargs` en `ainvoke()`) es lo que evita el problema clasico de prepared
+statements contra un pooler en modo transaccion -- no hace falta esquivarlo
+con una conexion directa, a diferencia de Alembic (que si hace DDL y sostiene
+una sola conexion larga, ahi la conexion directa importa).
 
 **Nunca se llama `checkpointer.setup()` aca.** Esa llamada hace `CREATE TABLE`,
 y el rol con el que corre la app (`app_user` en CI; el rol de aplicacion en
@@ -185,19 +190,18 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
 def _checkpointer_conninfo() -> str:
     """Resuelve el connection string de `psycopg` para el checkpointer.
 
-    Prefiere `DATABASE_URL_DIRECT` (conexion directa a Supabase Cloud, puerto
-    5432): `setup()` corre DDL y `psycopg` usa prepared statements por conexion,
-    algo que el Transaction Pooler de Supavisor (`DATABASE_URL`, puerto 6543) no
-    soporta bien -- mismo motivo por el que Alembic tampoco pasa por el pooler.
-    Cae a `DATABASE_URL` si no hay conexion directa configurada, que es lo que
-    hay en CI (un solo Postgres de test, sin pooler real detras).
+    Siempre `DATABASE_URL` (el Transaction Pooler de Supavisor): es la unica
+    variable que `docker-compose.yml` le pasa a los workers de Celery, y es
+    ademas la eleccion correcta para un pool que se abre y cierra en cada
+    mensaje (ver el docstring del modulo). No hay que esquivar el pooler como
+    hace Alembic: `prepare_threshold=0` en `conn_kwargs` ya evita el problema
+    de prepared statements, y el checkpointer no hace DDL.
 
     Returns:
         Connection string en formato `postgresql://...` (sin el sufijo
         `+asyncpg` que usa SQLAlchemy; `psycopg` no lo entiende).
     """
-    settings = get_settings()
-    url = settings.DATABASE_URL_DIRECT or settings.DATABASE_URL
+    url = get_settings().DATABASE_URL
     return url.replace("postgresql+asyncpg://", "postgresql://")
 
 

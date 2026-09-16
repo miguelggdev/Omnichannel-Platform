@@ -136,17 +136,22 @@ def _as_int(valor: Any, default: int) -> int:
 def _as_agents(valor: Any) -> tuple[str, ...]:
     """Normaliza `config.enabled_agents` a una tupla de nombres de agente.
 
+    Una lista vacia es una configuracion valida: un tenant puede deshabilitar
+    todos los agentes automaticos a proposito, para que todo mensaje termine en
+    un humano. Por eso una lista vacia se respeta tal cual, distinto de
+    `enabled_agents` ausente (o de un tipo que no es lista), que si cae al
+    default.
+
     Args:
         valor: Valor crudo de `config.enabled_agents`.
 
     Returns:
-        Los agentes declarados, o `DEFAULT_ENABLED_AGENTS` si el valor no es una
-        lista de strings utilizable.
+        Los agentes declarados (puede ser una tupla vacia), o
+        `DEFAULT_ENABLED_AGENTS` si el tenant no configuro `enabled_agents` en
+        absoluto.
     """
     if isinstance(valor, list | tuple):
-        agentes = tuple(str(item) for item in valor if isinstance(item, str))
-        if agentes:
-            return agentes
+        return tuple(str(item) for item in valor if isinstance(item, str))
     return DEFAULT_ENABLED_AGENTS
 
 
