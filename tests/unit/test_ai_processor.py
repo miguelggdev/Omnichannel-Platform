@@ -168,6 +168,11 @@ class TestGrafoAusente:
         """Un `graph.py` que no expone nada conocido no pasa por bueno."""
         modulo = ModuleType("app.agents.graph")
         monkeypatch.setitem(sys.modules, "app.agents.graph", modulo)
+        # Con graph.py ya entregado, `import app.agents.graph` de mas arriba (para
+        # GRAFO_ENTREGADO) ya cacheo el modulo real como atributo de `app.agents`:
+        # `from app.agents import graph` usa ese atributo via getattr() y nunca
+        # llega a mirar sys.modules, asi que hay que pisarlo tambien.
+        monkeypatch.setattr(sys.modules["app.agents"], "graph", modulo, raising=False)
 
         with pytest.raises(tarea.GraphUnavailableError, match="no expone"):
             await tarea._compile_graph()
@@ -180,6 +185,9 @@ class TestGrafoAusente:
             "G", (), {"compile": lambda self: grafo}
         )()
         monkeypatch.setitem(sys.modules, "app.agents.graph", modulo)
+        # Mismo motivo que en el test anterior: hay que pisar el atributo
+        # cacheado en el paquete, no solo la entrada de sys.modules.
+        monkeypatch.setattr(sys.modules["app.agents"], "graph", modulo, raising=False)
 
         assert await tarea._compile_graph() is grafo
 
