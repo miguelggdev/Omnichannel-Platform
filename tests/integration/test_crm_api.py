@@ -18,6 +18,7 @@ recibe el tenant sembrado y el resto del recorrido es real.
 
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -38,7 +39,9 @@ CONVERSATIONS = "/api/v1/conversations"
 TAGS = "/api/v1/tags"
 
 # Una sentencia por columna, con el intervalo como bind param: asi el SQL de los
-# tests no se arma con f-strings.
+# tests no se arma con f-strings. El parametro viaja como `timedelta`, no como
+# cadena: asyncpg infiere el tipo `interval` por el CAST y para ese tipo exige un
+# `datetime.timedelta` — un '25 hours' de Python revienta con DataError.
 ENVEJECER_SQL = {
     "updated_at": (
         "UPDATE conversations SET status = :status, "
@@ -576,7 +579,7 @@ class TestAutoCierre:
     """El worker de Beat, contra datos reales."""
 
     async def _envejecer(
-        self, escenario: Escenario, status: str, campo: str, intervalo: str
+        self, escenario: Escenario, status: str, campo: str, intervalo: timedelta
     ) -> None:
         """Deja la conversacion sembrada en un estado con la fecha corrida hacia atras.
 
@@ -584,7 +587,7 @@ class TestAutoCierre:
             escenario: Tenant y conversacion sembrados.
             status: Estado en el que dejarla.
             campo: Columna de fecha a envejecer (`updated_at` o `resolved_at`).
-            intervalo: Intervalo de PostgreSQL, ej. "25 hours".
+            intervalo: Cuanto correr la fecha hacia atras.
         """
         async with tenant_session(escenario.client_id) as session:
             await session.execute(
@@ -626,7 +629,7 @@ class TestAutoCierre:
         self, escenario: Escenario, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Mas de 24 h esperando al contacto: se da por resuelta."""
-        await self._envejecer(escenario, "waiting_client", "updated_at", "25 hours")
+        await self._envejecer(escenario, "waiting_client", "updated_at", timedelta(hours=25))
 
         resultado = await self._barrer(monkeypatch, escenario)
 
@@ -637,7 +640,7 @@ class TestAutoCierre:
         self, escenario: Escenario, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Con 23 h todavia no se cierra: el umbral es de 24."""
-        await self._envejecer(escenario, "waiting_client", "updated_at", "23 hours")
+        await self._envejecer(escenario, "waiting_client", "updated_at", timedelta(hours=23))
 
         resultado = await self._barrer(monkeypatch, escenario)
 
@@ -648,7 +651,7 @@ class TestAutoCierre:
         self, escenario: Escenario, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Mas de 7 dias resuelta: se archiva."""
-        await self._envejecer(escenario, "resolved", "resolved_at", "8 days")
+        await self._envejecer(escenario, "resolved", "resolved_at", timedelta(days=8))
 
         resultado = await self._barrer(monkeypatch, escenario)
 
@@ -659,7 +662,7 @@ class TestAutoCierre:
         self, escenario: Escenario, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Con 6 dias sigue visible."""
-        await self._envejecer(escenario, "resolved", "resolved_at", "6 days")
+        await self._envejecer(escenario, "resolved", "resolved_at", timedelta(days=6))
 
         resultado = await self._barrer(monkeypatch, escenario)
 
@@ -696,7 +699,7 @@ class TestAutoCierre:
         segundo ve ya la fila como `resolved`; lo que la salva es que su
         `resolved_at` es de ahora mismo, no de hace 7 dias.
         """
-        await self._envejecer(escenario, "waiting_client", "updated_at", "40 days")
+        await self._envejecer(escenario, "waiting_client", "updated_at", timedelta(days=40))
 
         await self._barrer(monkeypatch, escenario)
 
@@ -707,8 +710,8 @@ class TestAutoCierre:
     ) -> None:
         """Barrer el tenant A no toca las conversaciones de B, aunque esten igual de viejas."""
         a, b = dos_tenants
-        await self._envejecer(a, "waiting_client", "updated_at", "25 hours")
-        await self._envejecer(b, "waiting_client", "updated_at", "25 hours")
+        await self._envejecer(a, "waiting_client", "updated_at", timedelta(hours=25))
+        await self._envejecer(b, "waiting_client", "updated_at", timedelta(hours=25))
 
         resultado = await self._barrer(monkeypatch, a)
 
