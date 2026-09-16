@@ -8,9 +8,10 @@
 ## Estado Actual
 
 - **Fase:** 1 — MVP Core
-- **Sprint Activo:** Sprint 6 — LangGraph, Grafo de Agentes
-- **Última actualización:** 2026-09-15
-- **Última sesión:** Sesión 15 — **Entrega de Dev B del Sprint 6** (branch `feature/sprint-06-nodes`): los 6 nodos del grafo, `TokenBudgetGuard` completo y el worker `ai_processor`. 74 tests unitarios nuevos y 8 de integración contra Postgres real con RLS ([PR #13](https://github.com/miguelggdev/Omnichannel-Platform/pull/13)). Verificado en CI leyendo el log, no el checkmark: **253 unitarios passed** y **56 passed / 6 skipped** en integración con el rol `app_user`. De paso salió un efecto que no estaba previsto: al dejar de ser un stub, `_enqueue_ai_processing()` hacía que los 8 tests de `test_webhook_flow.py` se colgaran contra el broker de Celery, que el job de integración no levanta. Falta la entrega de Dev A (`app/agents/state.py`, `app/agents/graph.py`).
+- **Sprint Activo:** Sprint 7 — Agente de Agendamiento & CRM API
+- **Última actualización:** 2026-09-16
+- **Última sesión:** Sesión 16 — **Entrega de Dev A del Sprint 6** ([PR #14](https://github.com/miguelggdev/Omnichannel-Platform/pull/14)): `app/agents/state.py` y `app/agents/graph.py` (`build_conversation_graph()`, routing condicional, `get_graph_with_checkpointer()`). Sprint 6 completo (Dev A + Dev B). Dos bugs encontrados y arreglados de paso, fuera de la entrega propia: **BUG-014** (`ai_processor` nunca se agregó a `TASK_MODULES`, el worker de `ai_inference` no conocía la tarea) y el `min_size`/`max_size` del pool de `psycopg` del checkpointer (encontrado en CI real). Dos hallazgos de infraestructura que no estaban en la spec: `requirements.txt` no declaraba `psycopg[binary,pool]` (sin eso, `psycopg` v3 no se puede importar sin `libpq` del sistema), y `checkpointer.setup()` no se puede llamar en runtime porque hace `CREATE TABLE` y el rol de la app solo tiene DML — las tablas del checkpointer se crean en `migrations/versions/003_langgraph_checkpoints.py`. Ver MEMORY.md (ADR-036, BUG-014). Verificado en CI real, no solo checkmarks: **273 unitarios passed, 1 skipped** y **57 passed, 6 skipped** en integración, incluyendo un test nuevo que corre `ainvoke()` completo con el checkpointer contra Postgres real.
+- **Sesión 15** — **Entrega de Dev B del Sprint 6** (branch `feature/sprint-06-nodes`): los 6 nodos del grafo, `TokenBudgetGuard` completo y el worker `ai_processor`. 74 tests unitarios nuevos y 8 de integración contra Postgres real con RLS ([PR #13](https://github.com/miguelggdev/Omnichannel-Platform/pull/13)). Verificado en CI leyendo el log, no el checkmark: **253 unitarios passed** y **56 passed / 6 skipped** en integración con el rol `app_user`. De paso salió un efecto que no estaba previsto: al dejar de ser un stub, `_enqueue_ai_processing()` hacía que los 8 tests de `test_webhook_flow.py` se colgaran contra el broker de Celery, que el job de integración no levanta. Falta la entrega de Dev A (`app/agents/state.py`, `app/agents/graph.py`).
 - **Sesión 14** — Revisión general de bugs sobre `main` post-Sprint 5 (pedida por el usuario). Encontrados y arreglados los cuatro hallazgos:
   - **BUG-010** — `RAGService` rompía contra Postgres real por falta de cast `::vector` ([PR #11](https://github.com/miguelggdev/Omnichannel-Platform/pull/11), verificado en CI real con 5 tests de integración nuevos: 46 passed, 6 skipped).
   - **BUG-011** — el engine async de `app/core/database.py` (singleton de módulo) se reusaba entre `asyncio.run()` de cada tarea de Celery, mismo root cause que BUG-006 pero sin mitigar en producción ([PR #12](https://github.com/miguelggdev/Omnichannel-Platform/pull/12), `run_isolated()` nuevo).
@@ -283,10 +284,14 @@ _(nada en progreso)_
 - [x] 74 tests unitarios nuevos + 8 de integración (`tests/integration/test_graph_flow.py`) contra Postgres real con RLS
 - [x] ADR-034, ADR-035 y BUG-013 registrados en MEMORY.md
 
-### Pendiente — Dev A
-- [ ] `app/agents/state.py` — `ConversationState` (mientras tanto, el contrato vive copiado en `app/agents/nodes/_state.py`, que se reemplaza por un re-export cuando llegue)
-- [ ] `app/agents/graph.py` — `build_conversation_graph()` + checkpointing con `AsyncPostgresSaver`
-- [ ] `app/schemas/agent_config.py` — schemas de configuración del agente
+### Completado — Dev A (branch `feature/sprint-06-graph`, sesión 16, [PR #14](https://github.com/miguelggdev/Omnichannel-Platform/pull/14))
+- [x] `app/agents/state.py` — `ConversationState` (`total=False`, igual que la copia temporal de Dev B). `app/agents/nodes/_state.py` pasa a ser un re-export
+- [x] `app/agents/graph.py` — `build_conversation_graph()` con los 6 nodos y el routing condicional; `route_after_intent()`/`route_after_rag()` reflejan lo que `intent_router.py`/`rag_query.py` ya resuelven
+- [x] `app/agents/graph.py::get_graph_with_checkpointer()` — envoltorio (`_CheckpointedGraph`) que abre un pool de `psycopg`, compila el grafo con `AsyncPostgresSaver` y cierra el pool, todo dentro de la misma llamada (ADR-035, ADR-036)
+- [x] `migrations/versions/003_langgraph_checkpoints.py` — crea las 4 tablas del checkpointer; `migrations/env.py` las excluye del diff de `alembic check` (ADR-036)
+- [x] `requirements.txt` — `psycopg[binary,pool]`, sin el cual `psycopg` v3 no se puede importar sin `libpq` del sistema
+- [x] **BUG-014** (fuera de la entrega propia, encontrado al revisar Dev B): `ai_processor` nunca se agregó a `TASK_MODULES` — el worker de `ai_inference` no conocía la tarea
+- [x] `app/schemas/agent_config.py` — evaluado y **no tocado**: ya existe desde Sprint 3 (CRUD genérico) y ningún nodo del grafo lo importa; la configuración efectiva la resuelve `AgentSettings` en `_tenant.py` (ADR-034). El ítem de la spec no era un bloqueador real
 
 ### Ajustes sobre la spec (`specs/sprint-06-langgraph.md`)
 - **Configuración del agente:** el spec asume `agent_configs.agent_type` / `is_enabled` / `settings`, que no existen. Se usa la fila activa del tenant y su JSONB `config` (ADR-034).
@@ -312,8 +317,8 @@ _(nada en progreso)_
 | 3 | FastAPI Core & Auth | ✅ Completado | 61 archivos, +3460 líneas. Auth JWT, middleware multi-tenant, modelos SQLAlchemy, Alembic, CI 8/8 green |
 | 4 | Webhook Receiver & MessagingProvider | ✅ Completado | Dev B (PR #5, mergeado) + Dev A (branch `feature/sprint-04-messaging`, pendiente de PR/merge): endpoint, dedup, worker, MessagingProvider ABC, YCloudProvider, MetaProvider, factory, `NormalizedMessage`. 100/100 tests, RLS verificado en CI real |
 | 5 | Pipeline de Documentos & RAG | ✅ Completado | Dev B (PR #9): CRUD de documentos, Storage, worker de ingesta. Dev A (PR #10): chunker, embedding, OCR, DocumentPipeline, RAGService. 173 tests, RLS verificado en CI real (`app_user`, 41 passed) |
-| 6 | LangGraph — Grafo de Agentes | 🔄 En progreso | Dev B: 6 nodos, TokenBudgetGuard, `ai_processor`, 74 tests unitarios + 8 de integración. Pendiente Dev A: `state.py`, `graph.py`, schemas |
-| 7 | Agente de Agendamiento & CRM API | ⬜ Pendiente | |
+| 6 | LangGraph — Grafo de Agentes | ✅ Completado | Dev B (PR #13): 6 nodos, TokenBudgetGuard, `ai_processor`. Dev A (PR #14): `state.py`, `graph.py`, checkpointer con `AsyncPostgresSaver`, migración de tablas. 273 tests unitarios + 57 de integración, RLS/checkpointer verificados en CI real |
+| 7 | Agente de Agendamiento & CRM API | 🔄 En progreso | |
 | 8 | Observabilidad, Backup & Hardening | ⬜ Pendiente | **Hito MVP** |
 | 9 | Canales Adicionales | ⬜ Pendiente | Fase 2 — Telegram, Webchat, Email, Audio (Instagram/Facebook movidos a Sprint 4) |
 | 10 | Templates, Clonación & Sentimiento | ⬜ Pendiente | Fase 2 |

@@ -172,6 +172,13 @@
 - **Razón:** Cada tarea de Celery abre su propio event loop. Un grafo compilado guarda el `AsyncPostgresSaver` y sus conexiones atadas al loop que lo creó; reusarlo en el siguiente loop es exactamente el root cause de BUG-006 / BUG-011 ("attached to a different loop"). Compilar cuesta microsegundos; lo caro es el checkpointer, y esas conexiones se cierran al terminar la tarea.
 - **Consecuencia:** La tarea de IA nace ya alineada con la regla que dejó PR #12 (BUG-011): ningún `app/tasks/*.py` llama a `asyncio.run()` directamente. Si algún día se quisiera cachear el grafo, habría que cachearlo por (tenant, loop) o sacar el checkpointer del objeto compilado.
 
+### ADR-036: Las tablas del checkpointer de LangGraph se crean por Alembic, no por `checkpointer.setup()`
+- **Fecha:** 2026-09-16
+- **Contexto:** `AsyncPostgresSaver.setup()` (langgraph-checkpoint-postgres) crea sus 4 tablas (`checkpoint_migrations`, `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) con `CREATE TABLE IF NOT EXISTS` en tiempo de ejecución. Eso exige privilegio `CREATE` en el schema — el rol con el que corre la app (`app_user` en CI; el rol de aplicación en producción) solo tiene DML, la misma regla que rige para el resto del schema desde Sprint 1.
+- **Decisión:** `app/agents/graph.py` nunca llama a `.setup()`. `migrations/versions/003_langgraph_checkpoints.py` crea las 4 tablas una sola vez, con el SQL final de `AsyncPostgresSaver.MIGRATIONS` (sin `CREATE INDEX CONCURRENTLY`: las tablas nacen vacías y esa cláusula no puede correr dentro de una transacción, que es como Alembic ejecuta cada migración). `migrations/env.py` excluye esas 4 tablas del diff de `alembic check` vía `include_name`, porque no son modelos SQLAlchemy y sin el filtro autogenerate las marca para borrar en cada corrida.
+- **Relacionado:** `requirements.txt` no declaraba `psycopg[binary,pool]` — sin el extra `[binary]`, `psycopg` v3 (la libreria que usa `AsyncPostgresSaver`, distinta de `psycopg2-binary` que usa Alembic) no se puede ni importar sin `libpq` del sistema. Se agregó explícito.
+- **Consecuencia:** Si `langgraph-checkpoint-postgres` agrega una migración interna nueva en una versión futura, hay que replicarla a mano en una migración nueva de Alembic — no se sincroniza sola.
+
 ---
 
 ## Bugs Conocidos y Pitfalls
@@ -305,6 +312,13 @@
 - **Workaround aplicado (Sprint 6, Dev B):** `human_handoff_node` escribe el motivo, el intent, la confianza del RAG y el uso de presupuesto en `conversations.metadata.handoff` (JSONB). Es igual de consultable, no falsea la autoría y no exige migración.
 - **Estado:** ABIERTO — decisión pendiente del usuario. Dos salidas razonables: (a) un usuario de sistema por tenant, creado en el onboarding, que firme las notas automáticas; (b) migración que haga `internal_notes.author_id` nullable. La (a) mantiene la integridad referencial; la (b) es más simple pero obliga a que toda la UI contemple notas sin autor.
 - **Impacto si no se resuelve:** ninguno funcional — el motivo del handoff no se pierde. Lo que falta es que esas notas aparezcan en el hilo de notas del contacto en el panel (Sprint 15).
+
+### BUG-014: `ai_processor` nunca se sumó a `TASK_MODULES`
+- **Descripción:** [PR #13](https://github.com/miguelggdev/Omnichannel-Platform/pull/13) (Sprint 6, Dev B) agregó `app/tasks/ai_processor.py` con la tarea `app.tasks.ai_process_response`, pero `app/tasks/celery_app.py::TASK_MODULES` — la lista que el worker importa al arrancar para registrar sus tareas — no se actualizó. Un worker de la cola `ai_inference` levantado con esa lista incompleta nunca importa el módulo, nunca registra la tarea, y todo lo que `webhook_processor.py::_enqueue_ai_processing()` encole ahí queda `NotRegistered` en silencio: ningún mensaje llega jamás al grafo de conversación, sin ningún error visible en los logs del encolador.
+- **Por qué no lo detectó ningún test:** ningún test verificaba `TASK_MODULES` contra las tareas reales que expone cada módulo — exactamente el mismo hueco que dejó pasar el bug equivalente en Sprint 4.
+- **Cómo salió:** revisión del código de Dev B al implementar `app/agents/graph.py` (Sprint 6, Dev A), notando que el archivo nuevo no aparecía en `celery_app.py`.
+- **Estado:** CERRADO ([PR #14](https://github.com/miguelggdev/Omnichannel-Platform/pull/14)). `ai_processor` agregado a `TASK_MODULES`. `tests/unit/test_celery_app.py` agrega la regresión: importa `TASK_MODULES` y verifica que las tareas de los tres workers (`webhook_process_incoming`, `document_ingest`, `ai_process_response`) queden registradas.
+- **Lección transferible:** es la segunda vez que este mismo archivo (`celery_app.py::TASK_MODULES`) se queda corto cuando se agrega un módulo de tarea nuevo (la primera fue Sprint 4). Vale la pena tratarlo como una lista que necesita su propio test de regresión, no confiar en que se recuerde a mano cada vez.
 
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.
