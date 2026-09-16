@@ -14,8 +14,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.internal.health import router as health_router
+from app.api.v1.agent_logs import router as agent_logs_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.contacts import router as contacts_router
+from app.api.v1.conversations import router as conversations_router
 from app.api.v1.documents import router as documents_router
+from app.api.v1.notes import router as notes_router
+from app.api.v1.tags import contact_tags_router
+from app.api.v1.tags import router as tags_router
 from app.api.v1.webhooks import router as webhooks_router
 from app.core.config import get_settings
 from app.core.database import dispose_db, init_db
@@ -118,6 +124,14 @@ def create_app() -> FastAPI:
     # HMAC. El prefijo debe coincidir con WEBHOOK_PATHS_PREFIX del middleware.
     app.include_router(webhooks_router, prefix="/api/v1/webhooks", tags=["webhooks"])
     app.include_router(documents_router, prefix="/api/v1/documents", tags=["documents"])
+    app.include_router(contacts_router, prefix="/api/v1/contacts", tags=["contacts"])
+    # Notas y etiquetas de un contacto cuelgan del propio contacto:
+    # /api/v1/contacts/{id}/notes y /api/v1/contacts/{id}/tags/{tag_id}.
+    app.include_router(notes_router, prefix="/api/v1/contacts", tags=["notes"])
+    app.include_router(contact_tags_router, prefix="/api/v1/contacts", tags=["tags"])
+    app.include_router(tags_router, prefix="/api/v1/tags", tags=["tags"])
+    app.include_router(conversations_router, prefix="/api/v1/conversations", tags=["conversations"])
+    app.include_router(agent_logs_router, prefix="/api/v1/agent-logs", tags=["agent-logs"])
 
     return app
 
