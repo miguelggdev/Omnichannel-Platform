@@ -480,3 +480,75 @@ class TestRecorrido:
             assert envios[0]["text"] == handoff_module.HANDOFF_MESSAGES["budget_exceeded"]
         finally:
             await _limpiar(datos.client_id)
+
+
+# ─── El grafo compilado (Dev A), con checkpointer, contra base real ──────────
+#
+# Todo lo anterior en este archivo encadena los nodos a mano. Esto ejercita
+# app/agents/graph.py de punta a punta: build_conversation_graph(), el
+# checkpointer de AsyncPostgresSaver (pool de psycopg, no el engine de
+# SQLAlchemy) y compiled.ainvoke() con thread_id real. Es la unica forma de
+# confirmar que el pool se abre y cierra bien y que las tablas de
+# migrations/versions/003_langgraph_checkpoints.py son las que la libreria
+# espera -- nada de esto se puede probar con dobles.
+
+
+class TestGrafoCompilado:
+    """`get_graph_with_checkpointer()` + `ainvoke()`, de punta a punta."""
+
+    async def test_ainvoke_persiste_checkpoint_y_escala_sin_contexto(
+        self,
+        escenario: Escenario,
+        envios: list[dict[str, Any]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Un mensaje sin contexto en el knowledge base recorre el grafo real y escala."""
+        from app.agents.graph import get_graph_with_checkpointer
+        from app.agents.nodes import intent_router as intent_module
+        from app.agents.nodes.intent_router import IntentClassification
+
+        class SinContexto:
+            async def retrieve(self, **kwargs: Any) -> list[RetrievalResult]:
+                return []
+
+            async def retrieve_few_shot_examples(self, **kwargs: Any) -> list[dict[str, Any]]:
+                return []
+
+            def build_grounded_prompt(self, **kwargs: Any) -> str:
+                return ""
+
+        monkeypatch.setattr(rag_module, "build_rag_service", lambda: SinContexto())
+
+        class ClasificadorFijo:
+            def with_structured_output(self, *args: Any, **kwargs: Any) -> "ClasificadorFijo":
+                return self
+
+            async def ainvoke(self, mensajes: Any) -> dict[str, Any]:
+                return {"parsed": IntentClassification(intent="rag_query", confidence=0.9)}
+
+        monkeypatch.setattr(intent_module, "get_chat_model", lambda *a, **k: ClasificadorFijo())
+
+        compilado = await get_graph_with_checkpointer()
+        config = {
+            "configurable": {"thread_id": f"{escenario.client_id}:{escenario.conversation_id}"}
+        }
+
+        resultado = await compilado.ainvoke(escenario.estado(), config=config)
+
+        assert resultado["requires_handoff"] is True
+        assert resultado["handoff_reason"] == "insufficient_context"
+
+        escalada = await _contar(
+            escenario.client_id,
+            "SELECT count(*) FROM conversations WHERE id = :id AND status = 'waiting_human'",
+            {"id": str(escenario.conversation_id)},
+        )
+        assert escalada == 1
+        assert envios[0]["text"] == handoff_module.HANDOFF_MESSAGES["insufficient_context"]
+
+        checkpoints = await _contar(
+            escenario.client_id,
+            "SELECT count(*) FROM checkpoints WHERE thread_id = :tid",
+            {"tid": f"{escenario.client_id}:{escenario.conversation_id}"},
+        )
+        assert checkpoints >= 1, "el checkpointer no dejo ningun checkpoint para el thread"

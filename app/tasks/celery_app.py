@@ -17,6 +17,7 @@ from app.tasks.celery_config import celery_app
 TASK_MODULES = (
     "app.tasks.webhook_processor",
     "app.tasks.document_ingestion",
+    "app.tasks.ai_processor",
 )
 
 celery_app.conf.update(imports=TASK_MODULES)

@@ -108,8 +108,7 @@ async def _compile_graph() -> Any:
             ninguna forma conocida de construirlo.
     """
     try:
-        # El ignore de abajo se quita cuando graph.py (Dev A) entre en main.
-        from app.agents import graph as graph_module  # type: ignore[attr-defined]
+        from app.agents import graph as graph_module
     except ImportError as exc:
         raise GraphUnavailableError(
             "Grafo de conversacion no disponible (app/agents/graph.py)"
