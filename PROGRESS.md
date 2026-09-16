@@ -10,7 +10,8 @@
 - **Fase:** 1 — MVP Core
 - **Sprint Activo:** Sprint 6 — LangGraph, Grafo de Agentes
 - **Última actualización:** 2026-09-15
-- **Última sesión:** Sesión 14 — Revisión general de bugs sobre `main` post-Sprint 5 (pedida por el usuario). Encontrados y arreglados los cuatro hallazgos:
+- **Última sesión:** Sesión 15 — **Entrega de Dev B del Sprint 6** (branch `feature/sprint-06-nodes`): los 6 nodos del grafo, `TokenBudgetGuard` completo y el worker `ai_processor`. 74 tests unitarios nuevos y 8 de integración contra Postgres real con RLS ([PR #13](https://github.com/miguelggdev/Omnichannel-Platform/pull/13)). Verificado en CI leyendo el log, no el checkmark: **253 unitarios passed** y **56 passed / 6 skipped** en integración con el rol `app_user`. De paso salió un efecto que no estaba previsto: al dejar de ser un stub, `_enqueue_ai_processing()` hacía que los 8 tests de `test_webhook_flow.py` se colgaran contra el broker de Celery, que el job de integración no levanta. Falta la entrega de Dev A (`app/agents/state.py`, `app/agents/graph.py`).
+- **Sesión 14** — Revisión general de bugs sobre `main` post-Sprint 5 (pedida por el usuario). Encontrados y arreglados los cuatro hallazgos:
   - **BUG-010** — `RAGService` rompía contra Postgres real por falta de cast `::vector` ([PR #11](https://github.com/miguelggdev/Omnichannel-Platform/pull/11), verificado en CI real con 5 tests de integración nuevos: 46 passed, 6 skipped).
   - **BUG-011** — el engine async de `app/core/database.py` (singleton de módulo) se reusaba entre `asyncio.run()` de cada tarea de Celery, mismo root cause que BUG-006 pero sin mitigar en producción ([PR #12](https://github.com/miguelggdev/Omnichannel-Platform/pull/12), `run_isolated()` nuevo).
   - **BUG-012** — `DocumentPipeline` marcaba `completed` con `chunk_count=0` cuando OCR/extracción no producía texto ([PR #12](https://github.com/miguelggdev/Omnichannel-Platform/pull/12), `EmptyDocumentError` nuevo). Al escribir el test se destapó un bug relacionado sin arreglar: `_TEXT_EXTRACTORS` no soporta `"txt"` pese a que `ALLOWED_TYPES` lo acepta en la subida — todo `.txt` falla hoy con "tipo no soportado". Ver MEMORY.md, nota en BUG-012.
@@ -265,6 +266,43 @@ _(nada en progreso)_
 
 ---
 
+## Sprint 6: LangGraph — Grafo de Agentes
+
+### Completado — Dev B (branch `feature/sprint-06-nodes`, sesión 15)
+- [x] `app/agents/nodes/token_budget.py` — nodo de presupuesto con los 3 umbrales de ADR-004 (ok / degraded a `gpt-4o-mini` / exceeded con handoff), cache de 60s en Redis con degradación a la base si Redis no responde
+- [x] `app/middleware/token_budget.py` — `TokenBudgetGuard.record_usage()` real: escribe `token_usage_logs`, suma al presupuesto del mes e invalida la cache. Best-effort: un fallo de la contabilidad no tumba la conversación
+- [x] `app/agents/nodes/intent_router.py` — clasificación con structured output y `gpt-4o-mini` fijo; solo ofrece los intents de agentes habilitados y reencamina los que no lo están (a RAG si hay RAG, a humano si no)
+- [x] `app/agents/nodes/rag_query.py` — grounding estricto: sin chunks sobre el umbral no llama al LLM, marca `insufficient_context`. Few-shot con umbral propio (`similarity_threshold`) y system prompt del tenant
+- [x] `app/agents/nodes/respond.py` — envía la respuesta (o el texto que toca por intent; el saludo usa `welcome_message` del tenant) y la guarda en `messages`
+- [x] `app/agents/nodes/human_handoff.py` — `waiting_human` + motivo y métricas en `conversations.metadata.handoff` + aviso al contacto + notificación al equipo
+- [x] `app/agents/nodes/training_approval.py` — la respuesta candidata queda en `pending_responses`; al contacto solo le llega el aviso de revisión
+- [x] `app/agents/nodes/_tenant.py`, `_delivery.py`, `_llm.py`, `_notifications.py`, `_state.py` — base compartida (config del tenant, envío + persistencia, cliente de chat, avisos, contrato del estado)
+- [x] `app/tasks/ai_processor.py` — tarea `app.tasks.ai_process_response` (cola `ai_inference`, 2 reintentos, 120s/100s), con `run_isolated()` de PR #12. Agotados los intentos, o si el grafo no está, escala a un humano en vez de dejar la conversación muda
+- [x] `app/core/config.py` + `.env.example` — `YCLOUD_PHONE_NUMBER_ID` (sin él el nodo `respond` no puede enviar por WhatsApp)
+- [x] Deuda de Sprint 4 cerrada: `_enqueue_ai_processing()` deja de ser un stub y encola el grafo de verdad
+- [x] 74 tests unitarios nuevos + 8 de integración (`tests/integration/test_graph_flow.py`) contra Postgres real con RLS
+- [x] ADR-034, ADR-035 y BUG-013 registrados en MEMORY.md
+
+### Pendiente — Dev A
+- [ ] `app/agents/state.py` — `ConversationState` (mientras tanto, el contrato vive copiado en `app/agents/nodes/_state.py`, que se reemplaza por un re-export cuando llegue)
+- [ ] `app/agents/graph.py` — `build_conversation_graph()` + checkpointing con `AsyncPostgresSaver`
+- [ ] `app/schemas/agent_config.py` — schemas de configuración del agente
+
+### Ajustes sobre la spec (`specs/sprint-06-langgraph.md`)
+- **Configuración del agente:** el spec asume `agent_configs.agent_type` / `is_enabled` / `settings`, que no existen. Se usa la fila activa del tenant y su JSONB `config` (ADR-034).
+- **Presupuesto:** `token_budgets` se busca por `month` (YYYY-MM), no por `period_start`/`period_end`; `token_usage_logs` no tiene `cost_usd`, así que el costo estimado va al log y no a la base.
+- **Nota interna del handoff:** `internal_notes.author_id` es NOT NULL y una nota del bot no tiene autor; el motivo va a `conversations.metadata.handoff` (BUG-013, decisión pendiente).
+- **`pending_responses.generated_response`**, no `suggested_answer`.
+- **Sin cache del grafo compilado** (spec §12): reusarlo entre tareas de Celery es BUG-006 / BUG-011. La tarea usa `run_isolated()` (PR #12), no `asyncio.run()` (ADR-035).
+- **Notificaciones** (`notify_handoff`, `notify_pending_response`): `app/tasks/notifications.py` es de Sprint 8; hasta entonces el aviso se registra en el log y el flujo sigue.
+
+### Notas
+- Los nodos **no** atrapan las excepciones del LLM ni de la base: suben a `ai_processor`, que reintenta y, agotados los intentos, escala a un humano. Mismo criterio que `DocumentPipeline` en Sprint 5.
+- Los 8 tests de integración corrieron en CI contra Postgres real (`tests/integration/test_graph_flow.py ........`, run 34973790825): 56 passed, 6 skipped en el job completo.
+- `_enqueue_ai_processing()` ya no propaga un fallo de encolado: cuando se llega ahí, el mensaje está commiteado y marcado en `webhook_dedup`, así que un reintento se cortaría en la comprobación de duplicado sin volver a encolar. Queda un CRITICAL en el log.
+
+---
+
 ## Resumen por Sprint
 
 | Sprint | Nombre | Estado | Notas |
@@ -274,7 +312,7 @@ _(nada en progreso)_
 | 3 | FastAPI Core & Auth | ✅ Completado | 61 archivos, +3460 líneas. Auth JWT, middleware multi-tenant, modelos SQLAlchemy, Alembic, CI 8/8 green |
 | 4 | Webhook Receiver & MessagingProvider | ✅ Completado | Dev B (PR #5, mergeado) + Dev A (branch `feature/sprint-04-messaging`, pendiente de PR/merge): endpoint, dedup, worker, MessagingProvider ABC, YCloudProvider, MetaProvider, factory, `NormalizedMessage`. 100/100 tests, RLS verificado en CI real |
 | 5 | Pipeline de Documentos & RAG | ✅ Completado | Dev B (PR #9): CRUD de documentos, Storage, worker de ingesta. Dev A (PR #10): chunker, embedding, OCR, DocumentPipeline, RAGService. 173 tests, RLS verificado en CI real (`app_user`, 41 passed) |
-| 6 | LangGraph — Grafo de Agentes | 🔄 En progreso | |
+| 6 | LangGraph — Grafo de Agentes | 🔄 En progreso | Dev B: 6 nodos, TokenBudgetGuard, `ai_processor`, 74 tests unitarios + 8 de integración. Pendiente Dev A: `state.py`, `graph.py`, schemas |
 | 7 | Agente de Agendamiento & CRM API | ⬜ Pendiente | |
 | 8 | Observabilidad, Backup & Hardening | ⬜ Pendiente | **Hito MVP** |
 | 9 | Canales Adicionales | ⬜ Pendiente | Fase 2 — Telegram, Webchat, Email, Audio (Instagram/Facebook movidos a Sprint 4) |

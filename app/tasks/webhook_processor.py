@@ -282,9 +282,16 @@ def _enqueue_ai_processing(
 ) -> None:
     """Encola el procesamiento de IA de la conversacion.
 
-    Stub hasta Sprint 6: `app.tasks.ai_processor` lo entrega ese sprint. Mientras
-    no exista, se registra y se sigue — el mensaje ya quedo guardado, que no haya
-    respuesta automatica todavia no es un fallo del webhook.
+    Desde Sprint 6 `app.tasks.ai_processor` existe y el mensaje entra al grafo de
+    agentes.
+
+    Nada de lo que pase aqui propaga: ni el ImportError ni un broker caido. Para
+    cuando se llega a esta funcion, el mensaje ya esta commiteado **y** marcado
+    en `webhook_dedup`, asi que un reintento de la tarea completa se cortaria en
+    la comprobacion de duplicado sin volver a encolar la IA — reintentar no
+    arregla nada y solo suma ruido. El fallo se registra como CRITICAL: es un
+    mensaje del contacto que se quedo sin respuesta automatica y alguien lo
+    tiene que ver.
 
     Args:
         client_id: Tenant propietario.
@@ -296,20 +303,27 @@ def _enqueue_ai_processing(
     try:
         from app.tasks.ai_processor import process_ai_response
     except ImportError:
-        logger.info(
-            "ai_processor no disponible todavia (Sprint 6); mensaje guardado sin "
-            "encolar IA: conversation_id=%s",
+        logger.error(
+            "ai_processor no importable; mensaje guardado sin encolar IA: conversation_id=%s",
             conversation_id,
         )
         return
 
-    process_ai_response.delay(
-        client_id=str(client_id),
-        conversation_id=str(conversation_id),
-        contact_id=str(contact_id),
-        channel=channel,
-        message_data=message_data,
-    )
+    try:
+        process_ai_response.delay(
+            client_id=str(client_id),
+            conversation_id=str(conversation_id),
+            contact_id=str(contact_id),
+            channel=channel,
+            message_data=message_data,
+        )
+    except Exception:
+        logger.critical(
+            "No se pudo encolar la IA; el mensaje quedo guardado y sin respuesta "
+            "automatica: conversation_id=%s",
+            conversation_id,
+            exc_info=True,
+        )
 
 
 async def _send_to_dlq(provider: str, channel: str, message_data: dict[str, Any]) -> None:

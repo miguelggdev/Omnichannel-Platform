@@ -158,6 +158,20 @@
 - **Razón:** El `delay()` tiene que ocurrir con la fila ya visible: el worker abre su propia conexión y no vería un documento sin commitear. Y el borrado en Storage va después del commit, porque si la transacción se revirtiera nos quedaríamos con el documento en base y sin su archivo.
 - **Consecuencia:** Estos endpoints no usan `get_tenant_session`. `app/api/v1/auth.py` tampoco la usa, así que no rompe ninguna convención establecida.
 
+### ADR-034: Los nodos del grafo leen la configuración del tenant de la fila activa de `agent_configs`
+- **Fecha:** 2026-09-15
+- **Contexto:** `specs/sprint-06-langgraph.md` asume un `agent_configs` con `agent_type`, `is_enabled` y un JSONB `settings`, y consulta una fila por tipo de agente. El modelo real (Sprint 1) tiene **una** fila por tenant con `name`, `model`, `temperature`, `system_prompt`, `welcome_message`, `handoff_message`, `training_mode`, `similarity_threshold`, `is_active` y un JSONB `config`.
+- **Decisión:** `app/agents/nodes/_tenant.py::get_agent_settings()` es el único punto que traduce esa fila a un dataclass `AgentSettings`. Los agentes habilitados salen de `config.enabled_agents` (default `["rag"]`), y los parámetros de retrieval de `config.rag_threshold` / `config.rag_top_k`. `agent_configs.model` cumple el papel del `model_name` del spec, y `similarity_threshold` queda para los few-shot (0.80), no para los chunks de contexto (0.75).
+- **Consecuencia:** Un tenant sin fila activa no se queda sin servicio: se usan los defaults (`OPENAI_CHAT_MODEL`, solo agente RAG, sin modo entrenamiento). Cuando exista una tabla de agentes por tipo, se cambia una función y ningún nodo se entera.
+- **Relacionado:** `scheduling` queda deliberadamente fuera del default de `enabled_agents` — el agente llega en Sprint 7 y hasta entonces no debe enrutarse nada hacia él.
+
+### ADR-035: El grafo compilado no se cachea entre tareas de Celery
+- **Fecha:** 2026-09-15
+- **Contexto:** `specs/sprint-06-langgraph.md` §12 propone un `_graph_cache` por tenant para no recompilar el grafo en cada mensaje.
+- **Decisión:** No cachearlo. `app/tasks/ai_processor.py` compila el grafo dentro de cada invocación y ejecuta sus corrutinas con `run_isolated()` (`app/core/database.py`), que vacía el pool del engine al terminar, dentro del mismo event loop que abrió las conexiones.
+- **Razón:** Cada tarea de Celery abre su propio event loop. Un grafo compilado guarda el `AsyncPostgresSaver` y sus conexiones atadas al loop que lo creó; reusarlo en el siguiente loop es exactamente el root cause de BUG-006 / BUG-011 ("attached to a different loop"). Compilar cuesta microsegundos; lo caro es el checkpointer, y esas conexiones se cierran al terminar la tarea.
+- **Consecuencia:** La tarea de IA nace ya alineada con la regla que dejó PR #12 (BUG-011): ningún `app/tasks/*.py` llama a `asyncio.run()` directamente. Si algún día se quisiera cachear el grafo, habría que cachearlo por (tenant, loop) o sacar el checkpointer del objeto compilado.
+
 ---
 
 ## Bugs Conocidos y Pitfalls
@@ -285,6 +299,12 @@
 - **Cómo salió:** revisión general de bugs pedida por el usuario después de cerrar el Sprint 5.
 - **Estado:** CERRADO ([PR #12](https://github.com/miguelggdev/Omnichannel-Platform/pull/12)). `process()` lanza `EmptyDocumentError` (nueva excepción en `document_pipeline.py`) antes de embeber/guardar si el chunker no produjo ningún chunk. `document_ingestion.py` la trata igual que `PipelineUnavailableError`: no se reintenta (el mismo archivo va a dar el mismo resultado vacío) y el documento queda `failed` con el motivo en `metadata.error`. Verificado contra Postgres real: `process()` no llega a marcar `completed` ni a guardar nada.
 - **Nota relacionada, no arreglada:** al escribir el test de este fix se detectó que `app/services/document_pipeline.py::_TEXT_EXTRACTORS` no tiene entrada para `"txt"`, pese a que `documents.py::ALLOWED_TYPES` sí acepta `text/plain` → `txt` en la subida. Todo `.txt` subido hoy falla en `_extract_text()` con `ValueError: Tipo de archivo no soportado para extraccion: txt`, se reintenta 2 veces y termina `failed` — nunca llega siquiera a la lógica de `EmptyDocumentError`. Pendiente de decidir con el usuario (agregar un extractor trivial para texto plano, o quitar `txt` de `ALLOWED_TYPES` si no se va a soportar).
+
+### BUG-013: Las notas automáticas del bot no caben en `internal_notes`
+- **Descripción:** `specs/sprint-06-langgraph.md` §9 pide que el handoff a humano deje una `InternalNote` con el motivo y las métricas. `internal_notes.author_id` es **NOT NULL** y referencia `users`: una nota generada por el bot no tiene autor humano, y firmarla con un admin cualquiera del tenant le atribuiría algo que no escribió. El propio spec anota el problema ("considerar crear un system user por tenant, o hacer user_id nullable") sin resolverlo.
+- **Workaround aplicado (Sprint 6, Dev B):** `human_handoff_node` escribe el motivo, el intent, la confianza del RAG y el uso de presupuesto en `conversations.metadata.handoff` (JSONB). Es igual de consultable, no falsea la autoría y no exige migración.
+- **Estado:** ABIERTO — decisión pendiente del usuario. Dos salidas razonables: (a) un usuario de sistema por tenant, creado en el onboarding, que firme las notas automáticas; (b) migración que haga `internal_notes.author_id` nullable. La (a) mantiene la integridad referencial; la (b) es más simple pero obliga a que toda la UI contemple notas sin autor.
+- **Impacto si no se resuelve:** ninguno funcional — el motivo del handoff no se pierde. Lo que falta es que esas notas aparezcan en el hilo de notas del contacto en el panel (Sprint 15).
 
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.
