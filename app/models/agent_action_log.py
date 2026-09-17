@@ -10,7 +10,7 @@ Dev B en el Sprint 7): tabla `agent_action_logs` con estas columnas. `status` y
 from typing import Any
 from uuid import UUID as _UUID
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,6 +37,14 @@ class AgentActionLog(TenantBaseModel):
     """
 
     __tablename__ = "agent_action_logs"
+    __table_args__ = (
+        Index("idx_agent_action_logs_created_at", "created_at"),
+        Index(
+            "idx_agent_action_logs_error_status",
+            "status",
+            postgresql_where=text("status = 'error'"),
+        ),
+    )
 
     client_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False, index=True

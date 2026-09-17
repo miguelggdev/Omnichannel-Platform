@@ -9,7 +9,17 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID as _UUID
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -73,6 +83,7 @@ class Appointment(TenantBaseModel):
     """
 
     __tablename__ = "appointments"
+    __table_args__ = (Index("idx_appointments_starts_at", "client_id", "starts_at"),)
 
     client_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False, index=True
