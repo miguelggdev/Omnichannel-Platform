@@ -297,7 +297,9 @@ class TestCreateAppointment:
         assert citas[0].contact_id == contact_id
         assert citas[0].starts_at.tzinfo is not None
 
-    async def test_lock_se_pide_con_una_clave_por_tenant(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_lock_se_pide_con_una_clave_por_tenant(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """El advisory lock se pide con `pg_advisory_xact_lock`, con una clave por tenant."""
         tipo = _FakeServiceType()
         contacto = _FakeContact()
