@@ -14,6 +14,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator, Coroutine
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import Any, TypeVar
 from uuid import UUID
 
@@ -29,6 +30,18 @@ from app.core.config import get_settings
 _T = TypeVar("_T")
 
 logger = logging.getLogger(__name__)
+
+# Usuario autenticado de la petición en curso, para el rastro de auditoría.
+# Lo puebla `AuditContextMiddleware` (app/middleware/audit.py) y lo lee
+# `tenant_session()` para exponerlo a PostgreSQL como `app.current_user_id`,
+# que es de donde lo toma el trigger `audit_trigger_function()`.
+#
+# Va en un ContextVar y no en un parámetro obligatorio para que las ~30 llamadas
+# a `tenant_session(client_id)` que ya existen no tengan que cambiar: cada una
+# hereda el usuario de su petición sola. Fuera de una petición (un worker de
+# Celery) queda en None, que es justo lo que el rastro debe registrar — una
+# acción del sistema no la hizo ninguna persona.
+current_user_id: ContextVar[UUID | None] = ContextVar("current_user_id", default=None)
 
 # Motor asíncrono contra Supavisor (Transaction Pooler de Supabase Cloud)
 engine = create_async_engine(
@@ -48,7 +61,9 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 @asynccontextmanager
-async def tenant_session(client_id: UUID) -> AsyncGenerator[AsyncSession, None]:
+async def tenant_session(
+    client_id: UUID, user_id: UUID | None = None
+) -> AsyncGenerator[AsyncSession, None]:
     """Context manager que abre una sesión con el contexto de tenant para RLS.
 
     Usa set_config('app.current_client_id', ..., true) — is_local=true le da
@@ -56,20 +71,36 @@ async def tenant_session(client_id: UUID) -> AsyncGenerator[AsyncSession, None]:
     transaction mode. is_local=false (o un SET sin LOCAL) persiste por sesión
     y puede causar fuga de datos entre tenants.
 
+    También publica `app.current_user_id`, que es de donde el trigger de
+    auditoría (migración 004) saca el autor del cambio. Se manda siempre, aunque
+    sea vacío: si no se definiera nunca, el `current_setting(..., true)` del
+    trigger lo vería como NULL igual, pero dejarlo explícito evita que una
+    transacción herede por accidente el valor de otra en el mismo backend del
+    pooler.
+
     Args:
         client_id: UUID del tenant para filtrado RLS.
+        user_id: Usuario autor de los cambios. Por defecto, el de la petición en
+            curso (`current_user_id`); None fuera de una petición, que es lo
+            correcto para un worker.
 
     Yields:
         AsyncSession con el contexto de tenant ya configurado.
     """
+    if user_id is None:
+        user_id = current_user_id.get()
+
     async with AsyncSessionLocal() as session, session.begin():
         # SET LOCAL no admite parametros bind (error de sintaxis de PostgreSQL:
         # "SET" no acepta placeholders). set_config() si es una funcion normal
         # y su tercer argumento (is_local=true) da el mismo scope de
         # transaccion que SET LOCAL.
         await session.execute(
-            text("SELECT set_config('app.current_client_id', :client_id, true)"),
-            {"client_id": str(client_id)},
+            text(
+                "SELECT set_config('app.current_client_id', :client_id, true), "
+                "set_config('app.current_user_id', :user_id, true)"
+            ),
+            {"client_id": str(client_id), "user_id": str(user_id) if user_id else ""},
         )
         yield session
 
