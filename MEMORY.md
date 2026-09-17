@@ -203,6 +203,27 @@
 - **Razón:** sin ella, un handoff que nadie atiende es un callejón sin salida permanente: no se puede cerrar por API, no lo alcanza el auto-cierre y no se puede archivar. La conversación quedaría en la bandeja para siempre.
 - **Consecuencia:** el resto de la tabla queda igual que en la spec, incluido que `resolved` y `archived` son terminales. Eso es deliberado y consistente con `webhook_processor._get_or_create_conversation()`, que al llegar un mensaje nuevo descarta las cerradas (`CLOSED_STATUSES`) y abre una conversación nueva en vez de reabrir la vieja: por eso `resolved_at` nunca se limpia y no existe ninguna transición de vuelta.
 
+### ADR-040: El autor de un cambio viaja en un ContextVar, no en un parámetro
+- **Fecha:** 2026-09-17
+- **Contexto:** el rastro de auditoría lo escribe un trigger de PostgreSQL (migración 004). El trigger sabe a qué tenant pertenece cada cambio porque lo lee de la propia fila, pero no *quién* lo hizo: eso solo lo sabe la aplicación, y tiene que pasárselo por `app.current_user_id`.
+- **Alternativa descartada:** añadir un parámetro `user_id` obligatorio a `tenant_session()`. Son ~30 llamadas; cualquiera que olvidara pasarlo dejaría un hueco silencioso en el rastro — un cambio hecho por una persona registrado como acción del sistema. Y nada lo delataría: el rastro seguiría escribiéndose, solo que mintiendo.
+- **Decisión:** `app/core/database.py` expone `current_user_id: ContextVar[UUID | None]`, que `AuditContextMiddleware` (`app/middleware/audit.py`) puebla por petición y `tenant_session()` lee por defecto. El parámetro explícito sigue existiendo y tiene prioridad, para los casos en que haga falta forzarlo.
+- **Consecuencia:** ninguna llamada existente cambia y todas heredan el usuario de su petición. Lo que corre fuera de una petición (un worker de Celery) queda en `None`, que es exactamente lo que debe registrarse: una acción del sistema no la hizo nadie. El `reset()` del middleware no es opcional — sin él, el valor se queda pegado al contexto reutilizado y un cambio sin autenticar podría acabar atribuido al último usuario que pasó por ahí.
+
+### ADR-041: `audit_logs` se borra en cascada con su tenant
+- **Fecha:** 2026-09-17
+- **Contexto:** la primera versión de la migración 004 declaró la FK `audit_logs.client_id -> clients.id` sin `ondelete`. En cuanto el trigger empezó a dejar filas, el `DELETE FROM clients` de la limpieza de **cualquier** test de integración empezó a fallar por una tabla que ese test nunca escribió (39 errores de teardown en CI, repartidos por `test_crm_api`, `test_graph_flow` y `test_webhook_flow`).
+- **Decisión:** `ON DELETE CASCADE` en `client_id`, `ON DELETE SET NULL` en `user_id`.
+- **Razón:** la alternativa era enseñarle `audit_logs` a la limpieza de cada test, y a cualquier código futuro que dé de baja un cliente. El rastro de auditoría de un tenant no tiene sentido sin el tenant, y una baja completa de cliente (RGPD a nivel de organización) tiene que poder ejecutarse. `user_id` es al revés: dar de baja a un empleado no debe borrar lo que hizo, solo dejar la fila sin autor.
+- **Consecuencia:** el rastro no sobrevive al borrado del tenant. Si algún día hace falta conservarlo para cumplimiento después de la baja, la salida no es quitar el CASCADE sino exportarlo antes de borrar.
+
+### ADR-042: Las tareas de mantenimiento son envoltorios sobre scripts de bash
+- **Fecha:** 2026-09-17
+- **Contexto:** el backup y la prueba de restauración (spec §7) son `pg_dump`, `pg_restore`, `psql` y el CLI de `aws` encadenados.
+- **Decisión:** la lógica vive en `scripts/backup.sh` y `scripts/restore_test.sh`; `app/tasks/maintenance.py` solo los invoca con `subprocess.run` (lista fija, sin shell), acota el tiempo y traduce un código de salida distinto de cero en una excepción.
+- **Razón:** reimplementar esas herramientas desde Python añadiría una capa propia que puede fallar por su cuenta, y los scripts se pueden ejecutar a mano para verificar la configuración sin levantar Celery. Lo que aporta Celery es el calendario y que el fallo quede visible.
+- **Consecuencia:** un backup que falla marca la tarea como fallida en vez de "terminar" sin hacer nada, que es el modo en que un backup roto se descubre el día que hace falta restaurar. Los nombres son `app.tasks.bulk_*` y no los `app.tasks.maintenance.*` de la spec §7.3: no existe cola `maintenance` y el routing de Sprint 2 es por prefijo de nombre, así que con el nombre del spec habrían caído en la cola `webhooks`, bloqueando la recepción de mensajes durante la hora que dura un backup.
+
 ---
 
 ## Bugs Conocidos y Pitfalls
@@ -357,6 +378,19 @@
 - **Cómo salió:** revisión del [PR #16](https://github.com/miguelggdev/Omnichannel-Platform/pull/16) (Sprint 7, Dev B). El PR en sí no lo causó — es un hueco de Sprint 6 (`webhook_processor.py`/`ai_processor.py`) que la nueva máquina de estados de `ConversationLifecycle` dejó en evidencia — pero se corrigió aparte, sin bloquear ese PR.
 - **Estado:** CERRADO ([PR #17](https://github.com/miguelggdev/Omnichannel-Platform/pull/17), mergeado en `main`). `webhook_processor.py` agrega `HUMAN_OWNED_STATUSES = ("human_active", "waiting_human")`: `_process_message()` captura `conversation.status` dentro de la transacción y, si está en ese conjunto, no llama a `_enqueue_ai_processing()` (el mensaje igual queda guardado). `tests/unit/test_webhook_processor.py::TestNoEncolaConversacionHumana` cubre los dos estados que cortan y los tres que siguen yendo al grafo (`new`, `bot_active`, `waiting_client`). Verificado en CI real: 285 unitarios passed/1 skipped, 57 de integración passed/6 skipped.
 - **Lección transferible:** cuando dos módulos comparten un concepto (aquí, el status de la conversación) pero uno de ellos no lo consulta nunca, el gap no aparece en ningún test unitario de cualquiera de los dos por separado — hace falta un test que ejercite el flujo completo con el estado "raro" puesto a propósito.
+
+### BUG-017: El login no funciona contra un rol sujeto a RLS
+- **Descripción:** `app/api/v1/auth.py::login` busca al usuario por email con `AsyncSessionLocal()`, **sin** contexto de tenant — y no puede tenerlo: el tenant se deduce del usuario, y el usuario todavía no se conoce. La política de RLS de `users` (migración 002) es `USING (client_id = current_setting('app.current_client_id')::uuid)`, así que esa consulta evalúa un parámetro que en esa transacción no vale nada y la consulta revienta. Contra un rol con `NOBYPASSRLS` —el de CI (`app_user`) y el que debe usar la aplicación en producción— **ningún login funciona**.
+- **Error concreto:** `invalid input syntax for type uuid: ""`, no `unrecognized configuration parameter` que sería lo esperable. El motivo es sutil y vale la pena recordarlo: en cuanto **otra** transacción del mismo backend ejecuta `set_config('app.current_client_id', ..., true)`, el parámetro queda definido para la conexión; al revertirse al final de esa transacción vuelve a **cadena vacía**, no a inexistente. Con un pooler por delante reutilizando conexiones, ese es el estado normal.
+- **Por qué no lo detectó ningún test:** `tests/unit/test_auth.py` sustituye la sesión entera por un mock, así que nunca ejerció una política de RLS. Ningún test de integración tocaba el login: la suite de integración autentica generando el JWT directamente con `create_access_token()`, sin pasar por el endpoint.
+- **Cómo salió:** al decidir si `users` podía llevar trigger de auditoría (Sprint 8, spec §9.2). Se escribió `tests/integration/test_audit_gdpr.py::TestLoginBajoRls` para comprobarlo contra Postgres real en vez de razonarlo sobre el papel, y falló.
+- **Estado:** ABIERTO. El test queda como `xfail(strict=True)`: el día que se arregle, pasará y CI fallará por xpass, avisando de que hay que quitar el marcador y cerrar este bug.
+- **Impacto:** crítico en producción si la aplicación corre con un rol sujeto a RLS. Hoy no se ha manifestado porque ningún entorno desplegado ha ejercitado el login contra ese rol.
+- **Salidas razonables (decisión pendiente, no es de un sprint de observabilidad):**
+  - (a) Una función `SECURITY DEFINER` que resuelva `email -> (user, client_id)` y sea el único punto con acceso sin contexto. Mantiene la RLS intacta para todo lo demás y acota la excepción a una firma concreta.
+  - (b) Una política adicional en `users` que permita leer cuando no hay contexto de tenant. Más simple, pero abre una vía de lectura cross-tenant sobre la tabla de usuarios: hay que acotarla con cuidado (por ejemplo, solo las columnas que el login necesita).
+  - (c) Un rol de autenticación aparte con `BYPASSRLS`, usado solo por el endpoint de login. Es lo que menos código toca y lo que más superficie privilegiada añade.
+- **Relacionado:** por esto la migración 004 deja `users` sin trigger de auditoría. Auditarla ahora taparía este bug detrás de un error distinto (el trigger intentaría insertar en `audit_logs`, cuya política evalúa el mismo parámetro). Cuando se cierre, agregar ese trigger es una migración de una línea.
 
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.

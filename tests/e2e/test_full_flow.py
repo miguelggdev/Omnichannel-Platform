@@ -38,7 +38,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
 from app.agents.nodes import _delivery as delivery_module
+from app.agents.nodes import intent_router as intent_module
 from app.agents.nodes import rag_query as rag_module
+from app.agents.nodes.intent_router import IntentClassification
 from app.core.config import get_settings
 from app.core.database import engine, tenant_session
 from app.main import create_app
@@ -182,7 +184,19 @@ async def escenario(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[Escenario
 
     await _sembrar(client_id, f"e2e-{uuid.uuid4().hex[:8]}")
 
-    # El LLM: responde siempre lo mismo, con un consumo de tokens verosimil.
+    # El LLM, en los DOS nodos que lo usan. Cada nodo importo `get_chat_model`
+    # en su propio espacio de nombres, asi que parchear solo uno deja al otro
+    # saliendo a OpenAI de verdad.
+    parchear_chat_model(
+        monkeypatch,
+        intent_module,
+        FakeChatModel(
+            {
+                "parsed": IntentClassification(intent="rag_query", confidence=0.95),
+                "raw": RespuestaLLM(input_tokens=60, output_tokens=10),
+            }
+        ),
+    )
     parchear_chat_model(
         monkeypatch,
         rag_module,
