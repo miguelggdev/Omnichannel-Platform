@@ -12,7 +12,9 @@ Flujo por mensaje (todo dentro de UNA transaccion con SET LOCAL):
 4. Resolver o crear la conversacion activa del contacto en ese canal.
 5. Guardar el mensaje y actualizar `last_message_at`.
 6. Registrar en `webhook_dedup`.
-7. Encolar el procesamiento de IA (stub hasta Sprint 6).
+7. Encolar el procesamiento de IA, salvo que la conversacion ya sea de un humano
+   (`HUMAN_OWNED_STATUSES`): el bot no le responde a un contacto que un agente
+   ya esta atendiendo o que acaba de ser escalado.
 
 Reintentos: 5s -> 25s -> 125s (exponencial). Tras 3 fallos el mensaje va a la Dead
 Letter Queue de Redis (`dlq:webhook_messages`) para revision manual.
@@ -52,6 +54,12 @@ RETRY_BACKOFF_FACTOR = 5
 # Estados en los que una conversacion se considera cerrada: si el contacto vuelve a
 # escribir se abre una nueva en lugar de reabrir estas.
 CLOSED_STATUSES = ("resolved", "archived")
+
+# Estados en los que un humano ya es dueno de la conversacion. El grafo de IA
+# (Sprint 6) no sabe nada de `conversations.status`: si se la encola igual, el bot
+# le responde a un contacto que un agente ya esta atendiendo, o al que se acaba de
+# escalar y todavia no lo tomo nadie.
+HUMAN_OWNED_STATUSES = ("human_active", "waiting_human")
 
 
 class ClientResolutionError(RuntimeError):
@@ -260,8 +268,17 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
             )
         )
         conversation.last_message_at = timestamp
+        conversation_status = conversation.status
 
         await persist_dedup(client_id, message_channel, external_id, session=session)
+
+    if conversation_status in HUMAN_OWNED_STATUSES:
+        logger.info(
+            "Conversacion %s en manos de un humano (status=%s); no se encola IA",
+            conversation.id,
+            conversation_status,
+        )
+        return
 
     # Fuera de la transaccion: la IA no debe encolarse si el commit fallo.
     _enqueue_ai_processing(
