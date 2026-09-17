@@ -224,6 +224,27 @@
 - **Razón:** una tabla de auditoría/observabilidad no debe poder tumbar la respuesta al contacto. Si Postgres tiene un blip justo al escribir el log (después de que el nodo ya generó una respuesta válida), perder la traza de esa acción es aceptable; perder la respuesta no lo es.
 - **Consecuencia:** cada nodo hace, en el peor caso, una transacción extra corta por turno solo para el log (aparte de la suya propia, si abre una). `_tokens_used`/`_model_used` en el resultado del nodo son opcionales: hoy ningún nodo de Sprint 6 los agrega a su dict de retorno, así que `tokens_used`/`model_used` quedan en `0`/`None` hasta que algún nodo los reporte a propósito.
 
+### ADR-043: El autor de un cambio viaja en un ContextVar, no en un parámetro
+- **Fecha:** 2026-09-17
+- **Contexto:** el rastro de auditoría lo escribe un trigger de PostgreSQL (migración 006). El trigger sabe a qué tenant pertenece cada cambio porque lo lee de la propia fila, pero no *quién* lo hizo: eso solo lo sabe la aplicación, y tiene que pasárselo por `app.current_user_id`.
+- **Alternativa descartada:** añadir un parámetro `user_id` obligatorio a `tenant_session()`. Son ~30 llamadas; cualquiera que olvidara pasarlo dejaría un hueco silencioso en el rastro — un cambio hecho por una persona registrado como acción del sistema. Y nada lo delataría: el rastro seguiría escribiéndose, solo que mintiendo.
+- **Decisión:** `app/core/database.py` expone `current_user_id: ContextVar[UUID | None]`, que `AuditContextMiddleware` (`app/middleware/audit.py`) puebla por petición y `tenant_session()` lee por defecto. El parámetro explícito sigue existiendo y tiene prioridad, para los casos en que haga falta forzarlo.
+- **Consecuencia:** ninguna llamada existente cambia y todas heredan el usuario de su petición. Lo que corre fuera de una petición (un worker de Celery) queda en `None`, que es exactamente lo que debe registrarse: una acción del sistema no la hizo nadie. El `reset()` del middleware no es opcional — sin él, el valor se queda pegado al contexto reutilizado y un cambio sin autenticar podría acabar atribuido al último usuario que pasó por ahí.
+
+### ADR-044: `audit_logs` se borra en cascada con su tenant
+- **Fecha:** 2026-09-17
+- **Contexto:** la primera versión de la migración de auditoría declaró la FK `audit_logs.client_id -> clients.id` sin `ondelete`. En cuanto el trigger empezó a dejar filas, el `DELETE FROM clients` de la limpieza de **cualquier** test de integración empezó a fallar por una tabla que ese test nunca escribió (39 errores de teardown en CI, repartidos por `test_crm_api`, `test_graph_flow` y `test_webhook_flow`).
+- **Decisión:** `ON DELETE CASCADE` en `client_id`, `ON DELETE SET NULL` en `user_id`.
+- **Razón:** la alternativa era enseñarle `audit_logs` a la limpieza de cada test, y a cualquier código futuro que dé de baja un cliente. El rastro de auditoría de un tenant no tiene sentido sin el tenant, y una baja completa de cliente (RGPD a nivel de organización) tiene que poder ejecutarse. `user_id` es al revés: dar de baja a un empleado no debe borrar lo que hizo, solo dejar la fila sin autor.
+- **Consecuencia:** el rastro no sobrevive al borrado del tenant. Si algún día hace falta conservarlo para cumplimiento después de la baja, la salida no es quitar el CASCADE sino exportarlo antes de borrar.
+
+### ADR-045: Las tareas de mantenimiento son envoltorios sobre scripts de bash
+- **Fecha:** 2026-09-17
+- **Contexto:** el backup y la prueba de restauración (spec §7) son `pg_dump`, `pg_restore`, `psql` y el CLI de `aws` encadenados.
+- **Decisión:** la lógica vive en `scripts/backup.sh` y `scripts/restore_test.sh`; `app/tasks/maintenance.py` solo los invoca con `subprocess.run` (lista fija, sin shell), acota el tiempo y traduce un código de salida distinto de cero en una excepción.
+- **Razón:** reimplementar esas herramientas desde Python añadiría una capa propia que puede fallar por su cuenta, y los scripts se pueden ejecutar a mano para verificar la configuración sin levantar Celery. Lo que aporta Celery es el calendario y que el fallo quede visible.
+- **Consecuencia:** un backup que falla marca la tarea como fallida en vez de "terminar" sin hacer nada, que es el modo en que un backup roto se descubre el día que hace falta restaurar. Los nombres son `app.tasks.bulk_*` y no los `app.tasks.maintenance.*` de la spec §7.3: no existe cola `maintenance` y el routing de Sprint 2 es por prefijo de nombre, así que con el nombre del spec habrían caído en la cola `webhooks`, bloqueando la recepción de mensajes durante la hora que dura un backup.
+
 ---
 
 ## Bugs Conocidos y Pitfalls
@@ -420,6 +441,19 @@ Cuatro agentes en paralelo auditaron el código completo (no solo Sprint 7) por 
 
 ### Nota: defensa en profundidad RLS pendiente en código preexistente (baja prioridad)
 El agente de RLS de la revisión 2026-09-17 encontró el mismo patrón de BUG-020 (query sin `client_id` explícito, solo RLS) en código de Sprint 3-6 no tocado hoy: `app/agents/nodes/human_handoff.py:118` y `app/agents/nodes/_delivery.py:77` (`session.get(Conversation, conversation_id)`), `app/agents/nodes/_tenant.py::get_contact_identifier()` y `app/services/document_pipeline.py` (`session.get(Document, document_id)`). (El caso gemelo en `app/middleware/token_budget.py`/`app/agents/nodes/token_budget.py` sí se cerró junto con BUG-022, por tocar el mismo archivo/patrón.) En los casos que quedan, el id en cuestión sale del estado interno del grafo o de la sesión de DB, no de un input directo del LLM/usuario, así que el riesgo real es bajo (contrasta con BUG-020, donde el id sí venía de fuera). No se tocó en esta sesión — no verificado independientemente, queda para una pasada de limpieza aparte si el usuario la prioriza.
+
+### BUG-025 (ABIERTO, CRÍTICO): El login no funciona contra un rol sujeto a RLS
+- **Descripción:** `app/api/v1/auth.py::login` busca al usuario por email con `AsyncSessionLocal()`, **sin** contexto de tenant — y no puede tenerlo: el tenant se deduce del usuario, y el usuario todavía no se conoce. La política de RLS de `users` (migración 002) es `USING (client_id = current_setting('app.current_client_id')::uuid)`, así que esa consulta evalúa un parámetro que en esa transacción no vale nada y la consulta revienta. Contra un rol con `NOBYPASSRLS` —el de CI (`app_user`) y el que debe usar la aplicación en producción— **ningún login funciona**.
+- **Error concreto:** `invalid input syntax for type uuid: ""`, no `unrecognized configuration parameter` que sería lo esperable. El motivo es sutil y vale la pena recordarlo: en cuanto **otra** transacción del mismo backend ejecuta `set_config('app.current_client_id', ..., true)`, el parámetro queda definido para la conexión; al revertirse al final de esa transacción vuelve a **cadena vacía**, no a inexistente. Con un pooler por delante reutilizando conexiones, ese es el estado normal.
+- **Por qué no lo detectó ningún test:** `tests/unit/test_auth.py` sustituye la sesión entera por un mock, así que nunca ejerció una política de RLS. Ningún test de integración tocaba el login: la suite de integración autentica generando el JWT directamente con `create_access_token()`, sin pasar por el endpoint.
+- **Cómo salió:** al decidir si `users` podía llevar trigger de auditoría (Sprint 8, spec §9.2). Se escribió `tests/integration/test_audit_gdpr.py::TestLoginBajoRls` para comprobarlo contra Postgres real en vez de razonarlo sobre el papel, y falló.
+- **Estado:** ABIERTO. El test queda como `xfail(strict=True)`: el día que se arregle, pasará y CI fallará por xpass, avisando de que hay que quitar el marcador y cerrar este bug.
+- **Impacto:** crítico en producción si la aplicación corre con un rol sujeto a RLS. Hoy no se ha manifestado porque ningún entorno desplegado ha ejercitado el login contra ese rol.
+- **Salidas razonables (decisión pendiente, no es de un sprint de observabilidad):**
+  - (a) Una función `SECURITY DEFINER` que resuelva `email -> (user, client_id)` y sea el único punto con acceso sin contexto. Mantiene la RLS intacta para todo lo demás y acota la excepción a una firma concreta.
+  - (b) Una política adicional en `users` que permita leer cuando no hay contexto de tenant. Más simple, pero abre una vía de lectura cross-tenant sobre la tabla de usuarios: hay que acotarla con cuidado (por ejemplo, solo las columnas que el login necesita).
+  - (c) Un rol de autenticación aparte con `BYPASSRLS`, usado solo por el endpoint de login. Es lo que menos código toca y lo que más superficie privilegiada añade.
+- **Relacionado:** por esto la migración de auditoría (006) deja `users` sin trigger. Auditarla ahora taparía este bug detrás de un error distinto (el trigger intentaría insertar en `audit_logs`, cuya política evalúa el mismo parámetro). Cuando se cierre, agregar ese trigger es una migración de una línea.
 
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.

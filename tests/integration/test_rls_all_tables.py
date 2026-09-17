@@ -411,8 +411,8 @@ class TestRLSMVPTables:
             rls_harness["session_b"],
             table="quick_replies",
             insert_sql="""
-                INSERT INTO quick_replies (id, client_id, title, content)
-                VALUES (:id, :client_id, 'Saludo', 'Hola, bienvenido')
+                INSERT INTO quick_replies (id, client_id, shortcut, title, content)
+                VALUES (:id, :client_id, '/saludo', 'Saludo', 'Hola, bienvenido')
             """,
             params={
                 "id": str(uuid.uuid4()),

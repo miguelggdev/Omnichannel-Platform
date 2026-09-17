@@ -19,6 +19,7 @@ TASK_MODULES = (
     "app.tasks.document_ingestion",
     "app.tasks.ai_processor",
     "app.tasks.auto_close",
+    "app.tasks.maintenance",
 )
 
 celery_app.conf.update(imports=TASK_MODULES)

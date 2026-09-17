@@ -14,12 +14,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.internal.health import router as health_router
+from app.api.v1.admin import router as admin_router
 from app.api.v1.agent_logs import router as agent_logs_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.contacts import router as contacts_router
 from app.api.v1.conversations import router as conversations_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.notes import router as notes_router
+from app.api.v1.quick_replies import router as quick_replies_router
 from app.api.v1.tags import contact_tags_router
 from app.api.v1.tags import router as tags_router
 from app.api.v1.webhooks import router as webhooks_router
@@ -30,6 +32,7 @@ from app.core.exceptions import (
     app_exception_handler,
     unhandled_exception_handler,
 )
+from app.middleware.audit import AuditContextMiddleware
 from app.middleware.tenant_context import TenantContextMiddleware
 
 logging.basicConfig(
@@ -111,6 +114,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # AuditContextMiddleware va ANTES que TenantContextMiddleware en el registro
+    # para quedar por dentro de el en la ejecucion: necesita leer el
+    # `request.state.user_id` que TenantContextMiddleware acaba de poner.
+    app.add_middleware(AuditContextMiddleware)
     app.add_middleware(TenantContextMiddleware)
 
     # ── Exception handlers ──
@@ -132,6 +139,8 @@ def create_app() -> FastAPI:
     app.include_router(tags_router, prefix="/api/v1/tags", tags=["tags"])
     app.include_router(conversations_router, prefix="/api/v1/conversations", tags=["conversations"])
     app.include_router(agent_logs_router, prefix="/api/v1/agent-logs", tags=["agent-logs"])
+    app.include_router(quick_replies_router, prefix="/api/v1/quick-replies", tags=["quick-replies"])
+    app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
 
     return app
 
