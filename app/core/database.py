@@ -100,7 +100,7 @@ async def dispose_db() -> None:
 
 
 def run_isolated(coro: Coroutine[Any, Any, _T]) -> _T:
-    """Ejecuta una corrutina en un event loop nuevo y descarta el pool al terminar.
+    """Ejecuta una corrutina en un event loop nuevo y descarta los recursos al terminar.
 
     BUG-006 (ver MEMORY.md) encontro que un engine async de SQLAlchemy queda
     atado al event loop donde se creo: reusarlo desde otro loop revienta con
@@ -111,6 +111,13 @@ def run_isolated(coro: Coroutine[Any, Any, _T]) -> _T:
     worker prefork procesa muchas tareas secuenciales en el mismo proceso —
     cada `asyncio.run()` abre un loop nuevo, pero `engine` es un singleton de
     modulo cuyo pool de conexiones sobrevive entre llamadas.
+
+    BUG-021 (ver MEMORY.md): el mismo riesgo existia para el cliente Redis de
+    `app/services/dedup.py` (tambien un singleton de modulo, con conexiones
+    atadas al loop en que se creo) y no se limpiaba en ningun lado — a
+    diferencia del engine, que si tenia este `dispose()`. Import perezoso
+    (no al tope del modulo): `dedup.py` importa `tenant_session` de aca, y un
+    import a nivel de modulo en el otro sentido seria un ciclo.
 
     Todo el codigo de tareas de Celery (`app/tasks/*.py`) debe llamar a esta
     funcion en vez de `asyncio.run()` directamente.
@@ -127,5 +134,13 @@ def run_isolated(coro: Coroutine[Any, Any, _T]) -> _T:
             return await coro
         finally:
             await engine.dispose()
+            from app.services.dedup import close_redis
+
+            try:
+                await close_redis()
+            except Exception:
+                # No debe tumbar una tarea que ya termino bien solo porque el
+                # cierre del cliente Redis fallo (ej. Redis ya estaba caido).
+                logger.exception("No se pudo cerrar el cliente Redis al final de la tarea")
 
     return asyncio.run(_con_limpieza())
