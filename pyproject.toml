@@ -75,15 +75,12 @@ no_implicit_optional = true
 # (PR #8); app.services.{document_pipeline,chunker,embedding,ocr,rag} en
 # Sprint 5 (Dev A); app.agents.graph en Sprint 6 (PR #14), que importan
 # app.tasks.ai_processor y app.agents.nodes.*.
-# Pendientes de Sprint 7 (Dev A): app.services.contact_unifier, que importa
-# app.api.v1.contacts para el merge de contactos, y app.models.agent_action_log,
-# que importa app.api.v1.agent_logs (addendum de Agent Activity Logging).
+# app.services.contact_unifier y app.models.agent_action_log salieron en
+# Sprint 7 (Dev A) y se sacan de aca.
 [[tool.mypy.overrides]]
 module = [
     "app.tasks.ai_processor",
     "app.agents.nodes.*",
-    "app.services.contact_unifier",
-    "app.models.agent_action_log",
 ]
 ignore_missing_imports = true
 
@@ -130,6 +127,11 @@ ignore_missing_imports = true
 module = "passlib.*"
 ignore_missing_imports = true
 
+# google-api-python-client / google-auth no publican stubs.
+[[tool.mypy.overrides]]
+module = ["googleapiclient.*", "google.oauth2.*"]
+ignore_missing_imports = true
+
 # Sin stubs: pytesseract y pymupdf no los publican; openpyxl los publica en un
 # paquete aparte (types-openpyxl) que no vale la pena sumar solo por esto.
 [[tool.mypy.overrides]]
@@ -144,6 +146,13 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["app.services.ocr", "app.services.document_pipeline"]
 disallow_untyped_calls = false
+
+# google-auth publica `py.typed` pero deja `Credentials.from_service_account_info`
+# sin anotar del todo; mismo caso que pymupdf arriba.
+[[tool.mypy.overrides]]
+module = "app.services.calendar"
+disallow_untyped_calls = false
+warn_return_any = false
 
 [[tool.mypy.overrides]]
 module = "app.models.*"

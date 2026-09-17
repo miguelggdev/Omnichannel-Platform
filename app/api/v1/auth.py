@@ -3,7 +3,7 @@
 POST /api/v1/auth/login — email + password → access_token + refresh_token
 POST /api/v1/auth/refresh — refresh_token → nuevo access_token
 
-Por qué el login no usa el ORM (BUG-017)
+Por qué el login no usa el ORM (BUG-025)
 ----------------------------------------
 Autenticar es la única operación del sistema que necesita mirar `users` **sin**
 saber a qué tenant pertenece la fila: el tenant se deduce del usuario, y el
@@ -13,7 +13,7 @@ puesto, así que un `select(User)` normal no devuelve nada contra un rol sujeto 
 las políticas.
 
 La búsqueda va por `auth_lookup_user()`, una función `SECURITY DEFINER`
-(migración 005) que es el único punto con ese acceso y solo sabe resolver un
+(migración 007) que es el único punto con ese acceso y solo sabe resolver un
 email exacto. Todo lo que viene después del login —incluida la escritura de
 `last_login_at`— ya conoce el tenant y vuelve a pasar por `tenant_session()`,
 con la RLS aplicándose con normalidad.

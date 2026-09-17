@@ -321,20 +321,33 @@ class TestMerge:
 
         assert response.status_code == 400
 
-    async def test_sin_el_unificador_responde_503_no_500(
+    async def test_fusiona_y_devuelve_el_destino(
         self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Mientras Dev A no entregue ContactUnifier, el endpoint degrada con un 503.
+        """Con `ContactUnifier` entregado (Sprint 7, Dev A), la fusion completa responde 200.
 
-        Lo que NO puede pasar es que el ImportError tumbe el arranque de la API
-        ni que salga un 500 con traceback.
+        Reemplaza al viejo `test_sin_el_unificador_responde_503_no_500`: su
+        premisa (`ContactUnifier` no existe todavia) dejo de ser cierta en
+        cuanto se entrego `app/services/contact_unifier.py`. La logica interna
+        de `merge()` (mover filas, no duplicar tags) se prueba a fondo en
+        `tests/unit/test_contact_unifier.py`; esto solo verifica que el
+        endpoint conecta las piezas: valida, llama al unificador y devuelve el
+        destino ya actualizado.
         """
-        _usa_sesion(monkeypatch, CrmSession())
+        source = FakeContact()
+        target = FakeContact()
+        sesion = CrmSession(
+            resultados=[source, target, None, None, None, [], []],
+            objetos={source.id: source},
+        )
+        _usa_sesion(monkeypatch, sesion)
 
-        response = await authenticated_client.post(f"{URL}/{uuid.uuid4()}/merge/{uuid.uuid4()}")
+        response = await authenticated_client.post(f"{URL}/{source.id}/merge/{target.id}")
 
-        assert response.status_code == 503
-        assert response.json()["error_code"] == "UNIFIER_UNAVAILABLE"
+        assert response.status_code == 200
+        assert response.json()["id"] == str(target.id)
+        assert source.merged_into_id == target.id
+        assert target in sesion.refreshed
 
     async def test_el_rol_agent_no_puede_fusionar(
         self, authenticated_client_factory: Any, monkeypatch: pytest.MonkeyPatch

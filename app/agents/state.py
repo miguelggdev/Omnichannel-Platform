@@ -41,6 +41,9 @@ class ConversationState(TypedDict, total=False):
         training_mode: Si el tenant tiene modo entrenamiento activo.
         approved_examples: Few-shot recuperados de `approved_responses`.
         error: Ultimo error no fatal registrado por un nodo.
+        partial_results: Resultados de tools que si se ejecutaron antes de un
+            error en el mismo turno (ej. `scheduling_node` con varias
+            tool_calls), para que un handoff no pierda esa informacion.
     """
 
     client_id: str
@@ -68,3 +71,4 @@ class ConversationState(TypedDict, total=False):
     approved_examples: list[dict[str, Any]] | None
 
     error: str | None
+    partial_results: list[str] | None

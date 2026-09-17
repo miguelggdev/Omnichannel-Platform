@@ -130,7 +130,11 @@ async def _get_token_usage(client_id: str) -> dict[str, int]:
 
     month = datetime.now(timezone.utc).strftime("%Y-%m")
     async with tenant_session(UUID(client_id)) as session:
-        stmt = select(TokenBudget).where(TokenBudget.month == month)
+        # client_id explicito ademas de RLS (BUG-020/022, ver MEMORY.md): mismo
+        # criterio que el resto del proyecto para no depender solo de la politica.
+        stmt = select(TokenBudget).where(
+            TokenBudget.client_id == UUID(client_id), TokenBudget.month == month
+        )
         budget = (await session.execute(stmt)).scalar_one_or_none()
         usage = (
             {"total_budget": UNLIMITED_BUDGET, "used_tokens": 0}

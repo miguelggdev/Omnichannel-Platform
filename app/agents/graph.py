@@ -1,10 +1,13 @@
 """Grafo de conversacion: construccion, routing y checkpointing.
 
-Contrato: `specs/sprint-06-langgraph.md` §2-3, 12. Ensambla los 6 nodos que
-entrego Dev B (Sprint 6) en el flujo:
+Contrato: `specs/sprint-06-langgraph.md` §2-3, 12; `specs/sprint-07-scheduling-crm.md`
+§5-6 (nodo `scheduling`, Sprint 7); y `specs/sprint-07-addendum-agent-logging.md`
+§4-5 (cada nodo se registra envuelto en `logged_node()`, que escribe su
+actividad en `agent_action_logs`). Ensambla los 7 nodos en el flujo:
 
-    token_budget_check -> intent_routing -> [rag_query | respond | human_handoff]
-                                              rag_query -> [training_mode_approval | respond | human_handoff]
+    token_budget_check -> intent_routing -> [rag_query | respond | human_handoff | scheduling]
+                                              rag_query    -> [training_mode_approval | respond | human_handoff]
+                                              scheduling   -> [respond | human_handoff]
 
 `app/tasks/ai_processor.py` (Dev B, ya en `main`) es el unico consumidor: llama
 `await get_graph_with_checkpointer()` una vez por mensaje y despues
@@ -46,10 +49,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 from langgraph.graph import END, StateGraph
 
+from app.agents.middleware.logging_middleware import logged_node
 from app.agents.nodes.human_handoff import human_handoff_node
 from app.agents.nodes.intent_router import intent_routing_node
 from app.agents.nodes.rag_query import rag_query_node
 from app.agents.nodes.respond import respond_node
+from app.agents.nodes.scheduling import scheduling_node
 from app.agents.nodes.token_budget import token_budget_check_node
 from app.agents.nodes.training_approval import training_approval_node
 from app.agents.state import ConversationState
@@ -66,6 +71,7 @@ NODE_RAG_QUERY = "rag_query"
 NODE_RESPOND = "respond"
 NODE_HUMAN_HANDOFF = "human_handoff"
 NODE_TRAINING_APPROVAL = "training_mode_approval"
+NODE_SCHEDULING = "scheduling"
 
 # Intents que `respond_node` contesta sin pasar por RAG (ver app/agents/nodes/respond.py).
 _DIRECT_RESPONSE_INTENTS = frozenset({"greeting", "farewell"})
@@ -109,7 +115,7 @@ def route_after_intent(state: ConversationState) -> str:
         state: Estado tras `intent_routing_node`.
 
     Returns:
-        `"respond"`, `"human_handoff"` o `"rag_query"`.
+        `"respond"`, `"human_handoff"`, `"scheduling"` o `"rag_query"`.
     """
     intent = state.get("intent") or "unknown"
 
@@ -117,9 +123,9 @@ def route_after_intent(state: ConversationState) -> str:
         return "respond"
     if intent in _HUMAN_INTENTS:
         return "human_handoff"
-    # rag_query y unknown (se intenta RAG primero); scheduling tambien cae aca
-    # por si el clasificador lo devuelve antes de que exista el agente de
-    # Sprint 7 -- mismo criterio que el spec ("por ahora, tratar como rag_query").
+    if intent == "scheduling":
+        return "scheduling"
+    # rag_query y unknown: se intenta RAG primero.
     return "rag_query"
 
 
@@ -139,20 +145,65 @@ def route_after_rag(state: ConversationState) -> str:
     return "respond"
 
 
+def route_after_scheduling(state: ConversationState) -> str:
+    """Decide si responder o escalar tras `scheduling_node`.
+
+    Args:
+        state: Estado tras `scheduling_node`.
+
+    Returns:
+        `"human_handoff"` si el agendamiento no estaba disponible para el
+        tenant; `"respond"` en cualquier otro caso.
+    """
+    if state.get("requires_handoff"):
+        return "human_handoff"
+    return "respond"
+
+
+def _logged(name: str, action_type: str, node: Any) -> Any:
+    """Envuelve un nodo con `logged_node()` para `graph.add_node()`.
+
+    Cast a `Any`: igual que en `_CheckpointedGraph.ainvoke()`, los overloads de
+    LangGraph son dificiles de matchear estaticamente y un `Callable` que pasa
+    por `functools.wraps()` no calza con ninguno de forma estructural.
+
+    Args:
+        name: Nombre del nodo, para el log.
+        action_type: Tipo de accion del nodo.
+        node: Funcion del nodo a envolver.
+
+    Returns:
+        El nodo envuelto, tipado `Any` para que `add_node()` lo acepte.
+    """
+    return cast("Any", logged_node(name, action_type)(node))
+
+
 def build_conversation_graph() -> "StateGraph[ConversationState]":
     """Arma el grafo de conversacion, sin compilar.
 
     Returns:
-        `StateGraph` con los 6 nodos y el routing condicional del sprint.
+        `StateGraph` con los 7 nodos (envueltos en `logged_node()`) y el
+        routing condicional del sprint.
     """
     graph = StateGraph(ConversationState)
 
-    graph.add_node(NODE_TOKEN_BUDGET, token_budget_check_node)
-    graph.add_node(NODE_INTENT_ROUTING, intent_routing_node)
-    graph.add_node(NODE_RAG_QUERY, rag_query_node)
-    graph.add_node(NODE_RESPOND, respond_node)
-    graph.add_node(NODE_HUMAN_HANDOFF, human_handoff_node)
-    graph.add_node(NODE_TRAINING_APPROVAL, training_approval_node)
+    # Cada nodo se envuelve con logged_node() al registrarlo, no en su propio
+    # modulo: un unico punto de integracion (este archivo) en vez de tocar los
+    # seis modulos de app/agents/nodes/ (addendum de Agent Activity Logging,
+    # ver app/agents/middleware/logging_middleware.py).
+    graph.add_node(
+        NODE_TOKEN_BUDGET, _logged(NODE_TOKEN_BUDGET, "decision", token_budget_check_node)
+    )
+    graph.add_node(
+        NODE_INTENT_ROUTING, _logged(NODE_INTENT_ROUTING, "decision", intent_routing_node)
+    )
+    graph.add_node(NODE_RAG_QUERY, _logged(NODE_RAG_QUERY, "query", rag_query_node))
+    graph.add_node(NODE_RESPOND, _logged(NODE_RESPOND, "response", respond_node))
+    graph.add_node(NODE_HUMAN_HANDOFF, _logged(NODE_HUMAN_HANDOFF, "handoff", human_handoff_node))
+    graph.add_node(
+        NODE_TRAINING_APPROVAL, _logged(NODE_TRAINING_APPROVAL, "decision", training_approval_node)
+    )
+    graph.add_node(NODE_SCHEDULING, _logged(NODE_SCHEDULING, "tool_call", scheduling_node))
 
     graph.set_entry_point(NODE_TOKEN_BUDGET)
 
@@ -168,6 +219,7 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
             "rag_query": NODE_RAG_QUERY,
             "human_handoff": NODE_HUMAN_HANDOFF,
             "respond": NODE_RESPOND,
+            "scheduling": NODE_SCHEDULING,
         },
     )
     graph.add_conditional_edges(
@@ -178,6 +230,11 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
             "respond": NODE_RESPOND,
             "human_handoff": NODE_HUMAN_HANDOFF,
         },
+    )
+    graph.add_conditional_edges(
+        NODE_SCHEDULING,
+        route_after_scheduling,
+        {"respond": NODE_RESPOND, "human_handoff": NODE_HUMAN_HANDOFF},
     )
 
     graph.add_edge(NODE_RESPOND, END)

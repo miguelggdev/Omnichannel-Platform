@@ -7,7 +7,7 @@ lo escribe un trigger de PL/pgSQL, no Python. Un test unitario solo podria
 comprobar que la migracion contiene cierto texto, que no es lo mismo que
 comprobar que el trigger dispara.
 
-Tambien viven aqui los tests de BUG-017 (el login bajo RLS) y de la funcion
+Tambien viven aqui los tests de BUG-025 (el login bajo RLS) y de la funcion
 `auth_lookup_user()` que lo cierra, porque dependen de la misma pieza — la RLS
 sobre `users` — y son los que deciden si esa tabla puede llevar trigger de
 auditoria. Ver `TestLoginBajoRls` y `TestFuncionDeBusqueda`.
@@ -257,7 +257,7 @@ async def dos_tenants() -> AsyncGenerator[tuple[Escenario, Escenario], None]:
 
 
 class TestTriggerDeAuditoria:
-    """Lo que el trigger de la migracion 004 graba de verdad."""
+    """Lo que el trigger de la migracion 006 graba de verdad."""
 
     async def test_el_insert_del_contacto_quedo_registrado(self, escenario: Escenario) -> None:
         """Sembrar el contacto ya genero su fila de auditoria."""
@@ -594,7 +594,7 @@ class TestQuickRepliesEnLaBase:
 
 
 class TestLoginBajoRls:
-    """BUG-017 (CERRADO): el login funciona contra un rol sujeto a RLS.
+    """BUG-025 (CERRADO): el login funciona contra un rol sujeto a RLS.
 
     Autenticar es la unica operacion que necesita mirar `users` sin saber a que
     tenant pertenece la fila — el tenant se deduce del usuario, y el usuario es
@@ -602,7 +602,7 @@ class TestLoginBajoRls:
     consulta contra un rol con `NOBYPASSRLS` y **ningun login funcionaba**.
 
     Ahora la busqueda va por `auth_lookup_user()`, una funcion SECURITY DEFINER
-    (migracion 005) que es el unico punto del sistema con ese acceso. Estos
+    (migracion 007) que es el unico punto del sistema con ese acceso. Estos
     tests corren con `app_user` (NOBYPASSRLS), que es lo que hace la
     verificacion genuina: contra un superusuario pasarian aunque la funcion no
     existiera.
@@ -678,7 +678,7 @@ class TestLoginBajoRls:
         assert respuesta.status_code == 401
 
     async def test_el_login_anota_el_ultimo_acceso(self, escenario: Escenario) -> None:
-        """La otra mitad de BUG-017: el UPDATE sobre `users` tambien iba bloqueado.
+        """La otra mitad de BUG-025: el UPDATE sobre `users` tambien iba bloqueado.
 
         Ahora corre dentro de `tenant_session()`, con la RLS aplicada. Se
         verifica de verdad porque el endpoint se traga los fallos de esta
@@ -716,7 +716,7 @@ class TestLoginBajoRls:
         """El estado del tenant viaja en la misma fila que el usuario.
 
         `clients` tambien tiene RLS, asi que comprobarlo con una segunda
-        consulta desde el login volveria a chocar con BUG-017.
+        consulta desde el login volveria a chocar con BUG-025.
         """
         async with tenant_session(escenario.client_id) as session:  # type: ignore[attr-defined]
             await session.execute(
@@ -804,7 +804,7 @@ class TestFuncionDeBusqueda:
     async def test_el_resto_de_la_rls_sigue_intacta(self, escenario: Escenario) -> None:
         """El arreglo no relaja `users`: sin la funcion, la politica sigue ahi.
 
-        Es lo que separa esta salida de las otras dos que planteaba BUG-017
+        Es lo que separa esta salida de las otras dos que planteaba BUG-025
         (politica adicional, o rol con BYPASSRLS): la excepcion se queda acotada
         a una firma concreta y todo lo demas sigue como estaba.
         """

@@ -201,7 +201,7 @@ class TestHealthEndpoint:
 class TestLoginEndpoint:
     """Tests del endpoint POST /api/v1/auth/login.
 
-    Desde BUG-017 el login no usa el ORM: busca con `auth_lookup_user()`, una
+    Desde BUG-025 el login no usa el ORM: busca con `auth_lookup_user()`, una
     funcion SECURITY DEFINER que devuelve una fila con todo lo que hace falta
     (incluido el estado del tenant), porque `users` y `clients` tienen RLS y
     aqui todavia no se sabe a que tenant pertenece el email.
@@ -231,7 +231,7 @@ class TestLoginEndpoint:
         """El estado del tenant viene en la misma fila, no en una segunda consulta.
 
         `clients` tambien tiene RLS: consultarla aparte desde aqui volveria a
-        chocar con lo mismo que BUG-017.
+        chocar con lo mismo que BUG-025.
         """
         fila = _fila_auth()
         sesion = _SesionDeLogin(fila)
@@ -301,7 +301,7 @@ class TestLoginEndpoint:
     ) -> None:
         """El UPDATE de `last_login_at` va dentro del tenant, no suelto.
 
-        Es la otra mitad de BUG-017: escribir en `users` sin contexto tambien
+        Es la otra mitad de BUG-025: escribir en `users` sin contexto tambien
         choca con la RLS. Aqui ya se conoce el tenant, asi que vuelve al camino
         normal y ademas queda firmado por el propio usuario.
         """

@@ -1,4 +1,4 @@
-"""auth_lookup_function — BUG-017: el login no funciona bajo RLS.
+"""auth_lookup_function — BUG-025: el login no funciona bajo RLS.
 
 El problema
 -----------
@@ -19,7 +19,7 @@ acepta patrones, no devuelve nada de otras tablas.
 El resto de la RLS se queda intacta: nada de `NO FORCE`, ninguna politica nueva
 sobre `users`, ningun rol con `BYPASSRLS` para la aplicacion. La excepcion queda
 acotada a una firma concreta y auditable, que es la razon de elegir esta salida
-frente a las otras dos que planteaba BUG-017.
+frente a las otras dos que planteaba BUG-025.
 
 Por que hace falta que el dueno tenga BYPASSRLS
 -----------------------------------------------
@@ -30,13 +30,19 @@ RLS si su dueno tiene el atributo `BYPASSRLS` (o es superusuario): el rol con el
 que corren las migraciones, no el de la aplicacion.
 
 Eso es una precondicion implicita, y una precondicion implicita que falla en
-silencio es justo lo que produjo BUG-017: la funcion devolveria cero filas y el
+silencio es justo lo que produjo BUG-025: la funcion devolveria cero filas y el
 login diria "credenciales invalidas" para todo el mundo, sin un solo error en
 los logs. Por eso la migracion la comprueba y **aborta el despliegue** si no se
 cumple, en vez de dejar que se descubra en el primer login.
 
-Revision ID: 005_auth_lookup_function
-Revises: 004_audit_gdpr_quick_replies
+Renumerada de 005 a 007 (sesion 23): esta migracion se escribio en una rama que
+partio de main antes de la renumeracion de la sesion 22, y encadenaba tras
+`004_audit_gdpr_quick_replies` — nombre que esa sesion ya habia liberado al
+renombrar esa migracion a `006_audit_gdpr_quick_replies`. Encadenada ahora tras
+`006_audit_gdpr_quick_replies`, no tras `004_audit_gdpr_quick_replies`.
+
+Revision ID: 007_auth_lookup_function
+Revises: 006_audit_gdpr_quick_replies
 Create Date: 2026-09-17
 """
 
@@ -45,8 +51,8 @@ from typing import Sequence, Union
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "005_auth_lookup_function"
-down_revision: Union[str, None] = "004_audit_gdpr_quick_replies"
+revision: str = "007_auth_lookup_function"
+down_revision: Union[str, None] = "006_audit_gdpr_quick_replies"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -117,7 +123,7 @@ def upgrade() -> None:
 
     op.execute("""
         COMMENT ON FUNCTION public.auth_lookup_user(text) IS
-        'BUG-017: unico acceso a users/clients sin contexto de tenant. Lo usa '
+        'BUG-025: unico acceso a users/clients sin contexto de tenant. Lo usa '
         'exclusivamente POST /api/v1/auth/login, que no puede conocer el tenant '
         'antes de identificar al usuario. Devuelve solo la fila del email exacto.';
     """)

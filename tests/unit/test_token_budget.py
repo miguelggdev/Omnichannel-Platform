@@ -193,9 +193,14 @@ class TestRegistroDeConsumo:
     async def test_registra_el_log_y_suma_al_presupuesto(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Escribe en `token_usage_logs` y actualiza `token_budgets`."""
-        budget = FakeBudget(total_budget=10_000, used_tokens=100)
-        sesion = FakeSession(resultados=[budget])
+        """Escribe en `token_usage_logs` y actualiza `token_budgets` con un UPDATE atomico.
+
+        BUG-022: el incremento ya no es un SELECT + `budget.used_tokens = ... + n`
+        en Python (lost update bajo concurrencia), sino un
+        `UPDATE ... SET used_tokens = used_tokens + :n` -- se verifica inspeccionando
+        los parametros compilados de la sentencia, no un objeto mutado.
+        """
+        sesion = FakeSession()
         parchear_tenant_session(monkeypatch, guard_module, sesion)
         redis = FakeRedis()
         monkeypatch.setattr(guard_module, "get_redis", lambda: redis)
@@ -214,11 +219,16 @@ class TestRegistroDeConsumo:
         assert len(logs) == 1
         assert logs[0].total_tokens == 150
         assert logs[0].operation == "rag_query"
-        assert budget.used_tokens == 250
+
+        # El UPDATE es el unico statement que pasa por session.execute() en este flujo.
+        [update_stmt] = sesion.executed
+        parametros = update_stmt.compile().params
+        assert parametros["used_tokens_1"] == 150
+        assert parametros["client_id_1"] == client_id
 
     async def test_invalida_la_cache_del_tenant(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Tras registrar, la clave de presupuesto se borra de Redis."""
-        sesion = FakeSession(resultados=[None])
+        sesion = FakeSession()
         parchear_tenant_session(monkeypatch, guard_module, sesion)
         redis = FakeRedis()
         monkeypatch.setattr(guard_module, "get_redis", lambda: redis)

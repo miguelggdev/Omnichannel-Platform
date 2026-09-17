@@ -1,6 +1,6 @@
 """Tests del contexto de auditoria: el middleware y el GUC que publica la sesion.
 
-El rastro lo escribe un trigger de PostgreSQL (migracion 004); lo que se prueba
+El rastro lo escribe un trigger de PostgreSQL (migracion 006); lo que se prueba
 aqui es la unica parte que pone Python: que el usuario autenticado llegue a
 `app.current_user_id` y que se suelte al terminar la peticion. Que el trigger
 grabe de verdad se verifica contra Postgres real en

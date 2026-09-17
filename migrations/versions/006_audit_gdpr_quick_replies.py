@@ -18,13 +18,18 @@ deja fuera a proposito: el login (`app/api/v1/auth.py`) busca al usuario por
 email **sin contexto de tenant** y le escribe `last_login_at`. Un trigger ahi
 intentaria insertar en `audit_logs`, cuya politica de RLS evalua
 `current_setting('app.current_client_id')`, que en esa transaccion no esta
-definido. Ver la nota de BUG-017 en MEMORY.md: el login ya tiene un problema
+definido. Ver la nota de BUG-025 en MEMORY.md: el login ya tiene un problema
 propio con la RLS de `users`, anterior a este sprint, y auditarla lo taparia
 detras de un error distinto. Cuando ese bug se cierre, agregar el trigger de
 `users` es una migracion de una linea.
 
-Revision ID: 004_audit_gdpr_quick_replies
-Revises: 003_langgraph_checkpoints
+Renumerada de 004 a 006 (sesion 22): esta migracion se escribio en una rama
+que partio de main antes de que el Sprint 7 (Dev A, PR #19) se mergeara, y
+"004" ya quedo tomado por 004_service_types. Encadenada ahora tras
+005_agent_action_logs, no tras 003_langgraph_checkpoints.
+
+Revision ID: 006_audit_gdpr_quick_replies
+Revises: 005_agent_action_logs
 Create Date: 2026-09-17
 """
 
@@ -34,8 +39,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "004_audit_gdpr_quick_replies"
-down_revision: Union[str, None] = "003_langgraph_checkpoints"
+revision: str = "006_audit_gdpr_quick_replies"
+down_revision: Union[str, None] = "005_agent_action_logs"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

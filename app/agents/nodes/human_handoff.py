@@ -50,6 +50,10 @@ HANDOFF_MESSAGES: dict[str, str] = {
     "complaint": (
         "Lamento la situacion. Te transfiero con un agente especializado para resolver tu caso."
     ),
+    "scheduling_unavailable": (
+        "Hubo un problema al gestionar tu cita. Te transfiero con un agente humano "
+        "para ayudarte a agendarla."
+    ),
 }
 
 DEFAULT_HANDOFF_REASON = "insufficient_context"
@@ -89,6 +93,12 @@ def _handoff_metadata(state: ConversationState, reason: str) -> dict[str, Any]:
         registro["rag_confidence"] = round(float(state["rag_confidence"] or 0.0), 4)
     if state.get("budget_usage_pct") is not None:
         registro["budget_usage_pct"] = round(float(state.get("budget_usage_pct") or 0.0), 2)
+    if state.get("partial_results"):
+        # BUG-024: si un nodo con varias tool-calls en el mismo turno (ej.
+        # scheduling_node) ya ejecuto alguna con exito antes de escalar, que
+        # quede visible aca -- el agente humano necesita saber que una accion
+        # (ej. una cita) ya se concreto antes de retomar la conversacion.
+        registro["partial_results"] = state["partial_results"]
     return registro
 
 

@@ -159,6 +159,38 @@ class TestHumanHandoff:
         assert conversacion.metadata_["origen"] == "webhook"
         assert resultado["requires_handoff"] is True
 
+    async def test_registra_los_resultados_parciales_si_los_hay(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BUG-024: si el nodo que escaló ya ejecutó algo (ej. scheduling), queda en el registro."""
+        conversacion = FakeConversation()
+        self._preparar(monkeypatch, conversacion)
+
+        await handoff_module.human_handoff_node(
+            estado(
+                conversation_id=str(uuid.UUID(int=1)),
+                handoff_reason="scheduling_unavailable",
+                partial_results=["Cita creada exitosamente"],
+            )
+        )
+
+        registro = conversacion.metadata_["handoff"]
+        assert registro["partial_results"] == ["Cita creada exitosamente"]
+
+    async def test_sin_resultados_parciales_no_agrega_la_clave(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """El caso normal (sin tools previas) no debe ensuciar el registro con `None`."""
+        conversacion = FakeConversation()
+        self._preparar(monkeypatch, conversacion)
+
+        await handoff_module.human_handoff_node(
+            estado(conversation_id=str(uuid.UUID(int=1)), handoff_reason="insufficient_context")
+        )
+
+        registro = conversacion.metadata_["handoff"]
+        assert "partial_results" not in registro
+
     @pytest.mark.parametrize(
         "reason",
         ["insufficient_context", "budget_exceeded", "human_request", "complaint"],
