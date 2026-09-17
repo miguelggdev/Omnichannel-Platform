@@ -18,6 +18,7 @@ TASK_MODULES = (
     "app.tasks.webhook_processor",
     "app.tasks.document_ingestion",
     "app.tasks.ai_processor",
+    "app.tasks.auto_close",
 )
 
 celery_app.conf.update(imports=TASK_MODULES)

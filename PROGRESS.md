@@ -8,12 +8,13 @@
 ## Estado Actual
 
 - **Fase:** 1 — MVP Core
-- **Sprint Activo:** Sprint 7 — Agente de Agendamiento & CRM API (Dev B arranca; Dev A espera)
+- **Sprint Activo:** Sprint 7 — Agente de Agendamiento & CRM API (Dev B entregado, ver abajo; falta Dev A)
 - **Coordinación Sprint 7:**
   - La migración de `service_types` (nueva, no estaba en el schema de Sprint 1 — ver `specs/sprint-07-scheduling-crm.md` §1) la crea **Dev A** cuando arranque con `calendar_tools.py`, no Dev B. Decisión del usuario 2026-09-16, para no pisarse.
   - El Sprint 7 suma el addendum de Agent Activity Logging (`specs/sprint-07-addendum-agent-logging.md`, reprogramado desde Sprint 6 a pedido del usuario 2026-09-16): `agent_action_log.py` (modelo), `agent_logger.py` (servicio), la migración de la tabla y el middleware que envuelve los nodos del grafo (`app/agents/graph.py`/`state.py`) van con **Dev A**; los endpoints (`app/api/v1/agent_logs.py`) y sus tests van con **Dev B**. Matriz completa en METHODOLOGY.md §Sprint 7.
 - **Última actualización:** 2026-09-16
-- **Última sesión:** Sesión 17 — Revisión de bugs pedida por el usuario al cerrar el Sprint 6. Dos hallazgos, ambos cerrados ([PR #15](https://github.com/miguelggdev/Omnichannel-Platform/pull/15)):
+- **Última sesión:** Sesión 18 — **Entrega de Dev B del Sprint 7** (branch `feature/sprint-07-crm`): la API del CRM completa (contactos, conversaciones, etiquetas, notas internas), la máquina de estados del ciclo de vida, el worker de auto-cierre de Celery Beat y los endpoints de consulta del addendum de Agent Activity Logging. 20 endpoints nuevos, 163 tests unitarios y 26 de integración contra Postgres real con RLS. Tres decisiones registradas: el auto-cierre itera tenant por tenant en vez de usar un rol `BYPASSRLS` (ADR-037), los endpoints que esperan entregas de Dev A degradan con 503 en vez de tumbar el arranque de la API (ADR-038), y `waiting_human -> resolved` se agrega a la máquina de estados porque sin esa transición un handoff que nadie atiende no se puede cerrar nunca (ADR-039). De paso, dos defectos de la spec que habrían pasado a producción: el nombre de la tarea de auto-cierre no coincidía con el que `beat_schedule` declara desde Sprint 2 (habría quedado sin Beat y sin cola) y `previous_status` se leía después de transicionar, devolviendo el estado nuevo en los dos campos. Falta la entrega de Dev A.
+- **Sesión 17** — Revisión de bugs pedida por el usuario al cerrar el Sprint 6. Dos hallazgos, ambos cerrados ([PR #15](https://github.com/miguelggdev/Omnichannel-Platform/pull/15)):
   - **BUG-015** — `_tenant.py::_as_agents()` trataba `config.enabled_agents: []` (deshabilitar todos los agentes a propósito) igual que "no configurado", y caía al default (`["rag"]`). Ahora distingue ausente/tipo inválido (default) de lista vacía real (se respeta). Se agregó `tests/unit/test_tenant_settings.py`, cobertura que no existía.
   - **Corrección de ADR-036** — `graph.py` prefería `DATABASE_URL_DIRECT` para el checkpointer, pero `docker-compose.yml` no le pasa esa variable a ningún worker de Celery: era código muerto. Simplificado a usar siempre `DATABASE_URL` (el pooler), que además es la elección correcta para un pool que se abre y cierra en cada mensaje.
   - Verificado en CI real: **280 unitarios passed, 1 skipped** y **57 passed, 6 skipped** en integración.
@@ -315,6 +316,49 @@ _(nada en progreso)_
 
 ---
 
+## Sprint 7: Agente de Agendamiento & CRM API
+
+### Completado — Dev B (branch `feature/sprint-07-crm`, sesión 18)
+- [x] `app/services/conversation_lifecycle.py` — máquina de estados de los 7 estados, único sitio donde viven las transiciones (la usan el endpoint de status, el de asignación y el worker de auto-cierre)
+- [x] `app/api/v1/contacts.py` — listado paginado con búsqueda por nombre y filtro por etiqueta, alta, detalle con identificadores/etiquetas/notas, edición parcial, fusión (delegada en `ContactUnifier` de Dev A) e historial de conversaciones
+- [x] `app/api/v1/conversations.py` — listado filtrable por estado/canal/agente, detalle con mensajes paginados en orden cronológico, asignación a un agente humano y cambio de estado validado contra la máquina
+- [x] `app/api/v1/tags.py` — CRUD de etiquetas del tenant + asignación/baja sobre un contacto (dos routers: `/tags` y `/contacts/{id}/tags/{tag_id}`)
+- [x] `app/api/v1/notes.py` — notas internas de un contacto, paginadas, firmadas con el usuario del JWT
+- [x] `app/api/v1/agent_logs.py` + `app/schemas/agent_log.py` — traza por conversación, estadísticas por nodo y errores recientes (addendum de Agent Activity Logging; el modelo y el servicio son de Dev A)
+- [x] `app/tasks/auto_close.py` — tarea `app.tasks.bulk_auto_close_conversations` (cola `bulk`, 300s/270s): `waiting_client > 24h -> resolved` y `resolved > 7d -> archived`, iterando tenant por tenant con RLS activa (ADR-037)
+- [x] `app/schemas/{tag,note,agent_log}.py` nuevos; `contact.py` y `conversation.py` extendidos con los schemas de detalle y de cambio de estado
+- [x] `app/main.py` — 20 endpoints nuevos montados; `app/tasks/celery_app.py` — `app.tasks.auto_close` sumado a `TASK_MODULES` (la lección de BUG-014)
+- [x] 163 tests unitarios nuevos (`test_conversation_lifecycle`, `test_contacts`, `test_conversations`, `test_tags_notes`, `test_agent_logging`, `test_auto_close`, más los dobles de `crm_doubles.py`) y 26 de integración (`tests/integration/test_crm_api.py`) contra Postgres real con RLS
+- [x] ADR-037, ADR-038 y ADR-039 registrados en MEMORY.md
+- [x] Verificado en CI real leyendo el log, no el checkmark ([PR #16](https://github.com/miguelggdev/Omnichannel-Platform/pull/16), run 35149784591): **464 unitarios passed, 1 skipped** (cobertura 86.68%, antes 280) y **83 de integración passed, 6 skipped** contra el rol `app_user` (`NOBYPASSRLS`, antes 57). Los 9 jobs en verde, incluidos `alembic check` y el smoke de Docker
+
+### Pendiente — Dev A
+- [ ] `app/agents/tools/calendar_tools.py`, `app/agents/nodes/scheduling.py`, `app/services/calendar.py`
+- [ ] `app/services/contact_unifier.py` — mientras no esté, `POST /contacts/{id}/merge/{target}` responde 503 con `UNIFIER_UNAVAILABLE` (ADR-038)
+- [ ] Migración de `service_types` y `appointments` (decisión del usuario 2026-09-16: la crea Dev A)
+- [ ] Addendum de logging: `app/models/agent_action_log.py`, `app/services/agent_logger.py`, el middleware que envuelve los nodos y su migración — mientras no estén, los tres endpoints de `/agent-logs` responden 503 con `AGENT_LOGGING_UNAVAILABLE`
+
+### Ajustes sobre la spec (`specs/sprint-07-scheduling-crm.md`)
+- **Nombre de la tarea de auto-cierre:** `app.tasks.bulk_auto_close_conversations`, no el `app.tasks.auto_close_conversations` de §14. `celery_config.py` (Sprint 2) ya declara ese nombre exacto en `beat_schedule`, y el routing automático manda a la cola `bulk` lo que empieza por `app.tasks.bulk_*`. Con el nombre del spec la tarea se habría quedado sin entrada en Beat y sin cola. Archivo en `app/tasks/auto_close.py` (el nombre de la matriz de METHODOLOGY.md) y no en `app/tasks/conversation_lifecycle.py`, que se confundiría con el servicio homónimo.
+- **RLS en el auto-cierre:** ver ADR-037. La spec deja la decisión abierta entre un rol `BYPASSRLS` y iterar por tenant; se eligió iterar.
+- **Máquina de estados:** una sola transición añadida, `waiting_human -> resolved` (ADR-039).
+- **`HTTPException` -> `AppException`:** la spec usa `HTTPException` en todo el sprint; CLAUDE.md §3 exige `AppException(status_code, error_code, message)` para no exponer tracebacks y para que el cuerpo del error sea uniforme.
+- **`require_role` no es jerárquico:** el addendum lo usa como `require_role("supervisor")` dando por hecho que admin y super_admin quedan incluidos. El real (`app/core/dependencies.py`, Sprint 3) compara por igualdad contra la lista, así que los roles van enumerados en cada endpoint.
+- **Campos que el modelo no tiene:** `internal_notes.author_id` (la spec la llama `user_id`), `conversations.created_at` en vez de `started_at`, y `contact_identifiers` sin `is_primary` ni `verified_at`.
+- **URL de las etiquetas de un contacto:** `/contacts/{id}/tags/{tag_id}` en vez del `/tags/contacts/{contact_id}/tags/{tag_id}` de §11, que repite el segmento y cuelga la relación del recurso equivocado.
+- **Borrado de etiquetas:** la spec confía en un `ON DELETE CASCADE` que la FK de Sprint 1 no declara; `contact_tags` se limpia explícitamente antes del DELETE, igual que `document_chunks` en Sprint 5.
+- **`previous_status` en el cambio de estado:** la spec lo lee del objeto **después** de transicionar, con lo que devolvía el estado nuevo en los dos campos. Se captura antes.
+
+### Notas
+- Los 20 endpoints nuevos abren `tenant_session()` a mano en vez de usar la dependency `get_tenant_session`, igual que `documents.py` (ADR-033): la transacción cierra dentro del endpoint y no cuando FastAPI limpia las dependencias.
+- Todas las consultas llevan el `client_id` explícito en el WHERE además de correr bajo RLS (CLAUDE.md, restricción 2). Hay un test por endpoint que lo verifica sobre el SQL compilado.
+- `tests/unit/crm_doubles.py` extiende los dobles de Sprint 6 (`agent_doubles.py`) con `scalar()`, `refresh()`, `delete()` y el `rowcount` de un UPDATE masivo.
+- **Hallazgo de CI (no local):** `requirements.txt` declara `fastapi>=0.110.0` sin techo, así que CI instala 0.141 mientras el entorno local tenía 0.136. Entre esas dos versiones cambió dónde acaban las rutas incluidas: `app.routes` pasó a devolver solo las de la documentación. La app funciona igual (los endpoints responden), pero cualquier test que inspeccione `app.routes` es frágil — el de este sprint mira `openapi()["paths"]`, que es el contrato público. Vale la pena revisar si conviene poner techo a esa dependencia.
+- **Hallazgo de CI (no local):** `AsyncSession.execute()` está tipado como `Result[Any]`; según la versión de SQLAlchemy ese tipo expone `rowcount` o no. Un `cast` a `CursorResult` falla en una versión por atributo inexistente y en la otra por cast redundante, así que las dos lecturas de `rowcount` (auto-cierre y borrado de etiquetas) anotan la variable como `Any` con el motivo al lado.
+- `tests/unit/test_agent_logging.py` prueba las dos mitades del addendum: el 503 de hoy y el comportamiento completo con un doble del modelo de Dev A, para que su entrega no llegue a ciegas.
+
+---
+
 ## Resumen por Sprint
 
 | Sprint | Nombre | Estado | Notas |
@@ -325,7 +369,7 @@ _(nada en progreso)_
 | 4 | Webhook Receiver & MessagingProvider | ✅ Completado | Dev B (PR #5, mergeado) + Dev A (branch `feature/sprint-04-messaging`, pendiente de PR/merge): endpoint, dedup, worker, MessagingProvider ABC, YCloudProvider, MetaProvider, factory, `NormalizedMessage`. 100/100 tests, RLS verificado en CI real |
 | 5 | Pipeline de Documentos & RAG | ✅ Completado | Dev B (PR #9): CRUD de documentos, Storage, worker de ingesta. Dev A (PR #10): chunker, embedding, OCR, DocumentPipeline, RAGService. 173 tests, RLS verificado en CI real (`app_user`, 41 passed) |
 | 6 | LangGraph — Grafo de Agentes | ✅ Completado | Dev B (PR #13): 6 nodos, TokenBudgetGuard, `ai_processor`. Dev A (PR #14): `state.py`, `graph.py`, checkpointer con `AsyncPostgresSaver`, migración de tablas. 273 tests unitarios + 57 de integración, RLS/checkpointer verificados en CI real |
-| 7 | Agente de Agendamiento & CRM API | 🔄 En progreso | |
+| 7 | Agente de Agendamiento & CRM API | 🔄 En progreso | Dev B: CRM API (contactos, conversaciones, etiquetas, notas), ciclo de vida, auto-cierre y endpoints de agent logs — 20 endpoints, 163 tests unitarios + 26 de integración. Falta Dev A: calendario, nodo de scheduling, `contact_unifier`, migración de `service_types` y el modelo/servicio del addendum de logging |
 | 8 | Observabilidad, Backup & Hardening | ⬜ Pendiente | **Hito MVP** |
 | 9 | Canales Adicionales | ⬜ Pendiente | Fase 2 — Telegram, Webchat, Email, Audio (Instagram/Facebook movidos a Sprint 4) |
 | 10 | Templates, Clonación & Sentimiento | ⬜ Pendiente | Fase 2 |
