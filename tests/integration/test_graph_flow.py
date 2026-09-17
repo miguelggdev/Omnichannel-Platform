@@ -173,6 +173,10 @@ async def _limpiar(client_id: uuid.UUID) -> None:
             "token_usage_logs",
             "token_budgets",
             "pending_responses",
+            # agent_action_logs FK a conversations/messages (Sprint 7, logged_node()
+            # en app/agents/graph.py escribe una fila real por nodo en este test):
+            # tiene que borrarse antes que las dos.
+            "agent_action_logs",
             "messages",
             "conversations",
             "contact_identifiers",
