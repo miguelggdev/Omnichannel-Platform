@@ -8,12 +8,14 @@
 ## Estado Actual
 
 - **Fase:** 1 — MVP Core
-- **Sprint Activo:** Sprint 7 — Agente de Agendamiento & CRM API (Dev B mergeado en `main`; falta Dev A)
+- **Sprint Activo:** Sprint 8 — Observabilidad, Backup & Hardening (Dev B entregado, ver abajo; falta Dev A)
+- **Sprint 7 sin cerrar:** la entrega de Dev A del Sprint 7 (`calendar_tools.py`, `scheduling.py`, `contact_unifier.py`, migración de `service_types` y la mitad de Dev A del addendum de Agent Activity Logging) **sigue sin estar en `main`**. Los endpoints que dependen de ella responden 503 por diseño (ADR-038). El Sprint 8 de Dev B no depende de nada de eso.
 - **Coordinación Sprint 7:**
   - La migración de `service_types` (nueva, no estaba en el schema de Sprint 1 — ver `specs/sprint-07-scheduling-crm.md` §1) la crea **Dev A** cuando arranque con `calendar_tools.py`, no Dev B. Decisión del usuario 2026-09-16, para no pisarse.
   - El Sprint 7 suma el addendum de Agent Activity Logging (`specs/sprint-07-addendum-agent-logging.md`, reprogramado desde Sprint 6 a pedido del usuario 2026-09-16): `agent_action_log.py` (modelo), `agent_logger.py` (servicio), la migración de la tabla y el middleware que envuelve los nodos del grafo (`app/agents/graph.py`/`state.py`) van con **Dev A**; los endpoints (`app/api/v1/agent_logs.py`) y sus tests van con **Dev B**. Matriz completa en METHODOLOGY.md §Sprint 7.
 - **Última actualización:** 2026-09-16
-- **Última sesión:** Sesión 19 — **Mergeados a `main`: PR #16 (Sprint 7 Dev B) y PR #17 (BUG-016).** Revisión completa del PR #16 sin hallazgos propios (ver Sesión 18). De esa revisión salió BUG-016: el bot seguía respondiendo con el grafo de IA a conversaciones ya escaladas a un humano (`human_active`/`waiting_human`), porque `webhook_processor.py` reutiliza cualquier conversación no cerrada y nunca miraba el status antes de encolar `ai_processor.py`. No lo introdujo el PR #16 — es un hueco de Sprint 6 que la nueva máquina de estados de `ConversationLifecycle` dejó en evidencia. Corregido en rama aparte (`fix/bot-no-responde-tras-handoff`) con `HUMAN_OWNED_STATUSES` como corte y 5 tests nuevos ([PR #17](https://github.com/miguelggdev/Omnichannel-Platform/pull/17), CI verificado en logs reales: 285 unitarios passed/1 skipped, 57 integración passed/6 skipped). Ambos PRs mergeados con `--squash --delete-branch`, ramas remotas y locales limpias. **Próximo paso: arranca la entrega de Dev A del Sprint 7** (`calendar_tools.py`, `scheduling.py`, `contact_unifier.py`, migración de `service_types`, y la mitad de Dev A del addendum de Agent Activity Logging) — el contrato exacto de `ContactUnifier(session).merge(source_id=..., target_id=...)` y de las columnas de `AgentActionLog` ya quedó fijado por el código de Dev B (`contacts.py`, `agent_logs.py`, `schemas/agent_log.py`, `test_agent_logging.py`).
+- **Última sesión:** Sesión 20 — **Entrega de Dev B del Sprint 8** (branch `feature/sprint-08-ops`, [PR #18](https://github.com/miguelggdev/Omnichannel-Platform/pull/18)): rastro de auditoría por trigger de PostgreSQL, endpoints de RGPD, CRUD de respuestas rápidas con variables, backup diario y prueba de restauración mensual, y el test end-to-end del recorrido completo. Verificado en CI real: **554 unitarios passed** (cobertura 87.37%) y **107 de integración/e2e passed, 1 xfailed**. Tres decisiones registradas (ADR-040/041/042) y **BUG-017 encontrado y confirmado contra Postgres real: el login no funciona contra un rol sujeto a RLS** — crítico, abierto, decisión de arquitectura pendiente. Cuatro defectos de la spec corregidos, entre ellos el nombre de las tareas de mantenimiento (habrían bloqueado la cola de webhooks durante cada backup) y `pg_restore` sin `--exit-on-error`, que daba por bueno un backup a medias.
+- **Sesión 19** — **Mergeados a `main`: PR #16 (Sprint 7 Dev B) y PR #17 (BUG-016).** Revisión completa del PR #16 sin hallazgos propios (ver Sesión 18). De esa revisión salió BUG-016: el bot seguía respondiendo con el grafo de IA a conversaciones ya escaladas a un humano (`human_active`/`waiting_human`), porque `webhook_processor.py` reutiliza cualquier conversación no cerrada y nunca miraba el status antes de encolar `ai_processor.py`. No lo introdujo el PR #16 — es un hueco de Sprint 6 que la nueva máquina de estados de `ConversationLifecycle` dejó en evidencia. Corregido en rama aparte (`fix/bot-no-responde-tras-handoff`) con `HUMAN_OWNED_STATUSES` como corte y 5 tests nuevos ([PR #17](https://github.com/miguelggdev/Omnichannel-Platform/pull/17), CI verificado en logs reales: 285 unitarios passed/1 skipped, 57 integración passed/6 skipped). Ambos PRs mergeados con `--squash --delete-branch`, ramas remotas y locales limpias. **Próximo paso: arranca la entrega de Dev A del Sprint 7** (`calendar_tools.py`, `scheduling.py`, `contact_unifier.py`, migración de `service_types`, y la mitad de Dev A del addendum de Agent Activity Logging) — el contrato exacto de `ContactUnifier(session).merge(source_id=..., target_id=...)` y de las columnas de `AgentActionLog` ya quedó fijado por el código de Dev B (`contacts.py`, `agent_logs.py`, `schemas/agent_log.py`, `test_agent_logging.py`).
 - **Sesión 18** — **Entrega de Dev B del Sprint 7** (branch `feature/sprint-07-crm`, [PR #16](https://github.com/miguelggdev/Omnichannel-Platform/pull/16)): la API del CRM completa (contactos, conversaciones, etiquetas, notas internas), la máquina de estados del ciclo de vida, el worker de auto-cierre de Celery Beat y los endpoints de consulta del addendum de Agent Activity Logging. 20 endpoints nuevos, 163 tests unitarios y 26 de integración contra Postgres real con RLS. Tres decisiones registradas: el auto-cierre itera tenant por tenant en vez de usar un rol `BYPASSRLS` (ADR-037), los endpoints que esperan entregas de Dev A degradan con 503 en vez de tumbar el arranque de la API (ADR-038), y `waiting_human -> resolved` se agrega a la máquina de estados porque sin esa transición un handoff que nadie atiende no se puede cerrar nunca (ADR-039). De paso, dos defectos de la spec que habrían pasado a producción: el nombre de la tarea de auto-cierre no coincidía con el que `beat_schedule` declara desde Sprint 2 (habría quedado sin Beat y sin cola) y `previous_status` se leía después de transicionar, devolviendo el estado nuevo en los dos campos.
 - **Sesión 17** — Revisión de bugs pedida por el usuario al cerrar el Sprint 6. Dos hallazgos, ambos cerrados ([PR #15](https://github.com/miguelggdev/Omnichannel-Platform/pull/15)):
   - **BUG-015** — `_tenant.py::_as_agents()` trataba `config.enabled_agents: []` (deshabilitar todos los agentes a propósito) igual que "no configurado", y caía al default (`["rag"]`). Ahora distingue ausente/tipo inválido (default) de lista vacía real (se respeta). Se agregó `tests/unit/test_tenant_settings.py`, cobertura que no existía.
@@ -361,6 +363,43 @@ _(nada en progreso)_
 
 ---
 
+## Sprint 8: Observabilidad, Backup & Hardening (HITO MVP)
+
+### Completado — Dev B (branch `feature/sprint-08-ops`, sesión 20)
+- [x] `app/middleware/audit.py` + `app/models/audit_log.py` + migración `004_audit_gdpr_quick_replies` — rastro de auditoría escrito por un trigger de PostgreSQL sobre `contacts`, `conversations` y `messages`, con el autor del cambio publicado en `app.current_user_id` (ADR-040)
+- [x] `app/api/v1/quick_replies.py` + `app/schemas/quick_reply.py` + `app/services/quick_reply.py` — CRUD de respuestas rápidas y resolución de `{{contact_name}}`, `{{agent_name}}`, `{{ticket_id}}` y `{{date}}`
+- [x] `app/api/v1/admin.py` — export RGPD completo y anonimización sin borrar filas
+- [x] `scripts/backup.sh`, `scripts/restore_test.sh` y `app/tasks/maintenance.py` — backup diario (03:00 UTC) y prueba de restauración mensual (día 1, 04:00 UTC), las dos en la cola `bulk` (ADR-042)
+- [x] `tests/e2e/test_full_flow.py` — recorrido completo webhook → dedup → grafo → respuesta enviada, con su rastro. `ci.yml` suma `tests/e2e/` al job de integración: sin eso no lo ejecutaba nadie
+- [x] 90 tests unitarios nuevos, 22 de integración y 5 e2e
+- [x] ADR-040, ADR-041, ADR-042 y BUG-017 registrados en MEMORY.md
+- [x] Verificado en CI real leyendo el log, no el checkmark ([PR #18](https://github.com/miguelggdev/Omnichannel-Platform/pull/18), run 35228425188): **554 unitarios passed, 1 skipped** (cobertura 87.37%, antes 464) y **107 de integración + e2e passed, 6 skipped, 1 xfailed** contra el rol `app_user` (`NOBYPASSRLS`). Los 9 jobs en verde
+
+### Pendiente — Dev A
+- [ ] `app/core/telemetry.py` (OpenTelemetry), `app/core/metrics.py` (Prometheus), `grafana/dashboards/*.json`
+- [ ] `app/core/encryption.py` (pgcrypto). Nota útil: la extensión `pgcrypto` **ya está creada** desde `001_baseline`, no hace falta migración para eso
+- [ ] Si esa entrega necesita migración, encadenarla a `004_audit_gdpr_quick_replies` (`down_revision = "004_audit_gdpr_quick_replies"`) para no abrir dos cabezas de Alembic
+
+### Sin asignar — addendum de operaciones
+`specs/sprint-08-addendum-ops.md` son 6.187 líneas con cuatro features (panel de Celery/Redis, bot de Telegram para super admin, backup avanzado con replicación, y políticas de seguridad de servidor/Cloudflare/Docker). **La matriz de METHODOLOGY.md §Sprint 8 no asigna ninguna de las cuatro a ningún dev.** Queda como decisión de reparto, no adjudicada por cuenta propia.
+
+### Ajustes sobre la spec (`specs/sprint-08-observability.md`)
+- **Nombre de las tareas de mantenimiento:** `app.tasks.bulk_run_backup` y `app.tasks.bulk_run_restore_test`, no los `app.tasks.maintenance.*` de §7.3. No existe cola `maintenance` y el routing de Sprint 2 es por prefijo de nombre: con el nombre de la spec habrían caído en la cola por defecto (`webhooks`), contra un worker con `prefetch=1`, y un backup de una hora habría bloqueado la recepción de mensajes durante esa hora. Es el mismo defecto que el del auto-cierre en Sprint 7.
+- **Extensión del dump:** `.dump`, no `.sql.gz`. `--format=custom` produce un binario que solo lee `pg_restore`; el nombre de la spec invita a intentar `gunzip | psql`.
+- **`pg_restore --exit-on-error`:** sin esa opción avisa de los fallos y termina con 0, y la prueba daría por bueno un backup a medias.
+- **La prueba de restauración verifica RLS, triggers y la revisión de Alembic,** no solo que las tablas tengan filas: un backup que restaura los datos pero pierde el aislamiento entre tenants no sirve para recuperarse.
+- **Variables `RESTORE_*` propias** en vez de heredar `PG*`: la prueba crea y destruye una base entera y no puede apuntar a producción por descuido. En Supabase Cloud además no hay `CREATE DATABASE` disponible para el rol de la aplicación.
+- **`message.direction == "incoming"`** (§10.2); el enum real es `inbound`/`outbound`.
+- **`quick_replies.shortcut` y `created_by`** los da por hechos §11.1 y el modelo de Sprint 1 nunca los tuvo: los agrega la migración 004, con backfill desde el título antes de poner NOT NULL.
+- **El trigger no va sobre `users`,** aunque §9.2 lo pida: ver BUG-017.
+
+### Notas
+- **BUG-017 (crítico, abierto, no es de este sprint):** el login no funciona contra un rol sujeto a RLS. Salió al decidir si `users` podía llevar trigger de auditoría, y se comprobó contra Postgres real en vez de razonarlo sobre el papel (`tests/integration/test_audit_gdpr.py::TestLoginBajoRls`, `xfail(strict=True)`). Ver MEMORY.md para el detalle y las tres salidas posibles. **Es una decisión de arquitectura pendiente, con implicaciones de seguridad.**
+- **Tarea de infraestructura pendiente:** hacer `audit_logs` realmente append-only necesita un `REVOKE UPDATE, DELETE` sobre el rol de la aplicación **después** de los `GRANT`, en el script que crea el rol. El `REVOKE ... FROM PUBLIC` de la migración no basta: el `GRANT ... ON ALL TABLES` posterior de CI y de Supabase lo vuelve a conceder. La migración lo dice explícitamente en vez de aparentar una garantía que no da.
+- El rastro de auditoría se borra en cascada con su tenant (ADR-041). Si algún día hace falta conservarlo tras la baja de un cliente, la salida es exportarlo antes de borrar, no quitar el CASCADE.
+
+---
+
 ## Resumen por Sprint
 
 | Sprint | Nombre | Estado | Notas |
@@ -372,7 +411,7 @@ _(nada en progreso)_
 | 5 | Pipeline de Documentos & RAG | ✅ Completado | Dev B (PR #9): CRUD de documentos, Storage, worker de ingesta. Dev A (PR #10): chunker, embedding, OCR, DocumentPipeline, RAGService. 173 tests, RLS verificado en CI real (`app_user`, 41 passed) |
 | 6 | LangGraph — Grafo de Agentes | ✅ Completado | Dev B (PR #13): 6 nodos, TokenBudgetGuard, `ai_processor`. Dev A (PR #14): `state.py`, `graph.py`, checkpointer con `AsyncPostgresSaver`, migración de tablas. 273 tests unitarios + 57 de integración, RLS/checkpointer verificados en CI real |
 | 7 | Agente de Agendamiento & CRM API | 🔄 En progreso | Dev B: CRM API (contactos, conversaciones, etiquetas, notas), ciclo de vida, auto-cierre y endpoints de agent logs — 20 endpoints, 163 tests unitarios + 26 de integración. Falta Dev A: calendario, nodo de scheduling, `contact_unifier`, migración de `service_types` y el modelo/servicio del addendum de logging |
-| 8 | Observabilidad, Backup & Hardening | ⬜ Pendiente | **Hito MVP** |
+| 8 | Observabilidad, Backup & Hardening | 🔄 En progreso | **Hito MVP.** Dev B: auditoría por trigger, RGPD, quick replies, backup/restore y el test e2e — 554 unitarios + 107 de integración/e2e. Falta Dev A: OpenTelemetry, métricas, dashboards y pgcrypto. El addendum de operaciones (4 features) no está asignado a nadie en la matriz |
 | 9 | Canales Adicionales | ⬜ Pendiente | Fase 2 — Telegram, Webchat, Email, Audio (Instagram/Facebook movidos a Sprint 4) |
 | 10 | Templates, Clonación & Sentimiento | ⬜ Pendiente | Fase 2 |
 | 11 | Webhooks Salientes & CSAT | ⬜ Pendiente | Fase 2 |
