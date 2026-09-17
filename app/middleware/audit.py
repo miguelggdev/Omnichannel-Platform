@@ -1,6 +1,6 @@
 """Middleware que pone al usuario autenticado en el contexto de auditoria.
 
-El rastro de auditoria lo escribe un trigger de PostgreSQL (migracion 004), no
+El rastro de auditoria lo escribe un trigger de PostgreSQL (migracion 006), no
 Python. El trigger sabe a que tenant pertenece cada cambio porque lo lee de la
 fila, pero no tiene forma de saber *quien* lo hizo: eso solo lo sabe la
 aplicacion, y se lo pasa por `app.current_user_id`.

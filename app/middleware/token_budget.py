@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import update
 
 from app.agents.nodes.token_budget import cache_key
 from app.core.database import tenant_session
@@ -130,11 +130,18 @@ class TokenBudgetGuard:
                     )
                 )
 
+                # UPDATE atomico (BUG-022): un SELECT + `budget.used_tokens = ... + n`
+                # en Python es un lost update bajo concurrencia -- dos mensajes del
+                # mismo tenant procesados en paralelo (ai_inference corre con
+                # concurrency=2) pueden leer el mismo valor y el commit que llega
+                # ultimo pisa al otro, subcontando el consumo real. El incremento
+                # tiene que pasar dentro de la sentencia SQL, no en Python.
                 month = datetime.now(timezone.utc).strftime("%Y-%m")
-                stmt = select(TokenBudget).where(TokenBudget.month == month)
-                budget = (await session.execute(stmt)).scalar_one_or_none()
-                if budget is not None:
-                    budget.used_tokens = int(budget.used_tokens) + total_tokens
+                await session.execute(
+                    update(TokenBudget)
+                    .where(TokenBudget.client_id == tenant_id, TokenBudget.month == month)
+                    .values(used_tokens=TokenBudget.used_tokens + total_tokens)
+                )
         except Exception:
             logger.exception(
                 "No se pudo registrar el consumo de tokens (client_id=%s, model=%s, total=%s)",

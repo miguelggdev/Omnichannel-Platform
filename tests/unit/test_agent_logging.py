@@ -1,13 +1,14 @@
 """Tests de los endpoints de consulta de actividad de agentes.
 
-El modelo `AgentActionLog` y el servicio `AgentLogger` son entrega de Dev A
-(`specs/sprint-07-addendum-agent-logging.md` §2 y §3) y todavia no existen. Estos
-tests cubren las dos mitades:
-
-  - el camino degradado, que es el real hoy: sin el modelo, los tres endpoints
-    responden 503 y la API arranca igual;
-  - el camino completo, con el modelo sustituido por un doble, para que el dia
-    que Dev A lo entregue se sepa si los endpoints hacen lo que prometen.
+`AgentActionLog` y `AgentLogger` (`app/models/agent_action_log.py`,
+`app/services/agent_logger.py`) ya son entrega de Dev A. El modelo real se
+sustituye igual por un doble (`AgentActionLogDoble` mas abajo) para no
+depender de Postgres: el recorrido contra la base real vive en
+`tests/integration/test_crm_api.py`. El guard de 503
+(`_agent_action_log_model()` en `app/api/v1/agent_logs.py`) ya no tiene un test
+propio: con el modelo entregado, el `ImportError` que lo dispara no ocurre en
+la practica; la logica en si es identica a la de `ContactUnifier`
+(`app/api/v1/contacts.py`, ADR-038).
 """
 
 import sys
@@ -92,23 +93,8 @@ class _FilaStats:
 # ─── Sin la entrega de Dev A ─────────────────────────────────────────────────
 
 
-class TestDegradacion:
-    """Mientras el modelo no exista, los endpoints degradan en vez de romper."""
-
-    @pytest.mark.parametrize(
-        "ruta",
-        [f"{URL}/conversations/{uuid.uuid4()}", f"{URL}/stats", f"{URL}/errors"],
-    )
-    async def test_sin_el_modelo_responde_503(
-        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch, ruta: str
-    ) -> None:
-        """Los tres endpoints avisan con 503, no con un 500 ni un traceback."""
-        _usa_sesion(monkeypatch, CrmSession())
-
-        response = await authenticated_client.get(ruta)
-
-        assert response.status_code == 503
-        assert response.json()["error_code"] == "AGENT_LOGGING_UNAVAILABLE"
+class TestArranque:
+    """El router de agent-logs queda registrado con sus tres rutas."""
 
     async def test_la_api_arranca_igual(self) -> None:
         """El router se registra aunque el modelo no este: el import es perezoso.

@@ -1,7 +1,7 @@
 """Modelo AuditLog — rastro de cambios sobre las tablas sensibles.
 
 Las filas no las escribe Python: las inserta un trigger de PostgreSQL
-(`audit_trigger_function()`, migracion 004). Asi queda auditado cualquier cambio,
+(`audit_trigger_function()`, migracion 006). Asi queda auditado cualquier cambio,
 venga de la API, de un worker de Celery o de un `psql` a mano — que es
 justamente lo que un rastro de auditoria tiene que garantizar.
 

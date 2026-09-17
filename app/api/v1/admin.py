@@ -12,7 +12,7 @@ datos personales y dejando el esqueleto sin identificar.
 
 Las dos operaciones quedan registradas en `audit_logs` sin que este modulo haga
 nada: los UPDATE sobre `contacts`, `messages` y `conversations` los captura el
-trigger de la migracion 004, con el usuario que los pidio, que
+trigger de la migracion 006, con el usuario que los pidio, que
 `AuditContextMiddleware` publica en `app.current_user_id`.
 """
 

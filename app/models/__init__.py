@@ -1,9 +1,10 @@
-"""SQLAlchemy models — 19 tablas (18 MVP + audit_logs, Sprint 8).
+"""SQLAlchemy models — 22 tablas (18 MVP + service_types/appointments/agent_action_log de Sprint 7 + audit_logs de Sprint 8).
 
 Exporta todos los modelos para import directo:
     from app.models import User, Contact, Conversation
 """
 
+from app.models.agent_action_log import AgentActionLog
 from app.models.agent_config import AgentConfig
 from app.models.approved_response import ApprovedResponse
 from app.models.audit_log import AuditLog
@@ -19,6 +20,7 @@ from app.models.internal_note import InternalNote
 from app.models.message import Message
 from app.models.pending_response import PendingResponse
 from app.models.quick_reply import QuickReply
+from app.models.service_type import Appointment, ServiceType
 from app.models.tag import Tag
 from app.models.token_budget import TokenBudget
 from app.models.token_usage_log import TokenUsageLog
@@ -26,7 +28,9 @@ from app.models.user import User
 from app.models.webhook_dedup import WebhookDedup
 
 __all__ = [
+    "AgentActionLog",
     "AgentConfig",
+    "Appointment",
     "ApprovedResponse",
     "AuditLog",
     "Base",
@@ -41,6 +45,7 @@ __all__ = [
     "Message",
     "PendingResponse",
     "QuickReply",
+    "ServiceType",
     "Tag",
     "TenantBaseModel",
     "TokenBudget",

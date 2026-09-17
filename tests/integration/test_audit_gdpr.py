@@ -7,7 +7,7 @@ lo escribe un trigger de PL/pgSQL, no Python. Un test unitario solo podria
 comprobar que la migracion contiene cierto texto, que no es lo mismo que
 comprobar que el trigger dispara.
 
-Tambien vive aqui la comprobacion que destapo BUG-017 (el login no funciona
+Tambien vive aqui la comprobacion que destapo BUG-025 (el login no funciona
 contra un rol sujeto a RLS), porque depende de la misma pieza — la RLS sobre
 `users` — y es lo que decidio dejar esa tabla fuera del trigger de auditoria.
 Ver `TestLoginBajoRls`.
@@ -257,7 +257,7 @@ async def dos_tenants() -> AsyncGenerator[tuple[Escenario, Escenario], None]:
 
 
 class TestTriggerDeAuditoria:
-    """Lo que el trigger de la migracion 004 graba de verdad."""
+    """Lo que el trigger de la migracion 006 graba de verdad."""
 
     async def test_el_insert_del_contacto_quedo_registrado(self, escenario: Escenario) -> None:
         """Sembrar el contacto ya genero su fila de auditoria."""
@@ -594,11 +594,11 @@ class TestQuickRepliesEnLaBase:
 
 
 class TestLoginBajoRls:
-    """BUG-017: el login no funciona contra un rol sujeto a RLS.
+    """BUG-025: el login no funciona contra un rol sujeto a RLS.
 
     No es alcance del Sprint 8, pero decide algo que si lo es: si `users` puede
-    o no llevar trigger de auditoria (la spec §9.2 lo pide; la migracion 004 lo
-    dejo fuera por esto).
+    o no llevar trigger de auditoria (la spec §9.2 lo pide; la migracion
+    006_audit_gdpr_quick_replies lo dejo fuera por esto).
 
     Que pasa
     --------
@@ -625,13 +625,13 @@ class TestLoginBajoRls:
 
     El marcador es `strict=True` a proposito: el dia que alguien arregle el
     login, este test pasara y CI fallara por xpass, avisando de que hay que
-    quitar el marcador y cerrar BUG-017.
+    quitar el marcador y cerrar BUG-025.
     """
 
     @pytest.mark.xfail(
         strict=True,
         reason=(
-            "BUG-017: el login consulta `users` sin contexto de tenant y la RLS "
+            "BUG-025: el login consulta `users` sin contexto de tenant y la RLS "
             "de esa tabla no lo tolera. Ver el docstring de la clase."
         ),
     )

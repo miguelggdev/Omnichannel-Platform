@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     META_WEBHOOK_VERIFY_TOKEN: str = ""
     META_GRAPH_API_VERSION: str = "v19.0"
 
+    # Google Calendar (Sprint 7) — un service account global (no OAuth2 por
+    # tenant): cada tenant comparte su calendario con el email del service
+    # account y guarda su calendar_id en agent_configs.config.scheduling.
+    GOOGLE_CALENDAR_CREDENTIALS_JSON: str = ""
+    GOOGLE_CALENDAR_ID: str = "primary"
+
     # Tenant por defecto para webhooks entrantes (MVP).
     # Los webhooks no llevan JWT, asi que el client_id no se puede deducir del request.
     # Hasta que exista la tabla `channel_configs` (Fase 2), el tenant se resuelve por

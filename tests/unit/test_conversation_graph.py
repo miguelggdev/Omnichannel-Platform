@@ -16,6 +16,7 @@ from app.agents.graph import (
     route_after_budget_check,
     route_after_intent,
     route_after_rag,
+    route_after_scheduling,
 )
 from tests.unit.agent_doubles import estado
 
@@ -49,10 +50,14 @@ class TestRouteAfterIntent:
         """Pedido explicito de humano y quejas escalan directo."""
         assert route_after_intent(estado(intent=intent)) == "human_handoff"
 
-    @pytest.mark.parametrize("intent", ["rag_query", "unknown", "scheduling", None])
+    @pytest.mark.parametrize("intent", ["rag_query", "unknown", None])
     def test_el_resto_intenta_rag_primero(self, intent: str | None) -> None:
-        """rag_query, unknown y scheduling (Sprint 7 aun no existe) van a RAG."""
+        """rag_query y unknown van a RAG."""
         assert route_after_intent(estado(intent=intent)) == "rag_query"
+
+    def test_scheduling_va_al_nodo_de_agendamiento(self) -> None:
+        """Desde Sprint 7, `scheduling` tiene su propio nodo (ya no cae a RAG)."""
+        assert route_after_intent(estado(intent="scheduling")) == "scheduling"
 
 
 class TestRouteAfterRag:
@@ -73,8 +78,20 @@ class TestRouteAfterRag:
         assert route_after_rag(estado(requires_handoff=False, training_mode=False)) == "respond"
 
 
+class TestRouteAfterScheduling:
+    """`route_after_scheduling`: decide respuesta o escalado tras el nodo de agendamiento."""
+
+    def test_requiere_handoff_escala(self) -> None:
+        """`scheduling_node` marco el handoff (calendario no disponible)."""
+        assert route_after_scheduling(estado(requires_handoff=True)) == "human_handoff"
+
+    def test_caso_normal_responde(self) -> None:
+        """Sin handoff, la respuesta generada se envia normalmente."""
+        assert route_after_scheduling(estado(requires_handoff=False)) == "respond"
+
+
 class TestBuildConversationGraph:
-    """El grafo se arma y compila con los 6 nodos del sprint."""
+    """El grafo se arma y compila con los 7 nodos (6 de Sprint 6 + scheduling)."""
 
     def test_compila_sin_checkpointer(self) -> None:
         """Compilar sin checkpointer no debe fallar ni abrir ninguna conexion."""
@@ -82,8 +99,8 @@ class TestBuildConversationGraph:
 
         assert compiled is not None
 
-    def test_tiene_los_seis_nodos(self) -> None:
-        """Los 6 nodos de la spec quedan registrados con su nombre."""
+    def test_tiene_los_siete_nodos(self) -> None:
+        """Los 6 nodos de Sprint 6 mas `scheduling` (Sprint 7) quedan registrados."""
         graph = build_conversation_graph()
 
         assert set(graph.nodes.keys()) == {
@@ -93,6 +110,7 @@ class TestBuildConversationGraph:
             "respond",
             "human_handoff",
             "training_mode_approval",
+            "scheduling",
         }
 
 
