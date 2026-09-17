@@ -118,6 +118,7 @@ async def _limpiar(client_id: uuid.UUID) -> None:
             "token_usage_logs",
             "token_budgets",
             "pending_responses",
+            "agent_action_logs",
             "messages",
             "conversations",
             "contact_identifiers",
