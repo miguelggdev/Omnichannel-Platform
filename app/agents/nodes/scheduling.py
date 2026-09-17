@@ -213,7 +213,16 @@ async def scheduling_node(state: ConversationState) -> dict[str, Any]:
             tool_results.append(str(resultado))
     except (SchedulingNotConfiguredError, CalendarCredentialsError, HttpError):
         logger.exception("Agendamiento no disponible para el tenant %s", client_id)
-        return {"requires_handoff": True, "handoff_reason": SCHEDULING_ERROR_REASON}
+        # BUG-024: si una tool anterior en el mismo turno ya tuvo exito (ej.
+        # se creo una cita) y una posterior en la misma respuesta del LLM
+        # falla, tool_results tiene lo que si se hizo. Se descartaba sin
+        # dejar constancia -- ni al humano que recibe el handoff, que veia
+        # "hubo un problema" sin saber que una accion ya se ejecuto de verdad.
+        return {
+            "requires_handoff": True,
+            "handoff_reason": SCHEDULING_ERROR_REASON,
+            "partial_results": tool_results or None,
+        }
 
     final = await _final_response(
         model_to_use=model_to_use,

@@ -245,4 +245,39 @@ class TestSchedulingNode:
         assert resultado == {
             "requires_handoff": True,
             "handoff_reason": modulo.SCHEDULING_ERROR_REASON,
+            "partial_results": None,
+        }
+
+    async def test_falla_deja_constancia_de_lo_que_ya_se_ejecuto(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BUG-024: si una tool anterior tuvo éxito, el handoff no debe perder ese resultado."""
+        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[[], None]))
+        _parchear_llm(
+            monkeypatch,
+            [
+                _FakeAIMessage(
+                    tool_calls=[
+                        {"name": "create_appointment", "args": {}, "id": "1"},
+                        {"name": "cancel_appointment", "args": {}, "id": "2"},
+                    ]
+                )
+            ],
+        )
+        tool_ok = _FakeTool("create_appointment", resultado="Cita creada exitosamente")
+        tool_falla = _FakeTool(
+            "cancel_appointment", excepcion=SchedulingNotConfiguredError("sin calendario")
+        )
+        monkeypatch.setattr(
+            modulo,
+            "_TOOLS_BY_NAME",
+            {"create_appointment": tool_ok, "cancel_appointment": tool_falla},
+        )
+
+        resultado = await modulo.scheduling_node(_estado())
+
+        assert resultado == {
+            "requires_handoff": True,
+            "handoff_reason": modulo.SCHEDULING_ERROR_REASON,
+            "partial_results": ["Cita creada exitosamente"],
         }
