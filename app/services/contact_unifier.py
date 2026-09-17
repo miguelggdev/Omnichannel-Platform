@@ -81,19 +81,32 @@ class ContactUnifier:
         """
         logger.info("Fusionando contacto %s en %s", source_id, target_id)
 
+        # Se busca el origen primero (no al final, como en el spec) para tener
+        # su client_id y filtrar con él el resto de las operaciones: RLS ya
+        # aisla por tenant, pero source_id/target_id salen de la URL de un
+        # endpoint HTTP, no de un valor inyectado server-side, así que llevan
+        # la misma defensa explícita que el resto del proyecto (ver
+        # `get_contact_or_404` en `app/api/v1/contacts.py`).
+        source = await self.session.get(Contact, source_id)
+        if source is None:
+            raise ContactNotFoundError(f"Contacto origen {source_id} no encontrado")
+        client_id = source.client_id
+
         await self.session.execute(
             update(ContactIdentifier)
-            .where(ContactIdentifier.contact_id == source_id)
+            .where(
+                ContactIdentifier.contact_id == source_id, ContactIdentifier.client_id == client_id
+            )
             .values(contact_id=target_id)
         )
         await self.session.execute(
             update(Conversation)
-            .where(Conversation.contact_id == source_id)
+            .where(Conversation.contact_id == source_id, Conversation.client_id == client_id)
             .values(contact_id=target_id)
         )
         await self.session.execute(
             update(InternalNote)
-            .where(InternalNote.contact_id == source_id)
+            .where(InternalNote.contact_id == source_id, InternalNote.client_id == client_id)
             .values(contact_id=target_id)
         )
 
@@ -103,7 +116,9 @@ class ContactUnifier:
         etiquetas_destino = set(
             (
                 await self.session.execute(
-                    select(ContactTag.tag_id).where(ContactTag.contact_id == target_id)
+                    select(ContactTag.tag_id).where(
+                        ContactTag.contact_id == target_id, ContactTag.client_id == client_id
+                    )
                 )
             )
             .scalars()
@@ -112,7 +127,9 @@ class ContactUnifier:
         etiquetas_origen = (
             (
                 await self.session.execute(
-                    select(ContactTag).where(ContactTag.contact_id == source_id)
+                    select(ContactTag).where(
+                        ContactTag.contact_id == source_id, ContactTag.client_id == client_id
+                    )
                 )
             )
             .scalars()
@@ -124,9 +141,6 @@ class ContactUnifier:
             else:
                 etiqueta.contact_id = target_id
 
-        source = await self.session.get(Contact, source_id)
-        if source is None:
-            raise ContactNotFoundError(f"Contacto origen {source_id} no encontrado")
         source.merged_into_id = target_id
 
         logger.info("Contacto %s fusionado en %s", source_id, target_id)
