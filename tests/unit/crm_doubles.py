@@ -105,6 +105,8 @@ class FakeContact:
         self.display_name = kwargs.get("display_name", "Ada L.")
         self.merged_into_id = kwargs.get("merged_into_id")
         self.metadata_ = kwargs.get("metadata_", {})
+        self.is_gdpr_deleted = kwargs.get("is_gdpr_deleted", False)
+        self.gdpr_deleted_at = kwargs.get("gdpr_deleted_at")
         self.created_at = kwargs.get("created_at", AHORA)
         self.updated_at = kwargs.get("updated_at", AHORA)
 
@@ -134,6 +136,8 @@ class FakeMessage:
     def __init__(self, **kwargs: Any) -> None:
         """Construye el mensaje con valores por defecto razonables."""
         self.id = kwargs.get("id") or uuid.uuid4()
+        self.conversation_id = kwargs.get("conversation_id") or uuid.uuid4()
+        self.metadata_ = kwargs.get("metadata_", {})
         self.direction = kwargs.get("direction", "inbound")
         self.message_type = kwargs.get("message_type", "text")
         self.content = kwargs.get("content", "hola")
@@ -174,6 +178,8 @@ class FakeUser:
         """Construye el usuario con valores por defecto razonables."""
         self.id = kwargs.get("id") or uuid.uuid4()
         self.client_id = kwargs.get("client_id") or uuid.uuid4()
+        self.first_name = kwargs.get("first_name", "Grace")
+        self.last_name = kwargs.get("last_name", "Hopper")
         self.is_active = kwargs.get("is_active", True)
 
 

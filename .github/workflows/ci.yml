@@ -175,8 +175,11 @@ jobs:
         #
         # DATABASE_URL apunta a app_user, NO a test_user: ver el paso anterior. Los
         # tests-guardia de test_document_pipeline.py verifican esta premisa.
+        # tests/e2e/ va aqui y no en el job de unitarios: necesita PostgreSQL y
+        # Redis igual que integracion. Sin incluirlo, el recorrido completo del
+        # Sprint 8 (webhook -> grafo -> respuesta) no lo ejecutaria nadie.
         run: |
-          pytest tests/integration/ -v --tb=short --run-db
+          pytest tests/integration/ tests/e2e/ -v --tb=short --run-db
         env:
           DATABASE_URL: "postgresql+asyncpg://app_user:app_password@localhost:5432/test_omnichannel"
           REDIS_URL: "redis://localhost:6379/0"
