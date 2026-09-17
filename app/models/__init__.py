@@ -1,4 +1,4 @@
-"""SQLAlchemy models — 18 tablas MVP.
+"""SQLAlchemy models — 20 tablas MVP.
 
 Exporta todos los modelos para import directo:
     from app.models import User, Contact, Conversation
@@ -18,6 +18,7 @@ from app.models.internal_note import InternalNote
 from app.models.message import Message
 from app.models.pending_response import PendingResponse
 from app.models.quick_reply import QuickReply
+from app.models.service_type import Appointment, ServiceType
 from app.models.tag import Tag
 from app.models.token_budget import TokenBudget
 from app.models.token_usage_log import TokenUsageLog
@@ -26,6 +27,7 @@ from app.models.webhook_dedup import WebhookDedup
 
 __all__ = [
     "AgentConfig",
+    "Appointment",
     "ApprovedResponse",
     "Base",
     "Client",
@@ -39,6 +41,7 @@ __all__ = [
     "Message",
     "PendingResponse",
     "QuickReply",
+    "ServiceType",
     "Tag",
     "TenantBaseModel",
     "TokenBudget",
