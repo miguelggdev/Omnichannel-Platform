@@ -50,6 +50,104 @@ def _make_client_mock(client_id: uuid.UUID, is_active: bool = True) -> MagicMock
     return client
 
 
+class _FilaAuth:
+    """Fila que devuelve `auth_lookup_user()`: usuario y estado de su tenant."""
+
+    def __init__(self, **kwargs: object) -> None:
+        """Construye la fila con valores por defecto razonables."""
+        self.id = kwargs.get("id") or uuid.uuid4()
+        self.client_id = kwargs.get("client_id") or uuid.uuid4()
+        self.email = kwargs.get("email", "admin@tenant.com")
+        self.password_hash = kwargs["password_hash"]
+        self.first_name = kwargs.get("first_name", "Ada")
+        self.last_name = kwargs.get("last_name", "Admin")
+        self.role = kwargs.get("role", "admin")
+        self.is_active = kwargs.get("is_active", True)
+        self.client_is_active = kwargs.get("client_is_active", True)
+
+
+def _fila_auth(password: str = "SecurePassword123", **kwargs: object) -> _FilaAuth:
+    """Arma la fila de `auth_lookup_user()` con el hash ya calculado.
+
+    Args:
+        password: Password en claro del que sale el hash.
+        **kwargs: Campos a sobreescribir.
+
+    Returns:
+        La fila lista para que la devuelva la sesión falsa.
+    """
+    return _FilaAuth(password_hash=hash_password(password), **kwargs)
+
+
+class _SesionDeLogin:
+    """Sesión falsa que devuelve una única fila y registra lo que se le pidió."""
+
+    def __init__(self, fila: _FilaAuth | None) -> None:
+        """Guarda la fila que devolverá la consulta."""
+        self.fila = fila
+        self.ejecutadas: list[object] = []
+
+    async def __aenter__(self) -> "_SesionDeLogin":
+        """Entra al contexto."""
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        """Sale del contexto."""
+        return
+
+    @asynccontextmanager
+    async def begin(self):
+        """`login` abre la transacción con `session.begin()`."""
+        yield
+
+    async def execute(self, stmt: object = None, params: object = None) -> "_SesionDeLogin":
+        """Registra la sentencia y se devuelve como resultado."""
+        self.ejecutadas.append(stmt)
+        return self
+
+    def one_or_none(self) -> _FilaAuth | None:
+        """Devuelve la fila prefijada."""
+        return self.fila
+
+
+def _tenant_session_falso(registro: list | None = None):
+    """Sustituto de `tenant_session` que anota con qué contexto se abrió.
+
+    Args:
+        registro: Lista donde apuntar los `(client_id, user_id)` recibidos.
+
+    Returns:
+        Un context manager asíncrono con la misma firma.
+    """
+
+    @asynccontextmanager
+    async def _cm(client_id, user_id=None):
+        if registro is not None:
+            registro.append((client_id, user_id))
+        yield _SesionDeLogin(None)
+
+    return _cm
+
+
+def _login_falso(fila: _FilaAuth | None):
+    """Parchea de una vez la búsqueda y la escritura del último acceso.
+
+    Args:
+        fila: Lo que devuelve `auth_lookup_user()`; None si el email no existe.
+
+    Returns:
+        Context manager que aplica los dos parches.
+    """
+    from contextlib import ExitStack
+
+    pila = ExitStack()
+    pila.enter_context(
+        patch("app.api.v1.auth.AsyncSessionLocal", return_value=_SesionDeLogin(fila))
+    )
+    pila.enter_context(patch("app.api.v1.auth.tenant_session", _tenant_session_falso()))
+    return pila
+
+
 @pytest_asyncio.fixture
 async def client():
     """Cliente HTTP de test sin lifespan (evita conectar a DB/Redis reales)."""
@@ -101,93 +199,151 @@ class TestHealthEndpoint:
 
 
 class TestLoginEndpoint:
-    """Tests del endpoint POST /api/v1/auth/login."""
+    """Tests del endpoint POST /api/v1/auth/login.
+
+    Desde BUG-017 el login no usa el ORM: busca con `auth_lookup_user()`, una
+    funcion SECURITY DEFINER que devuelve una fila con todo lo que hace falta
+    (incluido el estado del tenant), porque `users` y `clients` tienen RLS y
+    aqui todavia no se sabe a que tenant pertenece el email.
+    """
 
     @pytest.mark.asyncio
     async def test_login_success(self, client: AsyncClient) -> None:
         """Login con credenciales válidas retorna tokens."""
-        user = _make_user_mock(password="SecurePassword123")
-        client_mock = _make_client_mock(user.client_id, is_active=True)
+        fila = _fila_auth(password="SecurePassword123")
 
-        with patch("app.api.v1.auth.AsyncSessionLocal") as mock_db:
-            mock_session = AsyncMock()
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_session.begin = MagicMock(
-                return_value=AsyncMock(
-                    __aenter__=AsyncMock(), __aexit__=AsyncMock(return_value=False)
-                )
-            )
-
-            # Primera llamada: buscar User; Segunda: buscar Client
-            mock_result_user = MagicMock()
-            mock_result_user.scalar_one_or_none.return_value = user
-            mock_result_client = MagicMock()
-            mock_result_client.scalar_one_or_none.return_value = client_mock
-            mock_session.execute = AsyncMock(side_effect=[mock_result_user, mock_result_client])
-            mock_db.return_value = mock_session
-
+        with _login_falso(fila):
             resp = await client.post(
                 "/api/v1/auth/login",
                 json={"email": "admin@tenant.com", "password": "SecurePassword123"},
             )
 
-            assert resp.status_code == 200
-            data = resp.json()
-            assert "access_token" in data
-            assert "refresh_token" in data
-            assert data["token_type"] == "bearer"
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "access_token" in data
+        assert "refresh_token" in data
+        assert data["token_type"] == "bearer"
+
+    @pytest.mark.asyncio
+    async def test_login_una_sola_consulta_sin_contexto_de_tenant(
+        self, client: AsyncClient
+    ) -> None:
+        """El estado del tenant viene en la misma fila, no en una segunda consulta.
+
+        `clients` tambien tiene RLS: consultarla aparte desde aqui volveria a
+        chocar con lo mismo que BUG-017.
+        """
+        fila = _fila_auth()
+        sesion = _SesionDeLogin(fila)
+
+        with (
+            patch("app.api.v1.auth.AsyncSessionLocal", return_value=sesion),
+            patch("app.api.v1.auth.tenant_session", _tenant_session_falso()),
+        ):
+            await client.post(
+                "/api/v1/auth/login",
+                json={"email": "admin@tenant.com", "password": "SecurePassword123"},
+            )
+
+        assert len(sesion.ejecutadas) == 1
+        assert "auth_lookup_user" in str(sesion.ejecutadas[0])
 
     @pytest.mark.asyncio
     async def test_login_invalid_password(self, client: AsyncClient) -> None:
         """Login con password incorrecto retorna 401."""
-        user = _make_user_mock(password="SecurePassword123")
-
-        with patch("app.api.v1.auth.AsyncSessionLocal") as mock_db:
-            mock_session = AsyncMock()
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_session.begin = MagicMock(
-                return_value=AsyncMock(
-                    __aenter__=AsyncMock(), __aexit__=AsyncMock(return_value=False)
-                )
-            )
-            mock_result = MagicMock()
-            mock_result.scalar_one_or_none.return_value = user
-            mock_session.execute = AsyncMock(return_value=mock_result)
-            mock_db.return_value = mock_session
-
+        with _login_falso(_fila_auth(password="SecurePassword123")):
             resp = await client.post(
                 "/api/v1/auth/login",
                 json={"email": "admin@tenant.com", "password": "WrongPassword99"},
             )
 
-            assert resp.status_code == 401
-            assert resp.json()["error_code"] == "INVALID_TOKEN"
+        assert resp.status_code == 401
+        assert resp.json()["error_code"] == "INVALID_TOKEN"
 
     @pytest.mark.asyncio
     async def test_login_user_not_found(self, client: AsyncClient) -> None:
         """Login con email inexistente retorna 401."""
-        with patch("app.api.v1.auth.AsyncSessionLocal") as mock_db:
-            mock_session = AsyncMock()
-            mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-            mock_session.__aexit__ = AsyncMock(return_value=False)
-            mock_session.begin = MagicMock(
-                return_value=AsyncMock(
-                    __aenter__=AsyncMock(), __aexit__=AsyncMock(return_value=False)
-                )
-            )
-            mock_result = MagicMock()
-            mock_result.scalar_one_or_none.return_value = None
-            mock_session.execute = AsyncMock(return_value=mock_result)
-            mock_db.return_value = mock_session
-
+        with _login_falso(None):
             resp = await client.post(
                 "/api/v1/auth/login",
                 json={"email": "noexiste@test.com", "password": "Whatever12345"},
             )
 
-            assert resp.status_code == 401
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_login_usuario_desactivado(self, client: AsyncClient) -> None:
+        """Un usuario dado de baja no entra, aunque el password sea correcto."""
+        with _login_falso(_fila_auth(is_active=False)):
+            resp = await client.post(
+                "/api/v1/auth/login",
+                json={"email": "admin@tenant.com", "password": "SecurePassword123"},
+            )
+
+        assert resp.status_code == 401
+        assert resp.json()["error_code"] == "FORBIDDEN"
+
+    @pytest.mark.asyncio
+    async def test_login_tenant_suspendido(self, client: AsyncClient) -> None:
+        """Si la organización está suspendida, ninguno de sus usuarios entra."""
+        with _login_falso(_fila_auth(client_is_active=False)):
+            resp = await client.post(
+                "/api/v1/auth/login",
+                json={"email": "admin@tenant.com", "password": "SecurePassword123"},
+            )
+
+        assert resp.status_code == 401
+        assert resp.json()["error_code"] == "FORBIDDEN"
+
+    @pytest.mark.asyncio
+    async def test_login_registra_el_ultimo_acceso_con_contexto_de_tenant(
+        self, client: AsyncClient
+    ) -> None:
+        """El UPDATE de `last_login_at` va dentro del tenant, no suelto.
+
+        Es la otra mitad de BUG-017: escribir en `users` sin contexto tambien
+        choca con la RLS. Aqui ya se conoce el tenant, asi que vuelve al camino
+        normal y ademas queda firmado por el propio usuario.
+        """
+        fila = _fila_auth()
+        contextos: list[tuple] = []
+
+        with (
+            patch("app.api.v1.auth.AsyncSessionLocal", return_value=_SesionDeLogin(fila)),
+            patch("app.api.v1.auth.tenant_session", _tenant_session_falso(contextos)),
+        ):
+            resp = await client.post(
+                "/api/v1/auth/login",
+                json={"email": "admin@tenant.com", "password": "SecurePassword123"},
+            )
+
+        assert resp.status_code == 200
+        assert contextos == [(fila.client_id, fila.id)]
+
+    @pytest.mark.asyncio
+    async def test_un_fallo_al_anotar_el_acceso_no_tumba_el_login(
+        self, client: AsyncClient
+    ) -> None:
+        """La fecha de último acceso es contabilidad, no autenticación.
+
+        Negar un login válido por no poder escribir un dato accesorio dejaría al
+        usuario fuera por algo que no tiene que ver con sus credenciales.
+        """
+        fila = _fila_auth()
+
+        def _revienta(*_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("base caida")
+
+        with (
+            patch("app.api.v1.auth.AsyncSessionLocal", return_value=_SesionDeLogin(fila)),
+            patch("app.api.v1.auth.tenant_session", _revienta),
+        ):
+            resp = await client.post(
+                "/api/v1/auth/login",
+                json={"email": "admin@tenant.com", "password": "SecurePassword123"},
+            )
+
+        assert resp.status_code == 200
 
 
 class TestProtectedEndpoints:
