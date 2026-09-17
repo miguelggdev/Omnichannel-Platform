@@ -15,6 +15,7 @@ Colas:
 import os
 
 from celery import Celery
+from celery.schedules import crontab
 from kombu import Exchange, Queue
 
 # ─── Instancia de Celery ────────────────────────────────────────────────────
@@ -90,6 +91,18 @@ celery_app.conf.update(
         "auto-close-conversations": {
             "task": "app.tasks.bulk_auto_close_conversations",
             "schedule": 900.0,  # cada 15 minutos
+            "options": {"queue": "bulk"},
+        },
+        "daily-backup": {
+            "task": "app.tasks.bulk_run_backup",
+            "schedule": crontab(hour=3, minute=0),  # 03:00 UTC
+            "options": {"queue": "bulk"},
+        },
+        "monthly-restore-test": {
+            "task": "app.tasks.bulk_run_restore_test",
+            # Dia 1 de cada mes a las 04:00 UTC, una hora despues del backup
+            # diario: asi la prueba corre sobre un dump recien subido.
+            "schedule": crontab(day_of_month="1", hour=4, minute=0),
             "options": {"queue": "bulk"},
         },
         "check-token-budgets": {
