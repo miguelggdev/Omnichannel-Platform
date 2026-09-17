@@ -66,7 +66,10 @@ def _ejecutar(script: Path, timeout: int) -> dict[str, Any]:
         raise RuntimeError(f"No existe el script de mantenimiento: {script}")
 
     try:
-        resultado = subprocess.run(  # noqa: S603 — lista fija, sin shell
+        # nosec B603 / noqa S603: la lista de argumentos es fija y `script` es una
+        # ruta calculada desde la ubicacion del modulo, no entrada del usuario.
+        # No hay shell de por medio.
+        resultado = subprocess.run(  # noqa: S603  # nosec B603
             ["/bin/bash", str(script)],
             capture_output=True,
             text=True,

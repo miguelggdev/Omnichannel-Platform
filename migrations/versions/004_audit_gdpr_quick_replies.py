@@ -45,8 +45,10 @@ AUDITED_TABLES = ("contacts", "conversations", "messages")
 
 def upgrade() -> None:
     # ─── 1. audit_logs ──────────────────────────────────────────────────────
-    op.execute("CREATE TYPE audit_action AS ENUM ('INSERT', 'UPDATE', 'DELETE')")
-
+    # El enum `audit_action` lo crea SQLAlchemy al ejecutar create_table con
+    # sa.Enum(), igual que los cinco de 001_baseline. Crearlo antes a mano y
+    # dejar que create_table lo cree otra vez es lo que rompio la primera
+    # version de esta migracion ("type audit_action already exists").
     op.create_table(
         "audit_logs",
         sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
@@ -55,7 +57,7 @@ def upgrade() -> None:
         sa.Column("record_id", sa.UUID(), nullable=False),
         sa.Column(
             "action",
-            sa.Enum("INSERT", "UPDATE", "DELETE", name="audit_action", create_type=False),
+            sa.Enum("INSERT", "UPDATE", "DELETE", name="audit_action"),
             nullable=False,
         ),
         sa.Column("old_values", sa.dialects.postgresql.JSONB(), nullable=True),
