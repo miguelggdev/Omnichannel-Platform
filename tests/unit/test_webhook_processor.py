@@ -353,6 +353,79 @@ class TestProcessMessage:
         assert capturado["channel"] == "facebook"
 
 
+# ─── No responder cuando la conversacion ya es de un humano ──────────────────
+
+
+class TestNoEncolaConversacionHumana:
+    """El grafo de IA no sabe de `conversations.status`: el gate va aqui.
+
+    Sin esto, un contacto ya escalado a `waiting_human` o siendo atendido en
+    `human_active` seguia recibiendo respuestas automaticas del bot en cada
+    mensaje nuevo, porque `_resolve_conversation` reutiliza cualquier
+    conversacion que no este en `CLOSED_STATUSES`.
+    """
+
+    async def _correr(self, monkeypatch: pytest.MonkeyPatch, status: str) -> dict[str, Any]:
+        client_id = uuid.uuid4()
+        monkeypatch.setattr(wp, "_resolve_client_id", lambda provider, channel: client_id)
+
+        conversacion_existente = type(
+            "Conversation", (), {"id": uuid.uuid4(), "status": status, "last_message_at": None}
+        )()
+        session = FakeSession(results=[None, conversacion_existente])
+
+        class FakeTenantSession:
+            async def __aenter__(self) -> FakeSession:
+                return session
+
+            async def __aexit__(self, *exc: Any) -> None:
+                return None
+
+        monkeypatch.setattr(wp, "tenant_session", lambda _client_id: FakeTenantSession())
+
+        async def sin_duplicado(*args: Any, **kwargs: Any) -> bool:
+            return False
+
+        async def persistido_ok(*args: Any, **kwargs: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(wp, "is_duplicate_persisted", sin_duplicado)
+        monkeypatch.setattr(wp, "persist_dedup", persistido_ok)
+
+        capturado: dict[str, Any] = {}
+        monkeypatch.setattr(wp, "_enqueue_ai_processing", lambda **kw: capturado.update(kw))
+
+        message_data = {
+            "external_message_id": "wa.1",
+            "sender_identifier": "573001112233",
+            "channel": "whatsapp",
+            "text": "hola de nuevo",
+            "timestamp": "2026-09-09T20:00:00+00:00",
+            "raw_payload": {},
+        }
+
+        await wp._process_message("ycloud", "whatsapp", message_data)
+        return capturado
+
+    @pytest.mark.parametrize("status", ["human_active", "waiting_human"])
+    async def test_no_encola_si_un_humano_ya_es_dueno(
+        self, monkeypatch: pytest.MonkeyPatch, status: str
+    ) -> None:
+        """`human_active` y `waiting_human` cortan antes de tocar la IA."""
+        capturado = await self._correr(monkeypatch, status)
+
+        assert capturado == {}
+
+    @pytest.mark.parametrize("status", ["new", "bot_active", "waiting_client"])
+    async def test_si_encola_en_los_demas_estados_activos(
+        self, monkeypatch: pytest.MonkeyPatch, status: str
+    ) -> None:
+        """Los estados donde el bot sigue siendo dueno de la conversacion no cambian."""
+        capturado = await self._correr(monkeypatch, status)
+
+        assert capturado["channel"] == "whatsapp"
+
+
 # ─── Tarea Celery: reintentos y DLQ ──────────────────────────────────────────
 
 
