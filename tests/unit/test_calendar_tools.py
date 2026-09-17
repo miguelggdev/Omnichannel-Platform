@@ -76,15 +76,19 @@ class _FakeAppointment:
 class _FakeCalendarService:
     """Sustituto de `GoogleCalendarService`."""
 
-    def __init__(self, timezone: str = "America/Bogota") -> None:
+    def __init__(self, timezone: str = "America/Bogota", conflicto: bool = False) -> None:
         self.timezone = timezone
         self.slots: list[CalendarSlot] = []
+        self.conflicto = conflicto
         self.created: dict[str, Any] | None = None
         self.modified: dict[str, Any] | None = None
         self.cancelled_event_id: str | None = None
 
     async def check_availability(self, **kwargs: Any) -> list[CalendarSlot]:
         return self.slots
+
+    async def has_conflict(self, start: Any, end: Any) -> bool:
+        return self.conflicto
 
     async def create_event(self, **kwargs: Any) -> CalendarEvent:
         self.created = kwargs
@@ -228,7 +232,8 @@ class TestCreateAppointment:
     async def test_contacto_inexistente(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Un `contact_id` que no resuelve a nadie no debe romper con AttributeError."""
         tipo = _FakeServiceType()
-        sesion = FakeSession(resultados=[tipo, None])
+        # tipo (find_service_type), None (advisory lock, valor ignorado), None (contacto)
+        sesion = FakeSession(resultados=[tipo, None, None])
         parchear_tenant_session(monkeypatch, modulo, sesion)
         _parchear_calendar(monkeypatch, _FakeCalendarService())
 
@@ -242,13 +247,34 @@ class TestCreateAppointment:
 
         assert "No encontré ese contacto" in resultado
 
+    async def test_horario_ya_no_disponible_no_crea_la_cita(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BUG-023: si `has_conflict()` dice que ya no está libre, no se llega a crear nada."""
+        tipo = _FakeServiceType()
+        # tipo (find_service_type), None (advisory lock, valor ignorado)
+        sesion = FakeSession(resultados=[tipo, None])
+        parchear_tenant_session(monkeypatch, modulo, sesion)
+        fake_calendar = _FakeCalendarService(conflicto=True)
+        _parchear_calendar(monkeypatch, fake_calendar)
+
+        resultado = await modulo.create_appointment.ainvoke(
+            {"datetime_iso": "2026-09-21T10:00:00", "service_type_name": "Consulta"},
+            config=_config(uuid.uuid4()),
+        )
+
+        assert "ya no está disponible" in resultado
+        assert fake_calendar.created is None
+        assert sesion.agregados_de(modulo.Appointment) == []
+
     async def test_crea_el_evento_y_persiste_la_cita(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """El evento se crea con el título correcto y el `Appointment` queda agregado."""
         tipo = _FakeServiceType(name="Consulta", duration_minutes=45)
         contacto = _FakeContact(display_name="Ana Pérez")
         contact_id = uuid.uuid4()
         conversation_id = uuid.uuid4()
-        sesion = FakeSession(resultados=[tipo, contacto])
+        # tipo (find_service_type), None (advisory lock, valor ignorado), contacto
+        sesion = FakeSession(resultados=[tipo, None, contacto])
         parchear_tenant_session(monkeypatch, modulo, sesion)
         fake_calendar = _FakeCalendarService()
         _parchear_calendar(monkeypatch, fake_calendar)
@@ -270,6 +296,26 @@ class TestCreateAppointment:
         assert citas[0].conversation_id == conversation_id
         assert citas[0].contact_id == contact_id
         assert citas[0].starts_at.tzinfo is not None
+
+    async def test_lock_se_pide_con_una_clave_por_tenant(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """El advisory lock se pide con `pg_advisory_xact_lock`, con una clave por tenant."""
+        tipo = _FakeServiceType()
+        contacto = _FakeContact()
+        sesion = FakeSession(resultados=[tipo, None, contacto])
+        parchear_tenant_session(monkeypatch, modulo, sesion)
+        _parchear_calendar(monkeypatch, _FakeCalendarService())
+        client_id = uuid.uuid4()
+
+        await modulo.create_appointment.ainvoke(
+            {"datetime_iso": "2026-09-21T10:00:00", "service_type_name": "Consulta"},
+            config=_config(client_id),
+        )
+
+        # executed[0] es el SELECT de _find_service_type (misma sesion falsa
+        # compartida via parchear_tenant_session); executed[1] es el advisory lock.
+        lock_stmt = sesion.executed[1]
+        assert "pg_advisory_xact_lock" in str(lock_stmt)
+        assert lock_stmt.compile().params["clave"] == f"appointments:{client_id}"
 
 
 # ─── modify_appointment ──────────────────────────────────────────────────────

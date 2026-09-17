@@ -286,6 +286,60 @@ class TestCheckAvailability:
         assert fake._freebusy.body_recibido["items"] == [{"id": "cal-1"}]
 
 
+# ─── has_conflict ─────────────────────────────────────────────────────────────
+
+
+class TestHasConflict:
+    """`has_conflict()` — recheck puntual antes de crear una cita (BUG-023)."""
+
+    async def test_sin_eventos_ocupados_no_hay_conflicto(self) -> None:
+        """Un rango sin nada ocupado no es un conflicto."""
+        fake = _FakeGoogleService(freebusy_respuesta={"calendars": {"cal-1": {"busy": []}}})
+        servicio = _servicio(fake)
+
+        resultado = await servicio.has_conflict(
+            start=datetime(2026, 9, 21, 10, 0), end=datetime(2026, 9, 21, 11, 0)
+        )
+
+        assert resultado is False
+
+    async def test_evento_superpuesto_es_conflicto(self) -> None:
+        """Cualquier periodo ocupado devuelto es, por construccion, un conflicto."""
+        fake = _FakeGoogleService(
+            freebusy_respuesta={
+                "calendars": {
+                    "cal-1": {
+                        "busy": [
+                            {
+                                "start": "2026-09-21T10:00:00-05:00",
+                                "end": "2026-09-21T11:00:00-05:00",
+                            }
+                        ]
+                    }
+                }
+            }
+        )
+        servicio = _servicio(fake)
+
+        resultado = await servicio.has_conflict(
+            start=datetime(2026, 9, 21, 10, 0), end=datetime(2026, 9, 21, 11, 0)
+        )
+
+        assert resultado is True
+
+    async def test_consulta_acota_el_rango_exacto(self) -> None:
+        """`timeMin`/`timeMax` son el rango exacto que se quiere reservar."""
+        fake = _FakeGoogleService(freebusy_respuesta={"calendars": {"cal-1": {"busy": []}}})
+        servicio = _servicio(fake, calendar_id="cal-1")
+        start = datetime(2026, 9, 21, 10, 0)
+        end = datetime(2026, 9, 21, 11, 0)
+
+        await servicio.has_conflict(start=start, end=end)
+
+        assert fake._freebusy.body_recibido["timeMin"] == start.isoformat()
+        assert fake._freebusy.body_recibido["timeMax"] == end.isoformat()
+
+
 # ─── create_event / modify_event / cancel_event / list_events ───────────────
 
 

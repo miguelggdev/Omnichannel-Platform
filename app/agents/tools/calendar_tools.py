@@ -33,7 +33,7 @@ from zoneinfo import ZoneInfo
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.database import tenant_session
 from app.models.contact import Contact
@@ -197,25 +197,43 @@ async def create_appointment(
     start = _localizar(start, calendar.timezone)
     end = start + timedelta(minutes=service_type.duration_minutes)
 
+    # Todo lo que sigue queda en UNA sola transacción, con un advisory lock
+    # transaccional (pg_advisory_xact_lock: se libera solo al COMMIT/ROLLBACK,
+    # el único modo compatible con el Transaction Pooler de Supavisor) por
+    # tenant (BUG-023, ver MEMORY.md). check_availability() y esta tool son
+    # dos tool-calls separadas -- pueden pasar turnos enteros de conversación
+    # entre una y otra, o dos conversaciones del mismo tenant pedir el mismo
+    # horario a la vez. Sin el lock, dos llamadas concurrentes podrían pasar
+    # el recheck de abajo a la vez y crear dos eventos superpuestos. El lock
+    # se sostiene durante el recheck, la llamada a Calendar y el INSERT, no
+    # solo la escritura en la base.
     async with tenant_session(client_id) as session:
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:clave))").bindparams(
+                clave=f"appointments:{client_id}"
+            )
+        )
+
+        if await calendar.has_conflict(start, end):
+            return "Ese horario ya no está disponible. ¿Quieres que revise otros horarios?"
+
         stmt = select(Contact).where(Contact.id == contact_id, Contact.client_id == client_id)
         contact = (await session.execute(stmt)).scalar_one_or_none()
-    if contact is None:
-        return "No encontré ese contacto."
-    contact_name = (
-        contact.display_name
-        or f"{contact.first_name or ''} {contact.last_name or ''}".strip()
-        or "Contacto"
-    )
+        if contact is None:
+            return "No encontré ese contacto."
+        contact_name = (
+            contact.display_name
+            or f"{contact.first_name or ''} {contact.last_name or ''}".strip()
+            or "Contacto"
+        )
 
-    event = await calendar.create_event(
-        summary=f"{service_type_name} - {contact_name}",
-        start=start,
-        end=end,
-        description=notes,
-    )
+        event = await calendar.create_event(
+            summary=f"{service_type_name} - {contact_name}",
+            start=start,
+            end=end,
+            description=notes,
+        )
 
-    async with tenant_session(client_id) as session:
         session.add(
             Appointment(
                 client_id=client_id,

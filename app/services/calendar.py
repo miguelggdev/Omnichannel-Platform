@@ -276,6 +276,48 @@ class GoogleCalendarService:
 
         return slots
 
+    async def has_conflict(self, start: datetime, end: datetime) -> bool:
+        """Verifica si `[start, end)` se superpone con algún evento ya ocupado.
+
+        A diferencia de `check_availability()` (que calcula todos los huecos
+        libres de un día), esto sólo pregunta por el rango exacto que se está
+        por reservar. `create_appointment` (`app/agents/tools/calendar_tools.py`)
+        lo usa justo antes de crear el evento, para no confiar en una
+        disponibilidad consultada turnos de conversación atrás — entre que el
+        LLM llamó `check_availability` y el usuario confirmó, ese horario pudo
+        haberse ocupado (BUG-023, ver MEMORY.md).
+
+        Args:
+            start: Inicio del rango a verificar.
+            end: Fin del rango a verificar.
+
+        Returns:
+            `True` si hay al menos un evento ocupado que se superpone.
+
+        Raises:
+            HttpError: Si la consulta a la API de Google falla.
+        """
+        service = await self._get_service()
+        body = {
+            "timeMin": start.isoformat(),
+            "timeMax": end.isoformat(),
+            "items": [{"id": self.calendar_id}],
+            "timeZone": self.timezone,
+        }
+        try:
+            freebusy = await asyncio.to_thread(
+                lambda: service.freebusy().query(body=body).execute()
+            )
+        except HttpError:
+            logger.exception(
+                "Error verificando conflictos en Calendar (calendar_id=%s)", self.calendar_id
+            )
+            raise
+
+        # timeMin/timeMax ya acotan la consulta al rango exacto: cualquier
+        # periodo ocupado devuelto necesariamente se superpone con el.
+        return len(freebusy["calendars"][self.calendar_id]["busy"]) > 0
+
     async def create_event(
         self,
         summary: str,
