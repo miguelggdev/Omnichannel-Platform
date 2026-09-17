@@ -87,11 +87,13 @@ def _parchear_llm(monkeypatch: pytest.MonkeyPatch, respuestas: list[_FakeAIMessa
 def _estado(
     client_id: uuid.UUID | None = None,
     conversation_id: uuid.UUID | None = None,
+    contact_id: uuid.UUID | None = None,
     texto: str = "quiero una cita",
 ) -> dict[str, Any]:
     return {
         "client_id": str(client_id or uuid.uuid4()),
         "conversation_id": str(conversation_id or uuid.uuid4()),
+        "contact_id": str(contact_id or uuid.uuid4()),
         "message": {"text": texto},
         "model_to_use": "gpt-4o",
     }
@@ -182,8 +184,9 @@ class TestSchedulingNode:
 
         client_id = uuid.uuid4()
         conversation_id = uuid.uuid4()
+        contact_id = uuid.uuid4()
         resultado = await modulo.scheduling_node(
-            _estado(client_id=client_id, conversation_id=conversation_id)
+            _estado(client_id=client_id, conversation_id=conversation_id, contact_id=contact_id)
         )
 
         assert resultado == {
@@ -192,7 +195,11 @@ class TestSchedulingNode:
         }
         assert tool.llamada["args"] == {"date": "2026-09-21"}
         assert tool.llamada["config"] == {
-            "configurable": {"client_id": str(client_id), "conversation_id": str(conversation_id)}
+            "configurable": {
+                "client_id": str(client_id),
+                "conversation_id": str(conversation_id),
+                "contact_id": str(contact_id),
+            }
         }
 
     async def test_tool_no_reconocida_no_rompe_el_nodo(

@@ -7,6 +7,17 @@ lo excluye del schema que ve el modelo (confirmado: `tool.args` no incluye
 `config`) y lo inyecta en runtime a partir del `config=` que recibe `.ainvoke()`
 en `app/agents/nodes/scheduling.py`.
 
+`contact_id` sigue el mismo criterio y por el mismo motivo: se inyecta desde
+`config["configurable"]["contact_id"]` (el contacto real de la conversación,
+disponible en `ConversationState`), no es un argumento que el LLM rellene.
+Antes de este fix, `create_appointment`/`list_appointments` pedían `contact_id`
+como argumento normal — pero GPT-4o no tiene ninguna fuente legítima de ese
+UUID interno (nunca aparece en el system prompt ni en la conversación), así
+que en el mejor caso lo inventaba y `UUID(contact_id)` explotaba con
+`ValueError`, y en el peor caso el diseño dejaba abierta la puerta a que el
+bot operara sobre el contacto equivocado dentro del mismo tenant. Un contacto
+que chatea con el bot solo puede agendar/consultar sus propias citas.
+
 Cada tool usa `@tool(parse_docstring=True)`: el schema de argumentos que ve el
 LLM (nombre, tipo, descripcion) sale del docstring Google-style de la funcion,
 que ya es obligatorio por CLAUDE.md — no hace falta declarar un `BaseModel` de
@@ -18,6 +29,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
@@ -43,6 +55,39 @@ def _client_id(config: RunnableConfig) -> UUID:
     return UUID(config["configurable"]["client_id"])
 
 
+def _contact_id(config: RunnableConfig) -> UUID:
+    """Extrae el `contact_id` inyectado por el nodo, nunca provisto por el LLM.
+
+    Args:
+        config: Config que LangChain inyecta a partir de `.ainvoke(..., config=...)`.
+
+    Returns:
+        UUID del contacto real de la conversación en curso.
+    """
+    return UUID(config["configurable"]["contact_id"])
+
+
+def _localizar(momento: datetime, timezone: str) -> datetime:
+    """Adjunta el timezone del tenant a un datetime naive del LLM.
+
+    `Appointment.starts_at`/`ends_at` son `TIMESTAMPTZ`: guardar un datetime
+    naive ahí lo interpreta como UTC (asyncpg), no como la hora local del
+    tenant que el LLM en realidad quiso decir — corrimiento silencioso de
+    varias horas entre lo que muestra Google Calendar y lo que queda en la
+    fila de `appointments`. Si el LLM ya mandó un offset explícito, se respeta.
+
+    Args:
+        momento: Datetime parseado de la entrada del LLM.
+        timezone: Zona horaria IANA del tenant.
+
+    Returns:
+        El mismo datetime, con tzinfo si no lo traía.
+    """
+    if momento.tzinfo is not None:
+        return momento
+    return momento.replace(tzinfo=ZoneInfo(timezone))
+
+
 async def _find_service_type(client_id: UUID, name: str) -> ServiceType | None:
     """Busca un tipo de servicio activo por nombre exacto.
 
@@ -54,7 +99,11 @@ async def _find_service_type(client_id: UUID, name: str) -> ServiceType | None:
         El tipo de servicio, o `None` si no existe o está desactivado.
     """
     async with tenant_session(client_id) as session:
-        stmt = select(ServiceType).where(ServiceType.name == name, ServiceType.is_active.is_(True))
+        stmt = select(ServiceType).where(
+            ServiceType.client_id == client_id,
+            ServiceType.name == name,
+            ServiceType.is_active.is_(True),
+        )
         return (await session.execute(stmt)).scalar_one_or_none()
 
 
@@ -68,7 +117,9 @@ async def _list_service_types(client_id: UUID) -> str:
         Los nombres y duraciones separados por coma, o un aviso si no hay ninguno.
     """
     async with tenant_session(client_id) as session:
-        stmt = select(ServiceType).where(ServiceType.is_active.is_(True))
+        stmt = select(ServiceType).where(
+            ServiceType.client_id == client_id, ServiceType.is_active.is_(True)
+        )
         tipos = (await session.execute(stmt)).scalars().all()
 
     if not tipos:
@@ -116,7 +167,6 @@ async def check_availability(date: str, service_type_name: str, config: Runnable
 
 @tool(parse_docstring=True)
 async def create_appointment(
-    contact_id: str,
     datetime_iso: str,
     service_type_name: str,
     config: RunnableConfig,
@@ -125,12 +175,12 @@ async def create_appointment(
     """Crea una cita en el calendario. Confirma con el usuario ANTES de llamarla.
 
     Args:
-        contact_id: UUID del contacto que agenda la cita.
         datetime_iso: Fecha y hora en formato ISO 8601 (ej. "2026-09-21T10:00:00").
         service_type_name: Nombre del tipo de servicio.
         notes: Notas adicionales sobre la cita, si las hay.
     """
     client_id = _client_id(config)
+    contact_id = _contact_id(config)
     conversation_id = config["configurable"].get("conversation_id")
 
     service_type = await _find_service_type(client_id, service_type_name)
@@ -142,10 +192,14 @@ async def create_appointment(
         start = datetime.fromisoformat(datetime_iso)
     except ValueError:
         return f"'{datetime_iso}' no es una fecha/hora ISO 8601 válida."
+
+    calendar = await GoogleCalendarService.from_tenant(client_id)
+    start = _localizar(start, calendar.timezone)
     end = start + timedelta(minutes=service_type.duration_minutes)
 
     async with tenant_session(client_id) as session:
-        contact = await session.get(Contact, UUID(contact_id))
+        stmt = select(Contact).where(Contact.id == contact_id, Contact.client_id == client_id)
+        contact = (await session.execute(stmt)).scalar_one_or_none()
     if contact is None:
         return "No encontré ese contacto."
     contact_name = (
@@ -154,7 +208,6 @@ async def create_appointment(
         or "Contacto"
     )
 
-    calendar = await GoogleCalendarService.from_tenant(client_id)
     event = await calendar.create_event(
         summary=f"{service_type_name} - {contact_name}",
         start=start,
@@ -166,7 +219,7 @@ async def create_appointment(
         session.add(
             Appointment(
                 client_id=client_id,
-                contact_id=UUID(contact_id),
+                contact_id=contact_id,
                 conversation_id=UUID(conversation_id) if conversation_id else None,
                 service_type_id=service_type.id,
                 google_event_id=event.event_id,
@@ -206,18 +259,23 @@ async def modify_appointment(
         return f"'{new_datetime_iso}' no es una fecha/hora ISO 8601 válida."
 
     async with tenant_session(client_id) as session:
-        appointment = await session.get(Appointment, UUID(appointment_id))
+        stmt = select(Appointment).where(
+            Appointment.id == UUID(appointment_id), Appointment.client_id == client_id
+        )
+        appointment = (await session.execute(stmt)).scalar_one_or_none()
         if appointment is None:
             return "No encontré esa cita."
         if appointment.status == "cancelled":
             return "Esa cita ya fue cancelada. Puedo crear una nueva si lo deseas."
 
         service_type = await session.get(ServiceType, appointment.service_type_id)
+
+        calendar = await GoogleCalendarService.from_tenant(client_id)
+        new_start = _localizar(new_start, calendar.timezone)
         new_end = new_start + timedelta(
             minutes=service_type.duration_minutes if service_type else 60
         )
 
-        calendar = await GoogleCalendarService.from_tenant(client_id)
         if appointment.google_event_id:
             await calendar.modify_event(
                 event_id=appointment.google_event_id, new_start=new_start, new_end=new_end
@@ -244,7 +302,10 @@ async def cancel_appointment(appointment_id: str, reason: str, config: RunnableC
     client_id = _client_id(config)
 
     async with tenant_session(client_id) as session:
-        appointment = await session.get(Appointment, UUID(appointment_id))
+        stmt = select(Appointment).where(
+            Appointment.id == UUID(appointment_id), Appointment.client_id == client_id
+        )
+        appointment = (await session.execute(stmt)).scalar_one_or_none()
         if appointment is None:
             return "No encontré esa cita."
         if appointment.status == "cancelled":
@@ -261,17 +322,15 @@ async def cancel_appointment(appointment_id: str, reason: str, config: RunnableC
 
 
 @tool(parse_docstring=True)
-async def list_appointments(
-    contact_id: str, date_from: str, date_to: str, config: RunnableConfig
-) -> str:
-    """Lista las citas de un contacto en un rango de fechas.
+async def list_appointments(date_from: str, date_to: str, config: RunnableConfig) -> str:
+    """Lista las citas del contacto en un rango de fechas.
 
     Args:
-        contact_id: UUID del contacto.
         date_from: Fecha de inicio en formato YYYY-MM-DD.
         date_to: Fecha de fin en formato YYYY-MM-DD.
     """
     client_id = _client_id(config)
+    contact_id = _contact_id(config)
 
     try:
         start = datetime.strptime(date_from, "%Y-%m-%d")
@@ -279,11 +338,18 @@ async def list_appointments(
     except ValueError:
         return "Las fechas deben tener formato YYYY-MM-DD."
 
+    # Nota: el rango se compara tal cual contra `starts_at` (TIMESTAMPTZ), sin
+    # localizar al timezone del tenant como sí hacen create/modify_appointment
+    # -- listar no necesita tocar GoogleCalendarService.from_tenant() (que
+    # exige service account + calendar_id configurados) solo para leer una
+    # zona horaria. El desvío es de a lo sumo un dia en el borde del rango,
+    # aceptable para una lista informativa.
     async with tenant_session(client_id) as session:
         stmt = (
             select(Appointment)
             .where(
-                Appointment.contact_id == UUID(contact_id),
+                Appointment.client_id == client_id,
+                Appointment.contact_id == contact_id,
                 Appointment.starts_at >= start,
                 Appointment.starts_at <= end,
                 Appointment.status != "cancelled",

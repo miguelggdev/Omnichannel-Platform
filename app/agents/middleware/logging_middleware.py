@@ -32,7 +32,6 @@ nunca implementó así.
 import functools
 import logging
 import time
-import traceback
 from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
@@ -205,13 +204,19 @@ def logged_node(node_name: str, action_type: str = "decision") -> Callable[[Node
                 result = await func(state)
             except Exception as exc:
                 duracion_ms = int((time.monotonic() - inicio) * 1000)
+                # El traceback completo (rutas de archivo, nombres internos) va
+                # SOLO al log del servidor, nunca a `details`: ese JSONB lo
+                # devuelve tal cual `AgentActionLogResponse` (app/schemas/agent_log.py)
+                # a cualquier admin/supervisor del tenant via GET /agent-logs/...,
+                # y CLAUDE.md prohibe exponer tracebacks al cliente (regla 3/5).
+                logger.exception("Fallo en el nodo %s", node_name)
                 await _registrar(
                     client_id=client_id,
                     conversation_id=conversation_id,
                     node_name=node_name,
                     action_type="error",
                     input_summary=input_summary,
-                    details={"traceback": traceback.format_exc()[:2000]},
+                    details={"exception_type": type(exc).__name__},
                     duration_ms=duracion_ms,
                     status="error",
                     error_message=str(exc)[:500],

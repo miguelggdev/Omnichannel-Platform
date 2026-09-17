@@ -28,6 +28,7 @@ import logging
 from datetime import datetime
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from googleapiclient.errors import HttpError
 from sqlalchemy import select
@@ -162,13 +163,14 @@ async def scheduling_node(state: ConversationState) -> dict[str, Any]:
     """
     client_id = state["client_id"]
     conversation_id = state.get("conversation_id")
+    contact_id = state.get("contact_id")
     message_text = (state.get("message") or {}).get("text") or ""
     model_to_use = state.get("model_to_use") or get_settings().OPENAI_CHAT_MODEL
 
     service_types_text, timezone = await _tenant_scheduling_context(UUID(client_id))
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         service_types=service_types_text,
-        current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        current_datetime=datetime.now(ZoneInfo(timezone)).strftime("%Y-%m-%d %H:%M"),
         timezone=timezone,
     )
 
@@ -193,7 +195,13 @@ async def scheduling_node(state: ConversationState) -> dict[str, Any]:
     if not tool_calls:
         return {"response_text": response_text(response), "intent": "scheduling"}
 
-    tool_config = {"configurable": {"client_id": client_id, "conversation_id": conversation_id}}
+    tool_config = {
+        "configurable": {
+            "client_id": client_id,
+            "conversation_id": conversation_id,
+            "contact_id": contact_id,
+        }
+    }
     tool_results: list[str] = []
     try:
         for tool_call in tool_calls:

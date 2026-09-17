@@ -157,7 +157,14 @@ class TestLoggedNode:
     async def test_nodo_que_falla_se_registra_como_error_y_relanza(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Un nodo que lanza excepción queda registrado como error, y la excepción sigue subiendo."""
+        """Un nodo que lanza excepción queda registrado como error, y la excepción sigue subiendo.
+
+        `details` guarda solo el tipo de excepción, no el traceback completo:
+        `AgentActionLogResponse` (app/schemas/agent_log.py) devuelve `details`
+        tal cual a cualquier admin/supervisor via GET /agent-logs/..., y
+        CLAUDE.md prohibe exponer tracebacks al cliente (regla 3/5). El
+        traceback completo va solo al log del servidor (`logger.exception`).
+        """
         _parchear(monkeypatch)
 
         async def nodo(estado: Any) -> dict[str, Any]:
@@ -171,7 +178,7 @@ class TestLoggedNode:
         llamada = _FakeAgentLogger.instancias[0].llamada
         assert llamada["status"] == "error"
         assert llamada["error_message"] == "algo salio mal"
-        assert "traceback" in llamada["details"]
+        assert llamada["details"] == {"exception_type": "ValueError"}
 
     async def test_fallo_al_loguear_no_tumba_la_respuesta(
         self, monkeypatch: pytest.MonkeyPatch

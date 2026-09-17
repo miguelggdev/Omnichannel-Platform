@@ -9,6 +9,7 @@ en `tests/unit/test_calendar_service.py`).
 import uuid
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -75,7 +76,8 @@ class _FakeAppointment:
 class _FakeCalendarService:
     """Sustituto de `GoogleCalendarService`."""
 
-    def __init__(self) -> None:
+    def __init__(self, timezone: str = "America/Bogota") -> None:
+        self.timezone = timezone
         self.slots: list[CalendarSlot] = []
         self.created: dict[str, Any] | None = None
         self.modified: dict[str, Any] | None = None
@@ -107,9 +109,16 @@ class _FakeCalendarService:
         return True
 
 
-def _config(client_id: uuid.UUID, conversation_id: uuid.UUID | None = None) -> dict[str, Any]:
-    """Arma el `RunnableConfig` con `client_id` inyectado, como haría el nodo real."""
-    configurable: dict[str, Any] = {"client_id": str(client_id)}
+def _config(
+    client_id: uuid.UUID,
+    conversation_id: uuid.UUID | None = None,
+    contact_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    """Arma el `RunnableConfig` con `client_id`/`contact_id` inyectados, como haría el nodo real."""
+    configurable: dict[str, Any] = {
+        "client_id": str(client_id),
+        "contact_id": str(contact_id or uuid.uuid4()),
+    }
     if conversation_id is not None:
         configurable["conversation_id"] = str(conversation_id)
     return {"configurable": configurable}
@@ -126,13 +135,14 @@ def _parchear_calendar(monkeypatch: pytest.MonkeyPatch, fake: _FakeCalendarServi
 
 
 class TestContratoDeSeguridad:
-    """El LLM nunca debe poder rellenar `client_id`: viene solo del config."""
+    """El LLM nunca debe poder rellenar `client_id`/`contact_id`: vienen solo del config."""
 
     @pytest.mark.parametrize("herramienta", modulo.SCHEDULING_TOOLS, ids=lambda t: t.name)
     def test_config_no_aparece_en_el_schema_del_llm(self, herramienta: Any) -> None:
-        """`config` (y por lo tanto `client_id`) no debe estar en `.args`."""
+        """`config` (y por lo tanto `client_id`/`contact_id`) no debe estar en `.args`."""
         assert "config" not in herramienta.args
         assert "client_id" not in herramienta.args
+        assert "contact_id" not in herramienta.args
 
 
 # ─── check_availability ──────────────────────────────────────────────────────
@@ -207,7 +217,6 @@ class TestCreateAppointment:
 
         resultado = await modulo.create_appointment.ainvoke(
             {
-                "contact_id": str(uuid.uuid4()),
                 "datetime_iso": "2026-09-21T10:00:00",
                 "service_type_name": "Inexistente",
             },
@@ -219,12 +228,12 @@ class TestCreateAppointment:
     async def test_contacto_inexistente(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Un `contact_id` que no resuelve a nadie no debe romper con AttributeError."""
         tipo = _FakeServiceType()
-        sesion = FakeSession(resultados=[tipo])
+        sesion = FakeSession(resultados=[tipo, None])
         parchear_tenant_session(monkeypatch, modulo, sesion)
+        _parchear_calendar(monkeypatch, _FakeCalendarService())
 
         resultado = await modulo.create_appointment.ainvoke(
             {
-                "contact_id": str(uuid.uuid4()),
                 "datetime_iso": "2026-09-21T10:00:00",
                 "service_type_name": "Consulta",
             },
@@ -239,19 +248,18 @@ class TestCreateAppointment:
         contacto = _FakeContact(display_name="Ana Pérez")
         contact_id = uuid.uuid4()
         conversation_id = uuid.uuid4()
-        sesion = FakeSession(resultados=[tipo], objetos={contact_id: contacto})
+        sesion = FakeSession(resultados=[tipo, contacto])
         parchear_tenant_session(monkeypatch, modulo, sesion)
         fake_calendar = _FakeCalendarService()
         _parchear_calendar(monkeypatch, fake_calendar)
 
         resultado = await modulo.create_appointment.ainvoke(
             {
-                "contact_id": str(contact_id),
                 "datetime_iso": "2026-09-21T10:00:00",
                 "service_type_name": "Consulta",
                 "notes": "Primera vez",
             },
-            config=_config(uuid.uuid4(), conversation_id),
+            config=_config(uuid.uuid4(), conversation_id, contact_id=contact_id),
         )
 
         assert "Cita creada exitosamente" in resultado
@@ -260,6 +268,8 @@ class TestCreateAppointment:
         assert len(citas) == 1
         assert citas[0].notes == "Primera vez"
         assert citas[0].conversation_id == conversation_id
+        assert citas[0].contact_id == contact_id
+        assert citas[0].starts_at.tzinfo is not None
 
 
 # ─── modify_appointment ──────────────────────────────────────────────────────
@@ -270,7 +280,7 @@ class TestModifyAppointment:
 
     async def test_cita_inexistente(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Sin la cita, se le avisa al usuario en vez de crashear."""
-        parchear_tenant_session(monkeypatch, modulo, FakeSession(objetos={}))
+        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[None]))
 
         resultado = await modulo.modify_appointment.ainvoke(
             {"appointment_id": str(uuid.uuid4()), "new_datetime_iso": "2026-09-22T11:00:00"},
@@ -283,7 +293,7 @@ class TestModifyAppointment:
         """Una cita cancelada no se reprograma."""
         apt_id = uuid.uuid4()
         cita = _FakeAppointment(id_=apt_id, status="cancelled")
-        parchear_tenant_session(monkeypatch, modulo, FakeSession(objetos={apt_id: cita}))
+        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[cita]))
 
         resultado = await modulo.modify_appointment.ainvoke(
             {"appointment_id": str(apt_id), "new_datetime_iso": "2026-09-22T11:00:00"},
@@ -300,7 +310,7 @@ class TestModifyAppointment:
         cita = _FakeAppointment(id_=apt_id, service_type_id=tipo_id, google_event_id="evt-1")
         tipo = _FakeServiceType(id_=tipo_id, duration_minutes=30)
         parchear_tenant_session(
-            monkeypatch, modulo, FakeSession(objetos={apt_id: cita, tipo_id: tipo})
+            monkeypatch, modulo, FakeSession(resultados=[cita], objetos={tipo_id: tipo})
         )
         fake_calendar = _FakeCalendarService()
         _parchear_calendar(monkeypatch, fake_calendar)
@@ -311,7 +321,7 @@ class TestModifyAppointment:
         )
 
         assert "Cita reprogramada" in resultado
-        assert cita.starts_at == datetime(2026, 9, 22, 11, 0)
+        assert cita.starts_at == datetime(2026, 9, 22, 11, 0, tzinfo=ZoneInfo("America/Bogota"))
         assert fake_calendar.modified["event_id"] == "evt-1"
 
 
@@ -325,7 +335,7 @@ class TestCancelAppointment:
         """El `Appointment` queda `cancelled` con el motivo dado."""
         apt_id = uuid.uuid4()
         cita = _FakeAppointment(id_=apt_id, google_event_id="evt-9")
-        parchear_tenant_session(monkeypatch, modulo, FakeSession(objetos={apt_id: cita}))
+        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[cita]))
         fake_calendar = _FakeCalendarService()
         _parchear_calendar(monkeypatch, fake_calendar)
 
@@ -345,7 +355,7 @@ class TestCancelAppointment:
         """Cancelar dos veces no debe volver a tocar la API de Calendar."""
         apt_id = uuid.uuid4()
         cita = _FakeAppointment(id_=apt_id, status="cancelled")
-        parchear_tenant_session(monkeypatch, modulo, FakeSession(objetos={apt_id: cita}))
+        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[cita]))
         fake_calendar = _FakeCalendarService()
         _parchear_calendar(monkeypatch, fake_calendar)
 
@@ -366,7 +376,7 @@ class TestListAppointments:
     async def test_fechas_invalidas(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Un formato de fecha incorrecto no debe romper con ValueError."""
         resultado = await modulo.list_appointments.ainvoke(
-            {"contact_id": str(uuid.uuid4()), "date_from": "no-es-fecha", "date_to": "2026-09-22"},
+            {"date_from": "no-es-fecha", "date_to": "2026-09-22"},
             config=_config(uuid.uuid4()),
         )
 
@@ -377,11 +387,7 @@ class TestListAppointments:
         parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[[]]))
 
         resultado = await modulo.list_appointments.ainvoke(
-            {
-                "contact_id": str(uuid.uuid4()),
-                "date_from": "2026-09-21",
-                "date_to": "2026-09-22",
-            },
+            {"date_from": "2026-09-21", "date_to": "2026-09-22"},
             config=_config(uuid.uuid4()),
         )
 
@@ -395,11 +401,7 @@ class TestListAppointments:
         parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[[cita]]))
 
         resultado = await modulo.list_appointments.ainvoke(
-            {
-                "contact_id": str(uuid.uuid4()),
-                "date_from": "2026-09-21",
-                "date_to": "2026-09-22",
-            },
+            {"date_from": "2026-09-21", "date_to": "2026-09-22"},
             config=_config(uuid.uuid4()),
         )
 
