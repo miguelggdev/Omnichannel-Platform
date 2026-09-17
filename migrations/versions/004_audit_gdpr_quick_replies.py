@@ -66,19 +66,27 @@ def upgrade() -> None:
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
         ),
-        sa.ForeignKeyConstraint(["client_id"], ["clients.id"]),
-        sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
+        # ON DELETE CASCADE: borrar un tenant se lleva su rastro. Sin esto, la
+        # FK bloquea el DELETE de `clients` y cualquier limpieza (la de los
+        # tests, y la baja de un cliente en produccion) falla por una tabla que
+        # nadie escribio a mano.
+        sa.ForeignKeyConstraint(["client_id"], ["clients.id"], ondelete="CASCADE"),
+        # SET NULL: dar de baja a un empleado no debe borrar lo que hizo; la
+        # fila queda, con el autor en NULL.
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(op.f("ix_audit_logs_client_id"), "audit_logs", ["client_id"], unique=False)
     op.create_index(op.f("ix_audit_logs_table_name"), "audit_logs", ["table_name"], unique=False)
     op.create_index(op.f("ix_audit_logs_record_id"), "audit_logs", ["record_id"], unique=False)
-    # Consulta tipica: "que paso en este tenant ultimamente", de lo mas nuevo a
-    # lo mas viejo. Un indice compuesto sirve al WHERE y al ORDER BY a la vez.
+    # Consulta tipica: "que paso en este tenant ultimamente". El indice
+    # compuesto sirve al WHERE y al ORDER BY a la vez. Sin DESC a proposito:
+    # PostgreSQL recorre un btree hacia atras igual de bien, y un indice por
+    # expresion no lo compara de forma fiable `alembic check`.
     op.create_index(
         "ix_audit_logs_client_created",
         "audit_logs",
-        ["client_id", sa.text("created_at DESC")],
+        ["client_id", "created_at"],
         unique=False,
     )
 

@@ -12,7 +12,7 @@ en la metadata); la aplicacion nunca hace `session.add(AuditLog(...))`.
 from typing import Any
 from uuid import UUID as _UUID
 
-from sqlalchemy import Enum, ForeignKey, String
+from sqlalchemy import Enum, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -33,7 +33,19 @@ class AuditLog(TenantBaseModel):
     """
 
     __tablename__ = "audit_logs"
+    __table_args__ = (
+        # "que paso en este tenant ultimamente": WHERE y ORDER BY en un indice.
+        Index("ix_audit_logs_client_created", "client_id", "created_at"),
+    )
 
+    # Se redeclara `client_id` (TenantBaseModel lo trae sin `ondelete`) para
+    # dejar la intencion junto al schema: borrar un tenant se lleva su rastro.
+    client_id: Mapped[_UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     table_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     record_id: Mapped[_UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     action: Mapped[str] = mapped_column(
@@ -43,5 +55,5 @@ class AuditLog(TenantBaseModel):
     old_values: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     new_values: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     user_id: Mapped[_UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

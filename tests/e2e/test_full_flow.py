@@ -18,8 +18,9 @@ Sustituido, porque sale de la maquina: el LLM de OpenAI, el retrieval vectorial
 mensajeria. Lo enviado se captura para poder afirmar que se envio por el canal
 correcto y con el texto correcto.
 
-Celery tampoco corre: el job de CI no levanta un worker. Las dos tareas se
-invocan como funciones, en el mismo orden en que las encadenaria el broker. Eso
+Celery tampoco corre: el job de CI no levanta ni worker ni broker. El `.delay()`
+del endpoint se sustituye por un doble que captura el encolado, y las dos tareas
+se invocan como funciones en el mismo orden en que las encadenaria el broker. Eso
 mantiene el recorrido intacto salvo el transporte, que ya cubren los tests de
 `tests/unit/test_celery_app.py`.
 """
@@ -214,6 +215,21 @@ async def escenario(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[Escenario
             return "Responde solo con el contexto dado."
 
     monkeypatch.setattr(rag_module, "build_rag_service", lambda: RagConContexto())
+
+    # El encolado: sin broker, `.delay()` reventaria y el endpoint devolveria
+    # 503 ("no se pudo encolar") antes de llegar a ninguna otra cosa.
+    class FakeTask:
+        """Doble de la tarea Celery: registra el encolado en vez de publicarlo."""
+
+        def __init__(self) -> None:
+            """Arranca con el buzon vacio."""
+            self.encolados: list[dict[str, Any]] = []
+
+        def delay(self, **kwargs: Any) -> None:
+            """Captura los argumentos con los que se habria encolado."""
+            self.encolados.append(kwargs)
+
+    monkeypatch.setattr(webhook_module, "process_incoming_message", FakeTask())
 
     # El proveedor de mensajeria: se captura lo que se habria enviado. El resto
     # del envio es real, incluido el guardado del mensaje saliente.

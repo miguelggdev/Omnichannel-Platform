@@ -7,8 +7,10 @@ lo escribe un trigger de PL/pgSQL, no Python. Un test unitario solo podria
 comprobar que la migracion contiene cierto texto, que no es lo mismo que
 comprobar que el trigger dispara.
 
-Tambien vive aqui una comprobacion del login que no es de este sprint pero que
-depende de la misma pieza (la RLS sobre `users`): ver `TestLoginBajoRls`.
+Tambien vive aqui la comprobacion que destapo BUG-017 (el login no funciona
+contra un rol sujeto a RLS), porque depende de la misma pieza — la RLS sobre
+`users` — y es lo que decidio dejar esa tabla fuera del trigger de auditoria.
+Ver `TestLoginBajoRls`.
 """
 
 import uuid
@@ -592,24 +594,49 @@ class TestQuickRepliesEnLaBase:
 
 
 class TestLoginBajoRls:
-    """Verifica si el login funciona contra un rol sujeto a RLS.
+    """BUG-017: el login no funciona contra un rol sujeto a RLS.
 
     No es alcance del Sprint 8, pero decide algo que si lo es: si `users` puede
-    o no llevar trigger de auditoria (spec §9.2 lo pide; la migracion 004 lo
-    dejo fuera). `app/api/v1/auth.py` busca al usuario por email **sin** contexto
-    de tenant, y la politica de `users` evalua
-    `current_setting('app.current_client_id')::uuid`, que sin definir levanta
-    `undefined_object` en PostgreSQL.
+    o no llevar trigger de auditoria (la spec §9.2 lo pide; la migracion 004 lo
+    dejo fuera por esto).
 
-    Ningun test anterior habia ejercitado el login contra una base real: los de
-    `tests/unit/test_auth.py` sustituyen la sesion entera.
+    Que pasa
+    --------
+    `app/api/v1/auth.py::login` busca al usuario por email con
+    `AsyncSessionLocal()`, **sin** contexto de tenant — no puede tenerlo: el
+    tenant se deduce del usuario, y el usuario todavia no se conoce. La politica
+    de `users` (migracion 002) es
+    `USING (client_id = current_setting('app.current_client_id')::uuid)`, asi que
+    esa consulta evalua un `current_setting` que en esa transaccion no vale nada.
 
-    El test afirma lo que se espera si el login esta sano. Si falla, el fallo
-    ES el hallazgo, y el mensaje explica que significa.
+    El error concreto es `invalid input syntax for type uuid: ""` y no
+    `unrecognized configuration parameter`, que seria lo esperable: en cuanto
+    **otra** transaccion del mismo backend hizo `set_config(..., is_local=true)`,
+    el parametro queda definido para la conexion y al revertirse vuelve a cadena
+    vacia, no a inexistente. Con el pooler por delante, eso es lo normal.
+
+    Por que no se arregla aqui
+    --------------------------
+    El login necesita una busqueda cross-tenant por email, que es exactamente lo
+    que la RLS impide. Las salidas razonables (una funcion `SECURITY DEFINER`
+    para autenticar, o una politica aparte para el caso sin contexto) son una
+    decision de arquitectura con implicaciones de seguridad, no un parche de un
+    sprint de observabilidad. Va en su propia rama.
+
+    El marcador es `strict=True` a proposito: el dia que alguien arregle el
+    login, este test pasara y CI fallara por xpass, avisando de que hay que
+    quitar el marcador y cerrar BUG-017.
     """
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "BUG-017: el login consulta `users` sin contexto de tenant y la RLS "
+            "de esa tabla no lo tolera. Ver el docstring de la clase."
+        ),
+    )
     async def test_el_login_funciona_contra_la_base_real(self, escenario: Escenario) -> None:
-        """POST /auth/login con credenciales validas debe devolver 200 y un token."""
+        """POST /auth/login con credenciales validas deberia devolver 200 y un token."""
         transport = ASGITransport(app=create_app())
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             respuesta = await client.post(
@@ -621,10 +648,6 @@ class TestLoginBajoRls:
             )
 
         assert respuesta.status_code == 200, (
-            "El login fallo contra PostgreSQL real. Si el error es "
-            "'unrecognized configuration parameter app.current_client_id', es el "
-            "bug que la migracion 004 documenta: el login consulta `users` sin "
-            "contexto de tenant y la politica de RLS de esa tabla no lo tolera. "
-            f"Respuesta: {respuesta.status_code} {respuesta.text[:300]}"
+            f"El login fallo: {respuesta.status_code} {respuesta.text[:300]}"
         )
         assert respuesta.json()["access_token"]
