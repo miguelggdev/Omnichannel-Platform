@@ -1,4 +1,4 @@
-"""SQLAlchemy models — 18 tablas MVP.
+"""SQLAlchemy models — 19 tablas (18 MVP + audit_logs, Sprint 8).
 
 Exporta todos los modelos para import directo:
     from app.models import User, Contact, Conversation
@@ -6,6 +6,7 @@ Exporta todos los modelos para import directo:
 
 from app.models.agent_config import AgentConfig
 from app.models.approved_response import ApprovedResponse
+from app.models.audit_log import AuditLog
 from app.models.base import Base, TenantBaseModel
 from app.models.client import Client
 from app.models.contact import Contact
@@ -27,6 +28,7 @@ from app.models.webhook_dedup import WebhookDedup
 __all__ = [
     "AgentConfig",
     "ApprovedResponse",
+    "AuditLog",
     "Base",
     "Client",
     "Contact",

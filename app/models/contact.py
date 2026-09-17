@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID as _UUID
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,6 +23,10 @@ class Contact(TenantBaseModel):
         display_name: Nombre para mostrar (puede ser diferente).
         merged_into_id: Si fue mergeado, apunta al contacto destino.
         metadata: Datos adicionales JSONB.
+        is_gdpr_deleted: El contacto pidio el borrado de sus datos personales y
+            ya fueron anonimizados (la fila se conserva por integridad
+            referencial y para las estadisticas agregadas).
+        gdpr_deleted_at: Cuando se ejecuto esa anonimizacion.
     """
 
     __tablename__ = "contacts"
@@ -37,6 +41,8 @@ class Contact(TenantBaseModel):
         UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=True
     )
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, server_default="{}")
+    is_gdpr_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    gdpr_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
