@@ -50,6 +50,10 @@ HANDOFF_MESSAGES: dict[str, str] = {
     "complaint": (
         "Lamento la situacion. Te transfiero con un agente especializado para resolver tu caso."
     ),
+    "scheduling_unavailable": (
+        "Hubo un problema al gestionar tu cita. Te transfiero con un agente humano "
+        "para ayudarte a agendarla."
+    ),
 }
 
 DEFAULT_HANDOFF_REASON = "insufficient_context"
