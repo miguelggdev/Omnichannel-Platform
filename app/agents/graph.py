@@ -1,7 +1,9 @@
 """Grafo de conversacion: construccion, routing y checkpointing.
 
-Contrato: `specs/sprint-06-langgraph.md` §2-3, 12 y `specs/sprint-07-scheduling-crm.md`
-§5-6 (nodo `scheduling`, Sprint 7). Ensambla los 7 nodos en el flujo:
+Contrato: `specs/sprint-06-langgraph.md` §2-3, 12; `specs/sprint-07-scheduling-crm.md`
+§5-6 (nodo `scheduling`, Sprint 7); y `specs/sprint-07-addendum-agent-logging.md`
+§4-5 (cada nodo se registra envuelto en `logged_node()`, que escribe su
+actividad en `agent_action_logs`). Ensambla los 7 nodos en el flujo:
 
     token_budget_check -> intent_routing -> [rag_query | respond | human_handoff | scheduling]
                                               rag_query    -> [training_mode_approval | respond | human_handoff]
@@ -47,6 +49,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from langgraph.graph import END, StateGraph
 
+from app.agents.middleware.logging_middleware import logged_node
 from app.agents.nodes.human_handoff import human_handoff_node
 from app.agents.nodes.intent_router import intent_routing_node
 from app.agents.nodes.rag_query import rag_query_node
@@ -157,21 +160,46 @@ def route_after_scheduling(state: ConversationState) -> str:
     return "respond"
 
 
+def _logged(name: str, action_type: str, node: Any) -> Any:
+    """Envuelve un nodo con `logged_node()` para `graph.add_node()`.
+
+    Cast a `Any`: igual que en `_CheckpointedGraph.ainvoke()`, los overloads de
+    LangGraph son dificiles de matchear estaticamente y un `Callable` que pasa
+    por `functools.wraps()` no calza con ninguno de forma estructural.
+
+    Args:
+        name: Nombre del nodo, para el log.
+        action_type: Tipo de accion del nodo.
+        node: Funcion del nodo a envolver.
+
+    Returns:
+        El nodo envuelto, tipado `Any` para que `add_node()` lo acepte.
+    """
+    return cast("Any", logged_node(name, action_type)(node))
+
+
 def build_conversation_graph() -> "StateGraph[ConversationState]":
     """Arma el grafo de conversacion, sin compilar.
 
     Returns:
-        `StateGraph` con los 6 nodos y el routing condicional del sprint.
+        `StateGraph` con los 7 nodos (envueltos en `logged_node()`) y el
+        routing condicional del sprint.
     """
     graph = StateGraph(ConversationState)
 
-    graph.add_node(NODE_TOKEN_BUDGET, token_budget_check_node)
-    graph.add_node(NODE_INTENT_ROUTING, intent_routing_node)
-    graph.add_node(NODE_RAG_QUERY, rag_query_node)
-    graph.add_node(NODE_RESPOND, respond_node)
-    graph.add_node(NODE_HUMAN_HANDOFF, human_handoff_node)
-    graph.add_node(NODE_TRAINING_APPROVAL, training_approval_node)
-    graph.add_node(NODE_SCHEDULING, scheduling_node)
+    # Cada nodo se envuelve con logged_node() al registrarlo, no en su propio
+    # modulo: un unico punto de integracion (este archivo) en vez de tocar los
+    # seis modulos de app/agents/nodes/ (addendum de Agent Activity Logging,
+    # ver app/agents/middleware/logging_middleware.py).
+    graph.add_node(NODE_TOKEN_BUDGET, _logged(NODE_TOKEN_BUDGET, "decision", token_budget_check_node))
+    graph.add_node(NODE_INTENT_ROUTING, _logged(NODE_INTENT_ROUTING, "decision", intent_routing_node))
+    graph.add_node(NODE_RAG_QUERY, _logged(NODE_RAG_QUERY, "query", rag_query_node))
+    graph.add_node(NODE_RESPOND, _logged(NODE_RESPOND, "response", respond_node))
+    graph.add_node(NODE_HUMAN_HANDOFF, _logged(NODE_HUMAN_HANDOFF, "handoff", human_handoff_node))
+    graph.add_node(
+        NODE_TRAINING_APPROVAL, _logged(NODE_TRAINING_APPROVAL, "decision", training_approval_node)
+    )
+    graph.add_node(NODE_SCHEDULING, _logged(NODE_SCHEDULING, "tool_call", scheduling_node))
 
     graph.set_entry_point(NODE_TOKEN_BUDGET)
 
