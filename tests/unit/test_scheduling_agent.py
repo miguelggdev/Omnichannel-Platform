@@ -29,7 +29,9 @@ class _FakeAgentConfig:
 class _FakeServiceType:
     """Sustituto mínimo de `ServiceType`."""
 
-    def __init__(self, name: str = "Consulta", description: str | None = None, duration_minutes: int = 60) -> None:
+    def __init__(
+        self, name: str = "Consulta", description: str | None = None, duration_minutes: int = 60
+    ) -> None:
         self.name = name
         self.description = description
         self.duration_minutes = duration_minutes
@@ -130,7 +132,9 @@ class TestTenantSchedulingContext:
 
         assert timezone == "UTC"
 
-    async def test_sin_config_cae_al_timezone_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_sin_config_cae_al_timezone_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Sin `agent_configs` activo, se usa el default del módulo de calendario."""
         parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[[], None]))
 
@@ -182,13 +186,18 @@ class TestSchedulingNode:
             _estado(client_id=client_id, conversation_id=conversation_id)
         )
 
-        assert resultado == {"response_text": "Tienes disponible a las 10am.", "intent": "scheduling"}
+        assert resultado == {
+            "response_text": "Tienes disponible a las 10am.",
+            "intent": "scheduling",
+        }
         assert tool.llamada["args"] == {"date": "2026-09-21"}
         assert tool.llamada["config"] == {
             "configurable": {"client_id": str(client_id), "conversation_id": str(conversation_id)}
         }
 
-    async def test_tool_no_reconocida_no_rompe_el_nodo(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_tool_no_reconocida_no_rompe_el_nodo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Un nombre de tool que no existe se reporta como texto, no como crash."""
         parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[[], None]))
         _parchear_llm(

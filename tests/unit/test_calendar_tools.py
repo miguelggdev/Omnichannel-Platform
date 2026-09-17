@@ -23,7 +23,11 @@ class _FakeServiceType:
     """Sustituto mínimo de `ServiceType`."""
 
     def __init__(
-        self, id_: Any = None, name: str = "Consulta", duration_minutes: int = 60, buffer_minutes: int = 15
+        self,
+        id_: Any = None,
+        name: str = "Consulta",
+        duration_minutes: int = 60,
+        buffer_minutes: int = 15,
     ) -> None:
         self.id = id_ or uuid.uuid4()
         self.name = name
@@ -35,7 +39,10 @@ class _FakeContact:
     """Sustituto mínimo de `Contact`."""
 
     def __init__(
-        self, display_name: str | None = "Ana Pérez", first_name: str | None = None, last_name: str | None = None
+        self,
+        display_name: str | None = "Ana Pérez",
+        first_name: str | None = None,
+        last_name: str | None = None,
     ) -> None:
         self.display_name = display_name
         self.first_name = first_name
@@ -89,7 +96,10 @@ class _FakeCalendarService:
     async def modify_event(self, **kwargs: Any) -> CalendarEvent:
         self.modified = kwargs
         return CalendarEvent(
-            event_id=kwargs["event_id"], summary="x", start=kwargs["new_start"], end=kwargs["new_end"]
+            event_id=kwargs["event_id"],
+            summary="x",
+            start=kwargs["new_start"],
+            end=kwargs["new_end"],
         )
 
     async def cancel_event(self, event_id: str) -> bool:
@@ -118,9 +128,7 @@ def _parchear_calendar(monkeypatch: pytest.MonkeyPatch, fake: _FakeCalendarServi
 class TestContratoDeSeguridad:
     """El LLM nunca debe poder rellenar `client_id`: viene solo del config."""
 
-    @pytest.mark.parametrize(
-        "herramienta", modulo.SCHEDULING_TOOLS, ids=lambda t: t.name
-    )
+    @pytest.mark.parametrize("herramienta", modulo.SCHEDULING_TOOLS, ids=lambda t: t.name)
     def test_config_no_aparece_en_el_schema_del_llm(self, herramienta: Any) -> None:
         """`config` (y por lo tanto `client_id`) no debe estar en `.args`."""
         assert "config" not in herramienta.args
@@ -284,7 +292,9 @@ class TestModifyAppointment:
 
         assert "ya fue cancelada" in resultado
 
-    async def test_reprograma_en_calendar_y_en_la_base(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_reprograma_en_calendar_y_en_la_base(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """La cita queda con la nueva fecha, y Calendar recibe el mismo cambio."""
         apt_id, tipo_id = uuid.uuid4(), uuid.uuid4()
         cita = _FakeAppointment(id_=apt_id, service_type_id=tipo_id, google_event_id="evt-1")
@@ -329,7 +339,9 @@ class TestCancelAppointment:
         assert cita.cancelled_reason == "El cliente ya no puede asistir"
         assert fake_calendar.cancelled_event_id == "evt-9"
 
-    async def test_cita_ya_cancelada_no_repite_el_trabajo(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_cita_ya_cancelada_no_repite_el_trabajo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Cancelar dos veces no debe volver a tocar la API de Calendar."""
         apt_id = uuid.uuid4()
         cita = _FakeAppointment(id_=apt_id, status="cancelled")
@@ -377,7 +389,9 @@ class TestListAppointments:
 
     async def test_lista_las_citas_encontradas(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Cada cita aparece con fecha, título, estado e ID."""
-        cita = _FakeAppointment(starts_at=datetime(2026, 9, 21, 10, 0), title="Consulta - Ana Pérez")
+        cita = _FakeAppointment(
+            starts_at=datetime(2026, 9, 21, 10, 0), title="Consulta - Ana Pérez"
+        )
         parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[[cita]]))
 
         resultado = await modulo.list_appointments.ainvoke(

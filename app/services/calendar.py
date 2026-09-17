@@ -243,7 +243,9 @@ class GoogleCalendarService:
             "timeZone": self.timezone,
         }
         try:
-            freebusy = await asyncio.to_thread(lambda: service.freebusy().query(body=body).execute())
+            freebusy = await asyncio.to_thread(
+                lambda: service.freebusy().query(body=body).execute()
+            )
         except HttpError:
             logger.exception(
                 "Error consultando disponibilidad en Calendar (calendar_id=%s)", self.calendar_id
@@ -310,13 +312,15 @@ class GoogleCalendarService:
         service = await self._get_service()
         try:
             event = await asyncio.to_thread(
-                lambda: service.events()
-                .insert(
-                    calendarId=self.calendar_id,
-                    body=body,
-                    sendUpdates="all" if attendee_email else "none",
+                lambda: (
+                    service.events()
+                    .insert(
+                        calendarId=self.calendar_id,
+                        body=body,
+                        sendUpdates="all" if attendee_email else "none",
+                    )
+                    .execute()
                 )
-                .execute()
             )
         except HttpError:
             logger.exception("Error creando evento en Calendar (calendar_id=%s)", self.calendar_id)
@@ -348,7 +352,9 @@ class GoogleCalendarService:
         service = await self._get_service()
         try:
             event = await asyncio.to_thread(
-                lambda: service.events().get(calendarId=self.calendar_id, eventId=event_id).execute()
+                lambda: (
+                    service.events().get(calendarId=self.calendar_id, eventId=event_id).execute()
+                )
             )
             if new_start is not None:
                 event["start"]["dateTime"] = new_start.isoformat()
@@ -358,11 +364,13 @@ class GoogleCalendarService:
                 event["summary"] = new_summary
 
             updated = await asyncio.to_thread(
-                lambda: service.events()
-                .update(
-                    calendarId=self.calendar_id, eventId=event_id, body=event, sendUpdates="all"
+                lambda: (
+                    service.events()
+                    .update(
+                        calendarId=self.calendar_id, eventId=event_id, body=event, sendUpdates="all"
+                    )
+                    .execute()
                 )
-                .execute()
             )
         except HttpError:
             logger.exception("Error modificando el evento %s en Calendar", event_id)
@@ -385,9 +393,11 @@ class GoogleCalendarService:
         service = await self._get_service()
         try:
             await asyncio.to_thread(
-                lambda: service.events()
-                .delete(calendarId=self.calendar_id, eventId=event_id, sendUpdates="all")
-                .execute()
+                lambda: (
+                    service.events()
+                    .delete(calendarId=self.calendar_id, eventId=event_id, sendUpdates="all")
+                    .execute()
+                )
             )
         except HttpError:
             logger.exception("Error cancelando el evento %s en Calendar", event_id)
@@ -413,17 +423,19 @@ class GoogleCalendarService:
         service = await self._get_service()
         try:
             result = await asyncio.to_thread(
-                lambda: service.events()
-                .list(
-                    calendarId=self.calendar_id,
-                    timeMin=time_min.isoformat(),
-                    timeMax=time_max.isoformat(),
-                    maxResults=max_results,
-                    singleEvents=True,
-                    orderBy="startTime",
-                    timeZone=self.timezone,
+                lambda: (
+                    service.events()
+                    .list(
+                        calendarId=self.calendar_id,
+                        timeMin=time_min.isoformat(),
+                        timeMax=time_max.isoformat(),
+                        maxResults=max_results,
+                        singleEvents=True,
+                        orderBy="startTime",
+                        timeZone=self.timezone,
+                    )
+                    .execute()
                 )
-                .execute()
             )
         except HttpError:
             logger.exception(

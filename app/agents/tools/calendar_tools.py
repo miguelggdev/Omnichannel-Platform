@@ -54,9 +54,7 @@ async def _find_service_type(client_id: UUID, name: str) -> ServiceType | None:
         El tipo de servicio, o `None` si no existe o está desactivado.
     """
     async with tenant_session(client_id) as session:
-        stmt = select(ServiceType).where(
-            ServiceType.name == name, ServiceType.is_active.is_(True)
-        )
+        stmt = select(ServiceType).where(ServiceType.name == name, ServiceType.is_active.is_(True))
         return (await session.execute(stmt)).scalar_one_or_none()
 
 
@@ -191,7 +189,9 @@ async def create_appointment(
 
 
 @tool(parse_docstring=True)
-async def modify_appointment(appointment_id: str, new_datetime_iso: str, config: RunnableConfig) -> str:
+async def modify_appointment(
+    appointment_id: str, new_datetime_iso: str, config: RunnableConfig
+) -> str:
     """Reprograma una cita existente a una nueva fecha y hora.
 
     Args:
@@ -213,7 +213,9 @@ async def modify_appointment(appointment_id: str, new_datetime_iso: str, config:
             return "Esa cita ya fue cancelada. Puedo crear una nueva si lo deseas."
 
         service_type = await session.get(ServiceType, appointment.service_type_id)
-        new_end = new_start + timedelta(minutes=service_type.duration_minutes if service_type else 60)
+        new_end = new_start + timedelta(
+            minutes=service_type.duration_minutes if service_type else 60
+        )
 
         calendar = await GoogleCalendarService.from_tenant(client_id)
         if appointment.google_event_id:

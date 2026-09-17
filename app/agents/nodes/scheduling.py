@@ -91,8 +91,10 @@ async def _tenant_scheduling_context(client_id: UUID) -> tuple[str, str]:
     """
     async with tenant_session(client_id) as session:
         tipos = (
-            await session.execute(select(ServiceType).where(ServiceType.is_active.is_(True)))
-        ).scalars().all()
+            (await session.execute(select(ServiceType).where(ServiceType.is_active.is_(True))))
+            .scalars()
+            .all()
+        )
         config = (
             await session.execute(
                 select(AgentConfig)
@@ -110,7 +112,9 @@ async def _tenant_scheduling_context(client_id: UUID) -> tuple[str, str]:
             for tipo in tipos
         )
 
-    scheduling_config: dict[str, Any] = (config.config or {}).get("scheduling", {}) if config else {}
+    scheduling_config: dict[str, Any] = (
+        (config.config or {}).get("scheduling", {}) if config else {}
+    )
     timezone = scheduling_config.get("timezone") or DEFAULT_TIMEZONE
     return texto, timezone
 

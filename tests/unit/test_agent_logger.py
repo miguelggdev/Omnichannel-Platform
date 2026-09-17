@@ -165,7 +165,11 @@ class TestGetNodeStats:
     async def test_sin_duracion_ni_tokens_no_rompe_con_none(self) -> None:
         """`avg()`/`sum()` sobre cero filas dan `NULL`: se tratan como 0."""
         fila = _FilaStats(
-            node_name="scheduling", total_actions=1, avg_duration_ms=None, total_tokens=None, error_count=0
+            node_name="scheduling",
+            total_actions=1,
+            avg_duration_ms=None,
+            total_tokens=None,
+            error_count=0,
         )
         sesion = FakeSession(resultados=[[fila]])
         logger_ = AgentLogger(sesion, uuid.uuid4())

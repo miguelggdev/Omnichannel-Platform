@@ -191,8 +191,12 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
     # modulo: un unico punto de integracion (este archivo) en vez de tocar los
     # seis modulos de app/agents/nodes/ (addendum de Agent Activity Logging,
     # ver app/agents/middleware/logging_middleware.py).
-    graph.add_node(NODE_TOKEN_BUDGET, _logged(NODE_TOKEN_BUDGET, "decision", token_budget_check_node))
-    graph.add_node(NODE_INTENT_ROUTING, _logged(NODE_INTENT_ROUTING, "decision", intent_routing_node))
+    graph.add_node(
+        NODE_TOKEN_BUDGET, _logged(NODE_TOKEN_BUDGET, "decision", token_budget_check_node)
+    )
+    graph.add_node(
+        NODE_INTENT_ROUTING, _logged(NODE_INTENT_ROUTING, "decision", intent_routing_node)
+    )
     graph.add_node(NODE_RAG_QUERY, _logged(NODE_RAG_QUERY, "query", rag_query_node))
     graph.add_node(NODE_RESPOND, _logged(NODE_RESPOND, "response", respond_node))
     graph.add_node(NODE_HUMAN_HANDOFF, _logged(NODE_HUMAN_HANDOFF, "handoff", human_handoff_node))

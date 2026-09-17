@@ -42,9 +42,7 @@ class TestMerge:
         """`source.merged_into_id` queda apuntando al destino."""
         source_id, target_id = uuid.uuid4(), uuid.uuid4()
         source = FakeContact(id=source_id)
-        sesion = CrmSession(
-            resultados=[None, None, None, [], []], objetos={source_id: source}
-        )
+        sesion = CrmSession(resultados=[None, None, None, [], []], objetos={source_id: source})
 
         await ContactUnifier(sesion).merge(source_id=source_id, target_id=target_id)
 

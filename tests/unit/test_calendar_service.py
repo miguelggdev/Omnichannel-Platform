@@ -36,9 +36,7 @@ class _FakeAgentConfig:
 class _FakeSettings:
     """Sustituto de `Settings` con solo los campos que usa `calendar.py`."""
 
-    def __init__(
-        self, credentials_json: str = "", calendar_id: str = "primary"
-    ) -> None:
+    def __init__(self, credentials_json: str = "", calendar_id: str = "primary") -> None:
         """Guarda los dos campos que consulta este módulo."""
         self.GOOGLE_CALENDAR_CREDENTIALS_JSON = credentials_json
         self.GOOGLE_CALENDAR_ID = calendar_id
@@ -130,7 +128,9 @@ class _FakeGoogleService:
         return self._freebusy
 
 
-def _servicio(fake_service: _FakeGoogleService, calendar_id: str = "cal-1") -> GoogleCalendarService:
+def _servicio(
+    fake_service: _FakeGoogleService, calendar_id: str = "cal-1"
+) -> GoogleCalendarService:
     """Arma un `GoogleCalendarService` con el cliente HTTP ya inyectado (sin `build()`)."""
     servicio = GoogleCalendarService(
         calendar_id=calendar_id, timezone="America/Bogota", credentials=_FakeCredentials()
@@ -176,7 +176,9 @@ class TestLoadCredentials:
             return _FakeCredentials()
 
         monkeypatch.setattr(
-            modulo.service_account.Credentials, "from_service_account_info", staticmethod(_from_info)
+            modulo.service_account.Credentials,
+            "from_service_account_info",
+            staticmethod(_from_info),
         )
 
         _load_credentials()
@@ -237,9 +239,7 @@ class TestCheckAvailability:
 
     async def test_dia_completamente_libre(self) -> None:
         """Sin eventos ocupados, los slots cubren todo el horario comercial."""
-        fake = _FakeGoogleService(
-            freebusy_respuesta={"calendars": {"cal-1": {"busy": []}}}
-        )
+        fake = _FakeGoogleService(freebusy_respuesta={"calendars": {"cal-1": {"busy": []}}})
         servicio = _servicio(fake)
 
         slots = await servicio.check_availability(
@@ -269,7 +269,10 @@ class TestCheckAvailability:
         )
 
         assert all(
-            not (slot.start < datetime.fromisoformat(busy_end) and slot.end > datetime.fromisoformat(busy_start))
+            not (
+                slot.start < datetime.fromisoformat(busy_end)
+                and slot.end > datetime.fromisoformat(busy_start)
+            )
             for slot in slots
         )
 

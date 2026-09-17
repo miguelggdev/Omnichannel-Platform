@@ -52,7 +52,9 @@ def _parchear(monkeypatch: pytest.MonkeyPatch, falla: bool = False) -> None:
     monkeypatch.setattr(modulo, "tenant_session", lambda _client_id: _FakeTenantSession())
 
 
-def _estado(client_id: uuid.UUID | None = None, conversation_id: uuid.UUID | None = None) -> dict[str, Any]:
+def _estado(
+    client_id: uuid.UUID | None = None, conversation_id: uuid.UUID | None = None
+) -> dict[str, Any]:
     return {
         "client_id": str(client_id or uuid.uuid4()),
         "conversation_id": str(conversation_id or uuid.uuid4()),

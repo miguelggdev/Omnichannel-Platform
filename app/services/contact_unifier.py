@@ -110,7 +110,11 @@ class ContactUnifier:
             .all()
         )
         etiquetas_origen = (
-            (await self.session.execute(select(ContactTag).where(ContactTag.contact_id == source_id)))
+            (
+                await self.session.execute(
+                    select(ContactTag).where(ContactTag.contact_id == source_id)
+                )
+            )
             .scalars()
             .all()
         )
