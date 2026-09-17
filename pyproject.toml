@@ -75,14 +75,13 @@ no_implicit_optional = true
 # (PR #8); app.services.{document_pipeline,chunker,embedding,ocr,rag} en
 # Sprint 5 (Dev A); app.agents.graph en Sprint 6 (PR #14), que importan
 # app.tasks.ai_processor y app.agents.nodes.*.
-# Pendientes de Sprint 7 (Dev A): app.services.contact_unifier, que importa
-# app.api.v1.contacts para el merge de contactos, y app.models.agent_action_log,
-# que importa app.api.v1.agent_logs (addendum de Agent Activity Logging).
+# app.services.contact_unifier salio en Sprint 7 (Dev A) y se saca de aca.
+# Pendiente: app.models.agent_action_log, que importa app.api.v1.agent_logs
+# (addendum de Agent Activity Logging).
 [[tool.mypy.overrides]]
 module = [
     "app.tasks.ai_processor",
     "app.agents.nodes.*",
-    "app.services.contact_unifier",
     "app.models.agent_action_log",
 ]
 ignore_missing_imports = true
