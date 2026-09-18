@@ -496,9 +496,58 @@ class TestRgpd:
 
         ultima = filas[-1]
         assert ultima.action == "UPDATE"
-        assert ultima.old_values["first_name"] == "Grace"
-        assert ultima.new_values["first_name"] == "[ELIMINADO]"
         assert ultima.user_id == escenario.user_id  # type: ignore[attr-defined]
+
+    async def test_la_auditoria_no_conserva_el_nombre_real_tras_anonimizar(
+        self, escenario: Escenario
+    ) -> None:
+        """Sin la redaccion, "anonimizado" seria falso: el nombre real de Grace
+        seguiria completo en `audit_logs.old_values` del propio UPDATE que lo
+        reemplazo, y en el INSERT original de cuando se sembro el contacto.
+        """
+        async with _cliente(escenario) as client:
+            await client.delete(f"{ADMIN}/{escenario.contact_id}/gdpr-delete")  # type: ignore[attr-defined]
+
+        filas = await _auditoria(escenario, "contacts", escenario.contact_id)  # type: ignore[attr-defined]
+
+        assert len(filas) >= 2, "debe haber al menos el INSERT original y el UPDATE de la supresion"
+        for fila in filas:
+            if fila.old_values is not None:
+                assert fila.old_values["first_name"] == "[ELIMINADO]"
+                assert fila.old_values["display_name"] == "[ELIMINADO]"
+            if fila.new_values is not None:
+                assert fila.new_values["first_name"] == "[ELIMINADO]"
+                assert fila.new_values["display_name"] == "[ELIMINADO]"
+
+    async def test_la_auditoria_no_conserva_el_mensaje_real_tras_anonimizar(
+        self, escenario: Escenario
+    ) -> None:
+        """Lo mismo que el nombre, pero para el contenido del mensaje entrante."""
+        async with _cliente(escenario) as client:
+            await client.delete(f"{ADMIN}/{escenario.contact_id}/gdpr-delete")  # type: ignore[attr-defined]
+
+        filas = await _auditoria(escenario, "messages", escenario.inbound_id)  # type: ignore[attr-defined]
+
+        assert len(filas) >= 1
+        for fila in filas:
+            if fila.old_values is not None:
+                assert fila.old_values["content"] == "[CONTENIDO ELIMINADO POR SOLICITUD RGPD]"
+            if fila.new_values is not None:
+                assert fila.new_values["content"] == "[CONTENIDO ELIMINADO POR SOLICITUD RGPD]"
+
+    async def test_la_auditoria_del_mensaje_saliente_no_se_toca(self, escenario: Escenario) -> None:
+        """La redaccion solo alcanza a los mensajes que de verdad se anonimizaron.
+
+        El saliente no se anonimiza (es lo que respondio la empresa, no un dato
+        del contacto) y su rastro de auditoria tampoco deberia redactarse.
+        """
+        async with _cliente(escenario) as client:
+            await client.delete(f"{ADMIN}/{escenario.contact_id}/gdpr-delete")  # type: ignore[attr-defined]
+
+        filas = await _auditoria(escenario, "messages", escenario.outbound_id)  # type: ignore[attr-defined]
+
+        assert len(filas) == 1
+        assert filas[0].new_values["content"] == "Gracias, lo anotamos."
 
     async def test_repetirla_es_400(self, escenario: Escenario) -> None:
         """Un doble clic no reescribe la fecha real de la supresion."""

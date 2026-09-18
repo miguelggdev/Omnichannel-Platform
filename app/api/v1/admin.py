@@ -14,15 +14,27 @@ Las dos operaciones quedan registradas en `audit_logs` sin que este modulo haga
 nada: los UPDATE sobre `contacts`, `messages` y `conversations` los captura el
 trigger de la migracion 006, con el usuario que los pidio, que
 `AuditContextMiddleware` publica en `app.current_user_id`.
+
+El propio UPDATE de anonimizacion tambien queda auditado
+-----------------------------------------------------------
+Eso es un problema, no una curiosidad: el trigger guarda `to_jsonb(OLD)` antes
+de anonimizar, asi que el nombre y el contenido real de los mensajes quedarian
+recuperables para siempre en `audit_logs` — el endpoint diria "anonimizado" sin
+que fuera cierto. `gdpr_delete_contact()` por eso redacta, al final de la misma
+transaccion, las filas de `audit_logs` de `contacts`/`messages` que le
+pertenecen a este contacto (ver `_redactar_rastro_de_auditoria()`). El resto
+de la fila de auditoria (quien, cuando, que tabla) se conserva: lo que RGPD
+exige borrar es el dato personal, no la prueba de que hubo una operacion.
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import bindparam, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import tenant_session
@@ -241,6 +253,88 @@ async def export_contact_data(
         }
 
 
+async def _redactar_rastro_de_auditoria(
+    session: AsyncSession,
+    client_id: UUID,
+    contact_id: UUID,
+    mensaje_ids: list[UUID],
+) -> None:
+    """Redacta el dato personal dentro de las filas de `audit_logs` ya escritas.
+
+    El trigger de la migracion 006 ya insertó, antes de que este endpoint
+    corriera, filas de auditoria con el nombre/contenido real (el INSERT
+    original del contacto o del mensaje). Y el propio UPDATE de anonimizacion
+    de esta misma peticion va a generar una fila mas, con `old_values` = los
+    datos que se acaban de reemplazar. Las dos quedan cubiertas porque este
+    UPDATE corre sobre **todas** las filas de auditoria de este contacto/sus
+    mensajes, sin importar cuando se escribieron.
+
+    Se sobreescriben las claves del JSONB con `||` en vez de borrarlas: la fila
+    de auditoria conserva su forma (que columnas tenia la tabla en ese momento)
+    para quien la lea despues, solo que con el valor sensible reemplazado — el
+    mismo criterio que ya usa `ANONIMIZADO`/`CONTENIDO_ANONIMIZADO` en las
+    columnas reales. `audit_logs` no esta en `AUDITED_TABLES` (migracion 006),
+    asi que este UPDATE no dispara el trigger sobre si mismo.
+
+    Args:
+        session: Sesion con contexto de tenant ya aplicado.
+        client_id: Tenant propietario (filtro explicito ademas de RLS).
+        contact_id: Contacto cuyas filas de `contacts` hay que redactar.
+        mensaje_ids: Mensajes entrantes anonimizados cuyas filas de `messages`
+            hay que redactar. Puede ser una lista vacia.
+    """
+    redaccion_contacto = {
+        "first_name": ANONIMIZADO,
+        "last_name": ANONIMIZADO,
+        "display_name": ANONIMIZADO,
+        "metadata": {},
+    }
+    await session.execute(
+        text("""
+            UPDATE audit_logs
+            SET old_values = CASE WHEN old_values IS NOT NULL
+                    THEN old_values || CAST(:redaccion AS jsonb) ELSE NULL END,
+                new_values = CASE WHEN new_values IS NOT NULL
+                    THEN new_values || CAST(:redaccion AS jsonb) ELSE NULL END
+            WHERE client_id = :client_id
+              AND table_name = 'contacts'
+              AND record_id = :contact_id
+        """),
+        {
+            "redaccion": json.dumps(redaccion_contacto),
+            "client_id": str(client_id),
+            "contact_id": str(contact_id),
+        },
+    )
+
+    if not mensaje_ids:
+        return
+
+    redaccion_mensaje: dict[str, Any] = {
+        "content": CONTENIDO_ANONIMIZADO,
+        "media_url": None,
+        "metadata": {},
+    }
+    stmt = text("""
+        UPDATE audit_logs
+        SET old_values = CASE WHEN old_values IS NOT NULL
+                THEN old_values || CAST(:redaccion AS jsonb) ELSE NULL END,
+            new_values = CASE WHEN new_values IS NOT NULL
+                THEN new_values || CAST(:redaccion AS jsonb) ELSE NULL END
+        WHERE client_id = :client_id
+          AND table_name = 'messages'
+          AND record_id IN :mensaje_ids
+    """).bindparams(bindparam("mensaje_ids", expanding=True))
+    await session.execute(
+        stmt,
+        {
+            "redaccion": json.dumps(redaccion_mensaje),
+            "client_id": str(client_id),
+            "mensaje_ids": [str(m) for m in mensaje_ids],
+        },
+    )
+
+
 @router.delete("/contacts/{contact_id}/gdpr-delete")
 async def gdpr_delete_contact(
     contact_id: UUID,
@@ -332,6 +426,7 @@ async def gdpr_delete_contact(
         )
 
         mensajes_anonimizados = 0
+        mensaje_ids: list[UUID] = []
         if conversaciones:
             mensajes = (
                 (
@@ -351,6 +446,7 @@ async def gdpr_delete_contact(
                 mensaje.media_url = None
                 mensaje.metadata_ = {}
                 mensajes_anonimizados += 1
+                mensaje_ids.append(mensaje.id)
 
         notas = (
             (
@@ -368,6 +464,11 @@ async def gdpr_delete_contact(
             nota.content = CONTENIDO_ANONIMIZADO
 
         await session.flush()
+
+        # Despues del flush: el UPDATE de anonimizacion de arriba ya disparo el
+        # trigger y ya escribio su propia fila en audit_logs con el dato real
+        # en old_values. Redactar antes dejaria esa fila afuera.
+        await _redactar_rastro_de_auditoria(session, client_id, contact_id, mensaje_ids)
 
     logger.info(
         "RGPD: contacto %s anonimizado por %s (tenant %s)",

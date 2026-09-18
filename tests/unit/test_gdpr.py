@@ -241,6 +241,43 @@ class TestAnonimizacion:
         assert cuerpo["messages_anonymized"] == 3
         assert cuerpo["notes_anonymized"] == 1
 
+    async def test_redacta_el_rastro_de_auditoria_de_contactos_y_mensajes(
+        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """La anonimizacion no debe dejar el dato real recuperable en audit_logs.
+
+        El trigger de la migracion 006 audita el UPDATE de anonimizacion con el
+        valor de ANTES (`old_values`): sin este paso, "anonimizado" seria falso
+        — el nombre y el mensaje reales seguirian ahi, solo que en otra tabla.
+        """
+        contacto = FakeContact()
+        conv = FakeConversation(contact_id=contacto.id)
+        entrante = FakeMessage(direction="inbound", content="mi telefono es 600...")
+        session = _usa_sesion(
+            monkeypatch,
+            CrmSession(resultados=[contacto, [], [conv.id], [entrante], []]),
+        )
+
+        response = await authenticated_client.delete(f"{URL}/{contacto.id}/gdpr-delete")
+
+        assert response.status_code == 200
+        sql_redaccion = [str(s) for s in session.executed if "UPDATE audit_logs" in str(s)]
+        assert any("table_name = 'contacts'" in s for s in sql_redaccion)
+        assert any("table_name = 'messages'" in s for s in sql_redaccion)
+
+    async def test_sin_mensajes_no_ejecuta_la_redaccion_de_mensajes(
+        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Un contacto sin conversaciones no genera el segundo UPDATE."""
+        contacto = FakeContact()
+        session = _usa_sesion(monkeypatch, CrmSession(resultados=[contacto, [], [], []]))
+
+        await authenticated_client.delete(f"{URL}/{contacto.id}/gdpr-delete")
+
+        sql_redaccion = [str(s) for s in session.executed if "UPDATE audit_logs" in str(s)]
+        assert len(sql_redaccion) == 1
+        assert "table_name = 'contacts'" in sql_redaccion[0]
+
     async def test_repetir_la_supresion_es_400(
         self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
