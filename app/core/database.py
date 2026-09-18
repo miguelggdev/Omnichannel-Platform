@@ -44,13 +44,25 @@ logger = logging.getLogger(__name__)
 current_user_id: ContextVar[UUID | None] = ContextVar("current_user_id", default=None)
 
 # Motor asíncrono contra Supavisor (Transaction Pooler de Supabase Cloud)
+#
+# echo SIEMPRE en False, incluso en desarrollo. `echo=True` hace que SQLAlchemy
+# imprima cada sentencia con sus bind params reales a través de su propio
+# logger (`sqlalchemy.engine`) con un `StreamHandler` propio que instala si no
+# tiene uno — eso pasa por fuera del pipeline de Loguru y no respeta el
+# `setLevel(WARNING)` que le puso `app/core/logging.py` para silenciarlo
+# (`InstanceLogger`, la clase que usa `echo=True`, llama a `logger._log()`
+# directo, sin pasar por `isEnabledFor()`). Con columnas cifradas con pgcrypto
+# (`app/core/encryption.py`), esos bind params incluyen el valor en claro que
+# se está cifrando y la propia `ENCRYPTION_KEY` — quedarían en stdout sin
+# cifrar. La visibilidad de queries la da la instrumentación de OpenTelemetry
+# (`app/core/telemetry.py::SQLAlchemyInstrumentor`), que no expone bind params.
 engine = create_async_engine(
     get_settings().DATABASE_URL,
     pool_size=20,
     max_overflow=10,
     pool_pre_ping=True,
     pool_recycle=300,
-    echo=get_settings().APP_ENV == "development",
+    echo=False,
 )
 
 AsyncSessionLocal = async_sessionmaker(
