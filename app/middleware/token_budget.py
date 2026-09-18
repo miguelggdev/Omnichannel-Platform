@@ -36,6 +36,7 @@ from sqlalchemy import update
 
 from app.agents.nodes.token_budget import cache_key
 from app.core.database import tenant_session
+from app.core.metrics import record_tokens
 from app.models.token_budget import TokenBudget
 from app.models.token_usage_log import TokenUsageLog
 from app.services.dedup import get_redis
@@ -150,6 +151,18 @@ class TokenBudgetGuard:
                 total_tokens,
             )
             return
+
+        # La metrica se registra despues del commit y no antes: contar tokens
+        # que no llegaron a `token_usage_logs` dejaria el dashboard por encima
+        # del consumo real facturado.
+        record_tokens(
+            client_id=str(tenant_id),
+            model=model,
+            operation=operation,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=costo,
+        )
 
         logger.info(
             "Consumo registrado: client_id=%s model=%s operation=%s tokens=%s costo_usd=%s",

@@ -31,6 +31,7 @@ from app.agents.nodes._llm import extract_usage, get_chat_model
 from app.agents.nodes._state import ConversationState
 from app.agents.nodes._tenant import get_agent_settings
 from app.core.config import get_settings
+from app.core.metrics import record_intent
 from app.middleware.token_budget import TokenBudgetGuard
 
 logger = logging.getLogger(__name__)
@@ -219,6 +220,7 @@ async def intent_routing_node(state: ConversationState) -> dict[str, Any]:
         )
 
     intent = _resolve(clasificacion.intent, disponibles)
+    record_intent(intent, clasificacion.confidence)
     logger.info(
         "Intent detectado para %s: %s (confianza %.2f)",
         state.get("conversation_id"),

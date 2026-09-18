@@ -32,6 +32,7 @@ from app.agents.nodes._notifications import enqueue_notification
 from app.agents.nodes._state import ConversationState
 from app.agents.nodes._tenant import get_agent_settings
 from app.core.database import tenant_session
+from app.core.metrics import record_handoff
 from app.models.conversation import Conversation
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,7 @@ async def human_handoff_node(state: ConversationState) -> dict[str, Any]:
         reason=reason,
     )
 
+    record_handoff(str(client_id), reason)
     logger.info("Conversacion %s escalada a humano (motivo: %s)", conversation_id, reason)
     return {
         "requires_handoff": True,

@@ -289,14 +289,18 @@ def record_handoff(client_id: str, reason: str) -> None:
     _safe(handoff_total.labels(str(client_id), reason).inc)
 
 
-def record_conversation_resolved(client_id: str, resolved_by: str) -> None:
-    """Contabiliza una conversación cerrada.
+def record_conversation_resolved(client_id: str, resolved_by: str, cantidad: int = 1) -> None:
+    """Contabiliza una o varias conversaciones cerradas.
 
     Args:
         client_id: Tenant de la conversación.
         resolved_by: `agent` (la IA), `human` o `auto_close`.
+        cantidad: Cuántas cerrar de golpe. El auto-cierre resuelve por UPDATE
+            masivo y suma el total en una sola llamada.
     """
-    _safe(conversations_resolved_total.labels(str(client_id), resolved_by).inc)
+    if cantidad <= 0:
+        return
+    _safe(conversations_resolved_total.labels(str(client_id), resolved_by).inc, cantidad)
 
 
 def record_rag_retrieval(client_id: str, duracion: float, chunks: int) -> None:

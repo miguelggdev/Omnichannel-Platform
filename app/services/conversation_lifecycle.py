@@ -33,6 +33,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import VALIDATION_ERROR, AppException
+from app.core.metrics import record_conversation_resolved
 from app.models.conversation import Conversation
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,14 @@ class ConversationLifecycle:
 
         if new_status == "resolved":
             conversation.resolved_at = datetime.now(timezone.utc)
+            # Quien cierra: un humano si la conversacion estaba en sus manos, el
+            # agente si venia del bot. Es la base de la "tasa de resolucion" del
+            # dashboard de agentes: sin esta distincion, las conversaciones que
+            # cierra un humano tras un handoff contarian como exito de la IA.
+            cerrada_por = (
+                "human" if current_status in ("human_active", "waiting_human") else "agent"
+            )
+            record_conversation_resolved(str(conversation.client_id), cerrada_por)
 
         if new_status == "bot_active":
             # Devolver la conversacion al bot implica que ya no hay humano a cargo;

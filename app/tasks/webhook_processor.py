@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import run_isolated, tenant_session
+from app.core.metrics import record_message
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.conversation import Conversation
@@ -271,6 +272,10 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
         conversation_status = conversation.status
 
         await persist_dedup(client_id, message_channel, external_id, session=session)
+
+    # Despues del commit: un mensaje que no llego a persistirse no es un mensaje
+    # procesado, y contarlo aqui dejaria la metrica por encima de la tabla.
+    record_message(str(client_id), message_channel, "inbound")
 
     if conversation_status in HUMAN_OWNED_STATUSES:
         logger.info(
