@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 # Rutas que NO requieren autenticación
 PUBLIC_PATHS: set[str] = {
     "/internal/health",
+    # Lo scrapea Prometheus por la red interna de docker-compose, sin JWT
+    # (Sprint 8). No sale por Traefik: ver app/api/internal/metrics.py.
+    "/internal/metrics",
     "/api/docs",
     "/api/redoc",
     "/api/openapi.json",

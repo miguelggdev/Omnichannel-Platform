@@ -11,6 +11,10 @@ Ambos caminos funcionan como `-A`:
 porque `app/tasks/__init__.py` importa este modulo al cargar el paquete.
 """
 
+# `observability` se importa por su efecto: registra las señales de Celery que
+# configuran logging, tracing y métricas del worker (Sprint 8). No se usa nada
+# de él aquí, pero sin este import el worker arranca sin observabilidad.
+from app.tasks import observability  # noqa: F401
 from app.tasks.celery_config import celery_app
 
 # Modulos que el worker debe importar al arrancar para registrar sus tareas.

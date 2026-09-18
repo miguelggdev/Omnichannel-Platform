@@ -94,8 +94,25 @@ class Settings(BaseSettings):
 
     # App
     APP_ENV: str = "development"
+    APP_VERSION: str = "1.0.0"
     LOG_LEVEL: str = "INFO"
+    # "json" en produccion (agregadores de logs), "console" en desarrollo.
+    LOG_FORMAT: str = "console"
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+
+    # Observabilidad (Sprint 8)
+    # Vacio = tracing deshabilitado. Es el valor por defecto a proposito: sin
+    # collector escuchando, el exporter OTLP reintenta en background y ensucia
+    # el log de cada test y de cualquier arranque local sin docker-compose.
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = ""
+    OTEL_SERVICE_NAME: str = "omnichannel-api"
+    # Fraccion de traces muestreados (1.0 = todos). El muestreo es
+    # `parentbased_traceidratio`: si el request ya llega con un `traceparent`
+    # muestreado, se respeta esa decision y no se corta la traza a la mitad.
+    OTEL_TRACES_SAMPLER_RATIO: float = 1.0
+    # Puerto del servidor de metricas que cada worker de Celery levanta para
+    # que Prometheus lo scrapee (el worker no expone la API HTTP).
+    METRICS_WORKER_PORT: int = 9100
 
     # Embedding / Chat models
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
