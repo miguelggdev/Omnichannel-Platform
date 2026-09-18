@@ -75,6 +75,13 @@ services:
       - LOG_LEVEL=${LOG_LEVEL}
       - LOG_FORMAT=${LOG_FORMAT}
       - CORS_ORIGINS=${CORS_ORIGINS}
+      - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+    tmpfs:
+      # Metricas multiproceso de prometheus_client: en RAM y vacio en
+      # cada arranque, que es lo que exige el modo multiproceso (si
+      # arrastra ficheros de procesos muertos, los suma al scrape).
+      - /tmp/prometheus
     depends_on:
       redis:
         condition: service_healthy
@@ -149,6 +156,17 @@ services:
       - DEFAULT_CLIENT_ID=${DEFAULT_CLIENT_ID}
       - LOG_LEVEL=${LOG_LEVEL}
       - LOG_FORMAT=${LOG_FORMAT}
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_SERVICE_NAME=omnichannel-worker-webhooks
+      - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+    tmpfs:
+      # Metricas multiproceso de prometheus_client: en RAM y vacio en
+      # cada arranque, que es lo que exige el modo multiproceso (si
+      # arrastra ficheros de procesos muertos, los suma al scrape).
+      - /tmp/prometheus
     depends_on:
       redis:
         condition: service_healthy
@@ -190,6 +208,16 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - LOG_LEVEL=${LOG_LEVEL}
       - LOG_FORMAT=${LOG_FORMAT}
+      - JWT_SECRET=${JWT_SECRET}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_SERVICE_NAME=omnichannel-worker-ai
+      - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+    tmpfs:
+      # Metricas multiproceso de prometheus_client: en RAM y vacio en
+      # cada arranque, que es lo que exige el modo multiproceso (si
+      # arrastra ficheros de procesos muertos, los suma al scrape).
+      - /tmp/prometheus
     depends_on:
       redis:
         condition: service_healthy
@@ -228,6 +256,16 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - LOG_LEVEL=${LOG_LEVEL}
       - LOG_FORMAT=${LOG_FORMAT}
+      - JWT_SECRET=${JWT_SECRET}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_SERVICE_NAME=omnichannel-worker-documents
+      - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+    tmpfs:
+      # Metricas multiproceso de prometheus_client: en RAM y vacio en
+      # cada arranque, que es lo que exige el modo multiproceso (si
+      # arrastra ficheros de procesos muertos, los suma al scrape).
+      - /tmp/prometheus
     depends_on:
       redis:
         condition: service_healthy
@@ -265,6 +303,17 @@ services:
       - META_PAGE_ACCESS_TOKEN=${META_PAGE_ACCESS_TOKEN}
       - LOG_LEVEL=${LOG_LEVEL}
       - LOG_FORMAT=${LOG_FORMAT}
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_SERVICE_NAME=omnichannel-worker-notifications
+      - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+    tmpfs:
+      # Metricas multiproceso de prometheus_client: en RAM y vacio en
+      # cada arranque, que es lo que exige el modo multiproceso (si
+      # arrastra ficheros de procesos muertos, los suma al scrape).
+      - /tmp/prometheus
     depends_on:
       redis:
         condition: service_healthy
@@ -302,6 +351,16 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - LOG_LEVEL=${LOG_LEVEL}
       - LOG_FORMAT=${LOG_FORMAT}
+      - JWT_SECRET=${JWT_SECRET}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_SERVICE_NAME=omnichannel-worker-bulk
+      - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+    tmpfs:
+      # Metricas multiproceso de prometheus_client: en RAM y vacio en
+      # cada arranque, que es lo que exige el modo multiproceso (si
+      # arrastra ficheros de procesos muertos, los suma al scrape).
+      - /tmp/prometheus
     depends_on:
       redis:
         condition: service_healthy
@@ -346,6 +405,16 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - LOG_LEVEL=${LOG_LEVEL}
       - LOG_FORMAT=${LOG_FORMAT}
+      - JWT_SECRET=${JWT_SECRET}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_SERVICE_NAME=omnichannel-worker-lead-enrichment
+      - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+    tmpfs:
+      # Metricas multiproceso de prometheus_client: en RAM y vacio en
+      # cada arranque, que es lo que exige el modo multiproceso (si
+      # arrastra ficheros de procesos muertos, los suma al scrape).
+      - /tmp/prometheus
     depends_on:
       redis:
         condition: service_healthy
@@ -377,6 +446,17 @@ services:
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
       - LOG_LEVEL=${LOG_LEVEL}
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_SERVICE_NAME=omnichannel-beat
+      - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+    tmpfs:
+      # Metricas multiproceso de prometheus_client: en RAM y vacio en
+      # cada arranque, que es lo que exige el modo multiproceso (si
+      # arrastra ficheros de procesos muertos, los suma al scrape).
+      - /tmp/prometheus
     depends_on:
       redis:
         condition: service_healthy
@@ -384,13 +464,62 @@ services:
       - backend
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 11. PROMETHEUS — Recoleccion de metricas
+  # 11. JAEGER — Collector OTLP y UI de trazas
+  #     Recibe los spans de la API y de los workers por gRPC (4317). El
+  #     almacenamiento de all-in-one es en memoria: sirve para operar y depurar,
+  #     no para retencion historica. Para eso, cambiar a Tempo o a un collector
+  #     con backend persistente.
+  # ─────────────────────────────────────────────────────────────────────────────
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      # Techo de trazas en memoria: sin el, un pico de trafico se come la RAM
+      # del host. all-in-one descarta las mas viejas al llegar al limite.
+      SPAN_STORAGE_TYPE: memory
+      MEMORY_MAX_TRACES: "50000"
+    ports:
+      # Solo la UI sale a localhost. Los puertos OTLP (4317/4318) se quedan
+      # dentro de la red `backend`: los usan la API y los workers, nadie mas.
+      - "16686:16686"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:16686/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 12. REDIS-EXPORTER — Metricas de Redis y profundidad de las colas de Celery
+  #     `check-keys` publica el largo de cada lista como `redis_key_size`, que es
+  #     exactamente la profundidad de cada cola. La alternativa —medirla desde la
+  #     aplicacion— obligaria a un LLEN sincrono dentro del endpoint async de
+  #     metricas, y a un Gauge compartido entre los cuatro procesos de la API.
+  # ─────────────────────────────────────────────────────────────────────────────
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_EXPORTER_CHECK_KEYS: >-
+        0=webhooks,0=ai_inference,0=documents,0=notifications,0=bulk,0=lead_enrichment
+    networks:
+      - backend
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 13. PROMETHEUS — Recoleccion de metricas
   # ─────────────────────────────────────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:v2.54.1
     restart: unless-stopped
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -408,7 +537,7 @@ services:
       retries: 3
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 12. GRAFANA — Dashboards de observabilidad
+  # 14. GRAFANA — Dashboards de observabilidad
   # ─────────────────────────────────────────────────────────────────────────────
   grafana:
     image: grafana/grafana:11.2.0

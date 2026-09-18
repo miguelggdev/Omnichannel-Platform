@@ -145,11 +145,19 @@ jobs:
         # schema real de Alembic, no contra supabase/init/init.sql — ese script
         # es legacy (ADR-020, no se ejecuta contra Supabase Cloud) y ya diverge
         # del schema de app/models/ (ej. users.full_name vs first_name/last_name).
+        #
+        # ENCRYPTION_KEY es obligatoria desde la migracion 008: cifra
+        # contact_identifiers.identifier_value y calcula su indice ciego. La
+        # migracion aborta si no esta, en vez de cifrar con una clave vacia.
+        # Tiene que ser la MISMA que usan los tests (ver tests/conftest.py), o
+        # el hash que escribe la migracion no coincide con el que calcula la
+        # aplicacion y no se encuentra ninguna fila.
         run: |
           cd migrations
           alembic upgrade head
         env:
           DATABASE_URL: "postgresql+asyncpg://test_user:test_password@localhost:5432/test_omnichannel"
+          ENCRYPTION_KEY: "test-encryption-key-minimum-32-characters!!"
 
       - name: Crear rol de aplicacion que no saltee RLS
         # POSTGRES_USER del contenedor (test_user) se crea como SUPERUSER, y
@@ -224,6 +232,8 @@ jobs:
           alembic upgrade head
         env:
           DATABASE_URL: "postgresql+asyncpg://test_user:test_password@localhost:5432/test_migrations"
+          # Requerida por la migracion 008 (cifrado de contact_identifiers).
+          ENCRYPTION_KEY: "test-encryption-key-minimum-32-characters!!"
 
       - name: Check for pending migrations
         run: |
@@ -235,6 +245,7 @@ jobs:
           }
         env:
           DATABASE_URL: "postgresql+asyncpg://test_user:test_password@localhost:5432/test_migrations"
+          ENCRYPTION_KEY: "test-encryption-key-minimum-32-characters!!"
 
   # ─── Stage 6: Security Scan ────────────────────────────────────────────────
   security:

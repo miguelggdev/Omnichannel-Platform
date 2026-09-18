@@ -59,6 +59,8 @@ opentelemetry-sdk>=1.22.0
 opentelemetry-instrumentation-fastapi>=0.43b0
 opentelemetry-instrumentation-celery>=0.43b0
 opentelemetry-instrumentation-sqlalchemy>=0.43b0
+opentelemetry-instrumentation-redis>=0.43b0    # Spans de Redis (dedup, cache de presupuesto)
+opentelemetry-instrumentation-httpx>=0.43b0    # Spans de las llamadas salientes (YCloud, Meta, OpenAI)
 opentelemetry-exporter-otlp>=1.22.0
 prometheus-client>=0.20.0
 
