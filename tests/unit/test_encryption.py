@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
 from app.core.config import get_settings
-from app.core.encryption import EncryptedString, blind_index
+from app.core.encryption import EncryptedString, blind_index, mask_identifier
 from app.models.contact_identifier import ContactIdentifier
 
 
@@ -104,6 +104,32 @@ class TestTipoCifrado:
         columna = ContactIdentifier.__table__.c.identifier_value
         assert isinstance(columna.type, EncryptedString)
         assert "BYTEA" in str(columna.type.impl)
+
+
+class TestMascara:
+    """`mask_identifier()`: lo que un agente ve en la bandeja antes de nombrar al contacto."""
+
+    def test_conserva_los_ultimos_cuatro(self) -> None:
+        """El resto queda enmascarado con `*`."""
+        assert mask_identifier("573001234567") == "********4567"
+
+    def test_mismo_largo_que_el_original(self) -> None:
+        """El enmascarado no delata la longitud real por truncamiento ni relleno."""
+        valor = "573001234567"
+        assert len(mask_identifier(valor)) == len(valor)
+
+    def test_valor_de_cuatro_o_menos_se_enmascara_entero(self) -> None:
+        """Con 4 caracteres o menos, dejar algo a la vista ya revela casi todo."""
+        assert mask_identifier("abcd") == "****"
+        assert mask_identifier("ab") == "**"
+
+    def test_no_es_reversible_por_construccion(self) -> None:
+        """Dos valores que comparten los ultimos 4 dan la misma mascara.
+
+        No es un bug: la mascara nunca pretendio identificar de forma unica,
+        solo dar una pista visual. La unicidad real la da `identifier_hash`.
+        """
+        assert mask_identifier("573001234567") == mask_identifier("999991234567")
 
 
 class TestSincronizacionDelHash:

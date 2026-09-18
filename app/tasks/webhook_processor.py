@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import run_isolated, tenant_session
-from app.core.encryption import blind_index
+from app.core.encryption import blind_index, mask_identifier
 from app.core.metrics import record_message
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
@@ -141,7 +141,10 @@ async def _resolve_contact(
         if contact is not None:
             return contact
 
-    contact = Contact(client_id=client_id, display_name=identifier_value)
+    # Enmascarado, no el valor completo: display_name no esta cifrado y el CRM
+    # lo busca con ILIKE (MEMORY.md, "el telefono queda en claro"). Solo dura
+    # hasta que un agente le pone un nombre real al contacto.
+    contact = Contact(client_id=client_id, display_name=mask_identifier(identifier_value))
     session.add(contact)
     await session.flush()  # necesitamos contact.id para el identifier
 

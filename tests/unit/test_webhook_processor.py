@@ -137,7 +137,9 @@ class TestResolverContacto:
 
         contacto = await wp._resolve_contact(session, client_id, "whatsapp", "573001112233")
 
-        assert contacto.display_name == "573001112233"
+        # Enmascarado: display_name no esta cifrado y el CRM lo busca con
+        # ILIKE, asi que no lleva el telefono completo (MEMORY.md).
+        assert contacto.display_name == "********2233"
         assert len(session.added) == 2, "debe crear contacto e identifier"
         assert session.added[1].identifier_value == "573001112233"
 

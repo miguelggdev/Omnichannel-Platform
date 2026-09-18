@@ -45,6 +45,17 @@ Cambiar `ENCRYPTION_KEY` deja ilegible todo lo cifrado con la anterior **y**
 cambia todos los índices ciegos. Rotarla exige una migración de datos que lea
 con la clave vieja y reescriba con la nueva, en la misma transacción que
 recalcula los hashes. No hay atajo.
+
+Por qué existe además `mask_identifier()`
+------------------------------------------
+El cifrado protege `contact_identifiers.identifier_value`, pero
+`_resolve_contact()` (`app/tasks/webhook_processor.py`) copiaba ese mismo valor
+sin cifrar a `contacts.display_name` para que el agente tenga algo que mostrar
+en la bandeja antes de ponerle nombre al contacto. Eso dejaba el teléfono en
+claro, y además buscable con `ILIKE`, en la columna de al lado de la cifrada —
+cifrar `identifier_value` sin tocar esto no cerraba nada. La decisión de
+producto (MEMORY.md) fue enmascarar en vez de mostrar el valor completo o
+cifrar `display_name` (que rompería la búsqueda por `ILIKE` del CRM).
 """
 
 from __future__ import annotations
@@ -151,3 +162,31 @@ def blind_index(valor: str | None, *, normalizar: bool = True) -> str | None:
         texto.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
+
+
+def mask_identifier(valor: str) -> str:
+    """Enmascara un identificador para mostrarlo sin exponerlo completo.
+
+    Conserva los últimos 4 caracteres y reemplaza el resto por `*`, para que
+    un agente pueda reconocer a quién le escribe (los últimos dígitos de un
+    teléfono suelen bastar) sin que el valor completo quede legible en una
+    columna que no está cifrada.
+
+    Un valor de 4 caracteres o menos se enmascara entero: dejar "algo" a la
+    vista de un identificador tan corto ya revela la mayor parte.
+
+    Args:
+        valor: Identificador en claro (teléfono, handle, email).
+
+    Returns:
+        El valor enmascarado, mismo largo que el original.
+
+    Example:
+        >>> mask_identifier("573001234567")
+        '********4567'
+        >>> mask_identifier("ab")
+        '**'
+    """
+    if len(valor) <= 4:
+        return "*" * len(valor)
+    return "*" * (len(valor) - 4) + valor[-4:]
