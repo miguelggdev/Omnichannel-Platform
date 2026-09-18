@@ -77,7 +77,12 @@ def upgrade() -> None:
             "  hmac(lower(trim(identifier_value)), :clave, 'sha256'), 'hex')"
         ).bindparams(clave=clave)
     )
-    op.alter_column("contact_identifiers", "identifier_hash", nullable=False)
+    op.alter_column(
+        "contact_identifiers",
+        "identifier_hash",
+        existing_type=sa.String(length=64),
+        nullable=False,
+    )
     op.create_index(
         "ix_contact_identifiers_identifier_hash",
         "contact_identifiers",
