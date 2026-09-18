@@ -10,16 +10,52 @@ en la tabla.
 """
 
 import uuid
+from collections.abc import AsyncGenerator
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import select, text
 
 from app.core.config import get_settings
-from app.core.database import tenant_session
+from app.core.database import engine, tenant_session
 from app.core.encryption import blind_index
 from app.models.contact_identifier import ContactIdentifier
 
 pytestmark = pytest.mark.db
+
+#: Tenants sembrados por el test en curso, para limpiarlos al terminar.
+_sembrados: list[uuid.UUID] = []
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _motor_limpio() -> AsyncGenerator[None, None]:
+    """Suelta el pool del engine antes del test y borra lo sembrado al final.
+
+    `engine` es un singleton de módulo y pytest-asyncio abre un event loop por
+    test: una conexión del pool abierta en el loop de otro test revienta con
+    "attached to a different loop". Mismo patrón que el resto de la suite de
+    integración (`test_crm_api.py`, `test_graph_flow.py`).
+
+    Yields:
+        Control al test.
+    """
+    await engine.dispose()
+    _sembrados.clear()
+    yield
+    for client_id in _sembrados:
+        async with tenant_session(client_id) as session:
+            await session.execute(
+                text("DELETE FROM contact_identifiers WHERE client_id = :cid"),
+                {"cid": str(client_id)},
+            )
+            await session.execute(
+                text("DELETE FROM contacts WHERE client_id = :cid"),
+                {"cid": str(client_id)},
+            )
+            await session.execute(
+                text("DELETE FROM clients WHERE id = :cid"), {"cid": str(client_id)}
+            )
+    _sembrados.clear()
 
 
 async def _sembrar_tenant(slug: str) -> tuple[uuid.UUID, uuid.UUID]:
@@ -48,6 +84,7 @@ async def _sembrar_tenant(slug: str) -> tuple[uuid.UUID, uuid.UUID]:
             ),
             {"id": str(contact_id), "cid": str(client_id)},
         )
+    _sembrados.append(client_id)
     return client_id, contact_id
 
 
