@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import run_isolated, tenant_session
+from app.core.encryption import blind_index
 from app.core.metrics import record_message
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
@@ -117,10 +118,13 @@ async def _resolve_contact(
     Returns:
         Contacto existente o recien creado.
     """
+    # Por el hash, no por el valor: `identifier_value` esta cifrado con un IV
+    # aleatorio (Sprint 8), asi que comparar contra el ciphertext de esta
+    # llamada nunca encontraria la fila. Ver app/core/encryption.py.
     stmt = select(ContactIdentifier).where(
         ContactIdentifier.client_id == client_id,
         ContactIdentifier.channel == channel,
-        ContactIdentifier.identifier_value == identifier_value,
+        ContactIdentifier.identifier_hash == blind_index(identifier_value),
     )
     existing = (await session.execute(stmt)).scalar_one_or_none()
 

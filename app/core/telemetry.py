@@ -213,7 +213,8 @@ def setup_celery_telemetry() -> TracerProvider:
     if "celery" not in _instrumented:
         from opentelemetry.instrumentation.celery import CeleryInstrumentor
 
-        CeleryInstrumentor().instrument(tracer_provider=provider)
+        # El constructor de CeleryInstrumentor no lleva anotaciones.
+        CeleryInstrumentor().instrument(tracer_provider=provider)  # type: ignore[no-untyped-call]
         _instrumented.add("celery")
     return provider
 

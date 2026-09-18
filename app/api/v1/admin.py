@@ -312,8 +312,10 @@ async def gdpr_delete_contact(
         )
         for identificador in identificadores:
             # El sufijo con el id mantiene unico el valor: la tabla tiene
-            # unique(client_id, channel, identifier_value) y un contacto puede
-            # tener dos identificadores del mismo canal.
+            # unique(client_id, channel, identifier_hash) y un contacto puede
+            # tener dos identificadores del mismo canal. El hash lo recalcula
+            # solo el listener `before_update` del modelo (Sprint 8): esta
+            # asignacion pasa por el ORM, no por un UPDATE masivo.
             identificador.identifier_value = f"[ELIMINADO-{identificador.id.hex[:8]}]"
 
         conversaciones = (

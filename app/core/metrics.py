@@ -43,7 +43,8 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import TYPE_CHECKING, Any
+from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 from prometheus_client import CollectorRegistry, Counter, Histogram, multiprocess
 
@@ -165,7 +166,8 @@ def build_registry() -> CollectorRegistry:
         return REGISTRY
 
     registro = CollectorRegistry()
-    multiprocess.MultiProcessCollector(registro, path=directorio)
+    # `MultiProcessCollector` no lleva anotaciones en prometheus_client.
+    multiprocess.MultiProcessCollector(registro, path=directorio)  # type: ignore[no-untyped-call]
     return registro
 
 
@@ -208,17 +210,22 @@ def start_worker_metrics_server(port: int | None = None) -> bool:
 # ─── Helpers de registro ────────────────────────────────────────────────────
 
 
-def _safe(fn: Any, *args: Any, **kwargs: Any) -> None:
-    """Ejecuta un registro de métrica sin dejar que su fallo escale.
+@contextmanager
+def _sin_fallar() -> Iterator[None]:
+    """Aísla el registro de una métrica de lo que lo rodea.
 
-    Args:
-        fn: Función a ejecutar.
-        *args: Posicionales de `fn`.
-        **kwargs: Nombrados de `fn`.
+    Context manager y no un `_safe(fn, *args)`: con la forma de función, la
+    parte que más falla —`metrica.labels(...)`, que revienta si el número de
+    etiquetas no cuadra— se evalúa **antes** de entrar en la protección, y la
+    excepción escapa igual. Envolviendo el bloque queda cubierta la expresión
+    entera.
+
+    Yields:
+        Control al bloque que registra la métrica.
     """
     try:
-        fn(*args, **kwargs)
-    except Exception:  # pragma: no cover — defensivo
+        yield
+    except Exception:
         logger.debug("Fallo al registrar una metrica", exc_info=True)
 
 
@@ -232,8 +239,9 @@ def record_http_request(method: str, endpoint: str, status: int, duracion: float
         status: Código de estado devuelto.
         duracion: Segundos que tardó el request.
     """
-    _safe(http_requests_total.labels(method, endpoint, str(status)).inc)
-    _safe(http_request_duration_seconds.labels(method, endpoint).observe, duracion)
+    with _sin_fallar():
+        http_requests_total.labels(method, endpoint, str(status)).inc()
+        http_request_duration_seconds.labels(method, endpoint).observe(duracion)
 
 
 def record_message(client_id: str, channel: str, direction: str) -> None:
@@ -244,7 +252,8 @@ def record_message(client_id: str, channel: str, direction: str) -> None:
         channel: Canal (`whatsapp`, `instagram`, ...).
         direction: `inbound` u `outbound` (el enum real del modelo).
     """
-    _safe(messages_processed_total.labels(str(client_id), channel, direction).inc)
+    with _sin_fallar():
+        messages_processed_total.labels(str(client_id), channel, direction).inc()
 
 
 def record_tokens(
@@ -266,17 +275,15 @@ def record_tokens(
         cost_usd: Costo estimado de la llamada.
     """
     tenant = str(client_id)
-    if prompt_tokens:
-        _safe(
-            llm_tokens_consumed_total.labels(tenant, model, operation, "prompt").inc, prompt_tokens
-        )
-    if completion_tokens:
-        _safe(
-            llm_tokens_consumed_total.labels(tenant, model, operation, "completion").inc,
-            completion_tokens,
-        )
-    if cost_usd:
-        _safe(llm_cost_usd_total.labels(tenant, model).inc, cost_usd)
+    with _sin_fallar():
+        if prompt_tokens:
+            llm_tokens_consumed_total.labels(tenant, model, operation, "prompt").inc(prompt_tokens)
+        if completion_tokens:
+            llm_tokens_consumed_total.labels(tenant, model, operation, "completion").inc(
+                completion_tokens
+            )
+        if cost_usd:
+            llm_cost_usd_total.labels(tenant, model).inc(cost_usd)
 
 
 def record_handoff(client_id: str, reason: str) -> None:
@@ -286,7 +293,8 @@ def record_handoff(client_id: str, reason: str) -> None:
         client_id: Tenant de la conversación.
         reason: Motivo del handoff.
     """
-    _safe(handoff_total.labels(str(client_id), reason).inc)
+    with _sin_fallar():
+        handoff_total.labels(str(client_id), reason).inc()
 
 
 def record_conversation_resolved(client_id: str, resolved_by: str, cantidad: int = 1) -> None:
@@ -300,7 +308,8 @@ def record_conversation_resolved(client_id: str, resolved_by: str, cantidad: int
     """
     if cantidad <= 0:
         return
-    _safe(conversations_resolved_total.labels(str(client_id), resolved_by).inc, cantidad)
+    with _sin_fallar():
+        conversations_resolved_total.labels(str(client_id), resolved_by).inc(cantidad)
 
 
 def record_rag_retrieval(client_id: str, duracion: float, chunks: int) -> None:
@@ -312,8 +321,9 @@ def record_rag_retrieval(client_id: str, duracion: float, chunks: int) -> None:
         chunks: Chunks devueltos por encima del umbral.
     """
     tenant = str(client_id)
-    _safe(rag_retrieval_latency_seconds.labels(tenant).observe, duracion)
-    _safe(rag_chunks_retrieved.labels(tenant).observe, chunks)
+    with _sin_fallar():
+        rag_retrieval_latency_seconds.labels(tenant).observe(duracion)
+        rag_chunks_retrieved.labels(tenant).observe(chunks)
 
 
 def record_intent(intent: str, confidence: float) -> None:
@@ -323,7 +333,8 @@ def record_intent(intent: str, confidence: float) -> None:
         intent: Intent elegido.
         confidence: Confianza entre 0 y 1.
     """
-    _safe(intent_routing_confidence.labels(intent).observe, confidence)
+    with _sin_fallar():
+        intent_routing_confidence.labels(intent).observe(confidence)
 
 
 class Cronometro:
@@ -359,23 +370,26 @@ class Cronometro:
 
 
 def iter_metric_names() -> Iterator[str]:
-    """Nombres de las métricas declaradas en este módulo.
+    """Nombres con los que se exponen las métricas de este módulo.
+
+    Son los nombres que ve Prometheus, que para un `Counter` llevan el sufijo
+    `_total` (`prometheus_client` lo guarda aparte en `Metric._name`, sin él).
+    Las consultas de los dashboards y las alertas se escriben contra estos.
 
     Yields:
-        El nombre de cada métrica del catálogo.
+        El nombre expuesto de cada métrica del catálogo.
     """
-    for metrica in (
-        http_requests_total,
-        http_request_duration_seconds,
-        messages_processed_total,
-        llm_tokens_consumed_total,
-        llm_cost_usd_total,
-        handoff_total,
-        conversations_resolved_total,
-        rag_retrieval_latency_seconds,
-        rag_chunks_retrieved,
-        intent_routing_confidence,
-        celery_tasks_total,
-        celery_task_duration_seconds,
-    ):
-        yield metrica._name
+    yield from (
+        "http_requests_total",
+        "http_request_duration_seconds",
+        "messages_processed_total",
+        "llm_tokens_consumed_total",
+        "llm_cost_usd_total",
+        "handoff_total",
+        "conversations_resolved_total",
+        "rag_retrieval_latency_seconds",
+        "rag_chunks_retrieved",
+        "intent_routing_confidence",
+        "celery_tasks_total",
+        "celery_task_duration_seconds",
+    )

@@ -22,9 +22,15 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
+from app.core.config import get_settings
 from app.core.database import engine, tenant_session
 from app.core.security import create_access_token, hash_password
 from app.main import create_app
+from tests.integration.identifiers import (
+    SQL_INSERT_IDENTIFICADOR,
+    SQL_SELECT_IDENTIFICADOR,
+    params_identificador,
+)
 
 pytestmark = pytest.mark.db
 
@@ -103,14 +109,11 @@ async def _sembrar(slug: str) -> Escenario:
             {"id": str(ids["contact_id"]), "cid": str(ids["client_id"])},
         )
         await session.execute(
-            text(
-                "INSERT INTO contact_identifiers (client_id, contact_id, channel, "
-                "identifier_value) VALUES (:cid, :contact, 'whatsapp', :valor)"
-            ),
+            text(SQL_INSERT_IDENTIFICADOR),
             {
                 "cid": str(ids["client_id"]),
                 "contact": str(ids["contact_id"]),
-                "valor": f"57300{uuid.uuid4().int % 10_000_000:07d}",
+                **params_identificador(f"57300{uuid.uuid4().int % 10_000_000:07d}"),
             },
         )
         await session.execute(
@@ -428,8 +431,13 @@ class TestRgpd:
                 )
             ).one()
             identificador = await session.scalar(
-                text("SELECT identifier_value FROM contact_identifiers WHERE contact_id = :id"),
-                {"id": str(escenario.contact_id)},  # type: ignore[attr-defined]
+                # Descifrado explicito: la columna es BYTEA desde la migracion
+                # 008 y este SELECT no pasa por el tipo del ORM.
+                text(SQL_SELECT_IDENTIFICADOR),
+                {
+                    "id": str(escenario.contact_id),  # type: ignore[attr-defined]
+                    "clave": get_settings().ENCRYPTION_KEY,
+                },
             )
 
         assert contacto.first_name == "[ELIMINADO]"
