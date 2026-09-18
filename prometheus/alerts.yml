@@ -1,0 +1,200 @@
+# =============================================================================
+# Prometheus — Reglas de alerta (Sprint 8)
+# =============================================================================
+# Cada regla se escribe contra una metrica que la plataforma publica de verdad
+# (ver `iter_metric_names()` en app/core/metrics.py). Las del spec §5 que
+# apuntaban a series inexistentes se reemplazaron por su equivalente real:
+#
+# - `TokenBudgetWarning` usaba `llm_tokens_consumed_total / on(client_id)
+#   token_budget_limit`. No existe ninguna metrica `token_budget_limit`: el
+#   presupuesto vive en la tabla `token_budgets`, no en Prometheus, y el
+#   `on(client_id)` no encuentra con que emparejar. La alerta se replantea
+#   sobre el gasto en dolares, que si se publica.
+# - `CeleryQueueDepth` usaba `celery_queue_size`, que la aplicacion no puede
+#   medir de forma fiable con cuatro procesos por contenedor. La cola se mide
+#   con `redis_key_size` (redis-exporter), que lee la lista directamente.
+# - `DBConnectionPoolHigh` usaba `pg_stat_activity_count`. Por ADR-020 la base
+#   es Supabase Cloud y no hay postgres-exporter que produzca esa serie: la
+#   alerta se queda fuera en vez de quedar siempre en silencio fingiendo que
+#   vigila algo.
+#
+# No hay Alertmanager en docker-compose.yml: estas reglas se evaluan y se ven
+# en la pestaña Alerts de Prometheus y en Grafana. Enrutar avisos (Telegram,
+# email) es la feature de `specs/sprint-08-addendum-ops.md` que sigue sin
+# asignar.
+# =============================================================================
+
+groups:
+  # ─── Salud del servicio ──────────────────────────────────────────────────
+  - name: plataforma_disponibilidad
+    rules:
+      - alert: ApiCaida
+        # `up` lo genera Prometheus por cada target. Con dns_sd hay una serie
+        # por replica: si una de las dos se cae, esta alerta la ve.
+        expr: up{job="api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Una replica de la API no responde al scrape"
+          description: "El target {{ $labels.instance }} lleva 2 minutos sin responder."
+
+      - alert: WorkerCaido
+        expr: up{job="celery-workers"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker de Celery sin metricas: {{ $labels.instance }}"
+          description: >-
+            El worker no responde en :9100 desde hace 5 minutos. Sus tareas
+            (mensajes entrantes, inferencia, envios) pueden estar sin consumidor.
+
+      - alert: TasaDeErrores5xx
+        expr: >-
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          / sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Mas del 5% de los requests devuelve 5xx"
+          description: "Tasa actual: {{ $value | humanizePercentage }}."
+
+      - alert: LatenciaP95Alta
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum by (le, endpoint) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 por encima de 5s en {{ $labels.endpoint }}"
+          description: "p95 actual: {{ $value | humanizeDuration }}."
+
+      - alert: WebhookLento
+        # El contrato de CLAUDE.md es responder el webhook en <100 ms. Esta
+        # alerta vigila ese numero concreto, no la latencia general: si el
+        # endpoint se pasa de ahi, el proveedor de mensajeria empieza a
+        # reintentar y a duplicar mensajes.
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(http_request_duration_seconds_bucket{endpoint=~"/api/v1/webhooks/.*"}[5m])
+            )
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "El webhook tarda mas de 100ms en el p95"
+          description: >-
+            p95 actual {{ $value | humanizeDuration }}. Por encima de ese umbral
+            el proveedor reintenta y llegan mensajes duplicados.
+
+  # ─── Colas y tareas ──────────────────────────────────────────────────────
+  - name: plataforma_colas
+    rules:
+      - alert: ColaCeleryProfunda
+        expr: redis_key_size > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cola {{ $labels.key }} con mas de 1000 tareas pendientes"
+          description: "Pendientes: {{ $value }}. Revisar si el worker de esa cola avanza."
+
+      - alert: ColaDeIaEstancada
+        # Cola creciendo y ninguna tarea terminando: el worker esta vivo (si no,
+        # saltaria WorkerCaido) pero no avanza — bloqueado en una llamada al LLM,
+        # o con el prefetch tomado por una tarea que no termina.
+        expr: >-
+          redis_key_size{key="ai_inference"} > 50
+          and sum(rate(celery_tasks_total{queue="ai_inference"}[10m])) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "La cola de inferencia crece y no termina ninguna tarea"
+
+      - alert: TareasFallando
+        expr: >-
+          sum by (task) (rate(celery_tasks_total{state="FAILURE"}[15m])) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "La tarea {{ $labels.task }} falla de forma sostenida"
+
+  # ─── Negocio y costos ────────────────────────────────────────────────────
+  - name: plataforma_negocio
+    rules:
+      - alert: GastoDeLlmDisparado
+        # 5 USD/hora sostenidos durante media hora en un solo tenant. El umbral
+        # es deliberadamente grueso: sirve para detectar un bucle de reintentos
+        # o un prompt que crecio sin control, no para facturar.
+        expr: sum by (client_id) (rate(llm_cost_usd_total[30m])) * 3600 > 5
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gasto de LLM alto en el tenant {{ $labels.client_id }}"
+          description: "Ritmo actual: {{ $value | printf \"%.2f\" }} USD/hora."
+
+      - alert: HandoffsDisparados
+        # Mas de la mitad de las conversaciones acaban en un humano: el agente
+        # dejo de resolver. Suele ser RAG sin documentos indexados, el
+        # presupuesto de tokens agotado, o un cambio de prompt que salio mal.
+        expr: >-
+          sum by (client_id) (rate(handoff_total[1h]))
+          / sum by (client_id) (rate(messages_processed_total{direction="inbound"}[1h])) > 0.5
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mas del 50% de los mensajes acaba en handoff ({{ $labels.client_id }})"
+
+      - alert: RagLento
+        expr: >-
+          histogram_quantile(
+            0.95, sum by (le) (rate(rag_retrieval_latency_seconds_bucket[10m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "La busqueda vectorial tarda mas de 1s en el p95"
+          description: >-
+            Revisar el indice HNSW de document_chunks: una busqueda que cae a
+            scan secuencial da exactamente este sintoma.
+
+      - alert: SinMensajesEntrantes
+        # Silencio absoluto en 30 minutos con la plataforma en pie. No siempre es
+        # un incidente (de madrugada es normal), por eso es `info`: sirve para
+        # correlacionar, no para despertar a nadie.
+        expr: sum(rate(messages_processed_total{direction="inbound"}[30m])) == 0
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "Ningun mensaje entrante en 30 minutos"
+          description: >-
+            Si no es una franja de baja actividad, revisar el webhook del
+            proveedor y la firma HMAC.
+
+  # ─── Observabilidad de la propia observabilidad ──────────────────────────
+  - name: plataforma_trazas
+    rules:
+      - alert: SpansDescartados
+        expr: rate(jaeger_collector_spans_dropped_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Jaeger esta descartando spans"
+          description: >-
+            Las trazas de este periodo pueden estar incompletas. all-in-one
+            guarda en memoria con tope (MEMORY_MAX_TRACES).

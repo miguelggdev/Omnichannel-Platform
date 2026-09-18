@@ -46,6 +46,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal, run_isolated, tenant_session
+from app.core.metrics import record_conversation_resolved
 from app.models.conversation import Conversation
 from app.tasks.celery_config import celery_app
 
@@ -198,7 +199,13 @@ async def _resolve_stale_waiting_client(session: AsyncSession, client_id: UUID) 
         )
         .values(status="resolved", resolved_at=func.now(), updated_at=func.now())
     )
-    return int(resultado.rowcount or 0)
+    cerradas = int(resultado.rowcount or 0)
+    # El auto-cierre no pasa por `ConversationLifecycle.transition()` (es un
+    # UPDATE masivo), asi que registra su propia metrica. Va con
+    # `resolved_by="auto_close"` y no como resolucion del agente: una
+    # conversacion que se cierra sola por inactividad no es una atendida.
+    record_conversation_resolved(str(client_id), "auto_close", cerradas)
+    return cerradas
 
 
 async def _archive_old_resolved(session: AsyncSession, client_id: UUID) -> int:

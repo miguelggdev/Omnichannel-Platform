@@ -34,6 +34,7 @@ from uuid import UUID
 from sqlalchemy import text as sql_text
 
 from app.core.database import tenant_session
+from app.core.metrics import Cronometro, record_rag_retrieval
 from app.services.embedding import EmbeddingService
 
 # Defaults documentados en la spec: RAG general es mas permisivo (0.75) que los
@@ -128,8 +129,13 @@ class RAGService:
 
         sql += " ORDER BY dc.embedding <=> (:query_embedding)::vector LIMIT :top_k"
 
-        async with tenant_session(client_id) as session:
-            rows = (await session.execute(sql_text(sql), params)).fetchall()
+        # Se cronometra solo la busqueda vectorial, no el `embed_single()` de
+        # arriba: mezclar la latencia de la API de OpenAI con la de pgvector
+        # deja una metrica que no sirve para diagnosticar ninguna de las dos.
+        with Cronometro() as cronometro:
+            async with tenant_session(client_id) as session:
+                rows = (await session.execute(sql_text(sql), params)).fetchall()
+        record_rag_retrieval(str(client_id), cronometro.elapsed, len(rows))
 
         results = []
         for row in rows:

@@ -253,6 +253,38 @@
 - **Precondición que la migración comprueba:** `SECURITY DEFINER` hace que el cuerpo corra con los privilegios del **dueño** de la función, pero `FORCE ROW LEVEL SECURITY` (CLAUDE.md, regla 1) aplica las políticas también al dueño de la tabla. Así que la función solo esquiva la RLS si su dueño tiene `BYPASSRLS` o es superusuario — el rol de las migraciones, no el de la aplicación. Una precondición implícita que falla en silencio es exactamente lo que produjo BUG-025 (la función devolvería cero filas y el login diría "credenciales inválidas" para todo el mundo, sin un error en los logs), así que la migración **aborta el despliegue** si no se cumple.
 - **Consecuencia:** `EXECUTE` se queda en el default de PostgreSQL (PUBLIC) porque el provisioning crea el rol de la aplicación *después* de correr las migraciones, tanto en CI como en Supabase, y un `GRANT` nominal ahí fallaría. Acotarlo al rol de la aplicación es una mejora del script que crea el rol, anotada en PROGRESS.md junto al `REVOKE` de `audit_logs`.
 
+### ADR-047: El exporter OTLP solo se monta si hay endpoint; el tracing siempre
+- **Fecha:** 2026-09-17
+- **Contexto:** el spec §1.2 monta el `BatchSpanProcessor` con el exporter OTLP incondicionalmente. Sin un collector escuchando (cualquier arranque local, la suite de tests, un despliegue sin Jaeger), ese exporter reintenta en segundo plano y escribe un `ConnectionRefused` cada pocos segundos en el log de la aplicación.
+- **Decisión:** `app/core/telemetry.py` instala el `TracerProvider` y las instrumentaciones siempre; el `BatchSpanProcessor` con OTLP solo si `OTEL_EXPORTER_OTLP_ENDPOINT` tiene valor. El default de la variable es cadena vacía.
+- **Consecuencia:** un despliegue sin collector conserva lo que más se usa a diario —el `trace_id` en cada línea de log y en la cabecera `X-Trace-ID`— sin ruido de red. Encender el tracing distribuido es poner la variable, no tocar código. Los spans que no se exportan se descartan en memoria, sin coste apreciable.
+
+### ADR-048: Las métricas se exponen en modo multiproceso, no por proceso
+- **Fecha:** 2026-09-17
+- **Contexto:** el spec §3.3 monta `make_asgi_app()` de `prometheus_client`, que sirve el registro del proceso que atiende el scrape. Pero la API corre con `uvicorn --workers 2` (Dockerfile) **y** `replicas: 2` (compose): cuatro procesos, cada uno con sus propios contadores en memoria. Los workers de Celery, lo mismo con el pool prefork. Un scrape devuelve el valor de uno cualquiera de ellos, elegido de hecho al azar, y la serie resultante sube y baja sin relación con el tráfico real: un contador acumulativo que retrocede convierte cualquier `rate()` en basura.
+- **Decisión:** modo multiproceso de `prometheus_client` (`PROMETHEUS_MULTIPROC_DIR` + `MultiProcessCollector`), con un `tmpfs` por contenedor en `docker-compose.yml`. `build_registry()` devuelve el registro agregador cuando la variable está, y el registro normal cuando no (tests, arranque de un solo proceso).
+- **Consecuencia:** no se pueden usar `Gauge` sin declarar su `multiprocess_mode`; en el catálogo no hay ninguno. El directorio tiene que estar vacío al arrancar el contenedor —de ahí el `tmpfs`— o el scrape suma las muestras de procesos muertos de la ejecución anterior.
+
+### ADR-049: La profundidad de las colas la publica redis-exporter, no la aplicación
+- **Fecha:** 2026-09-17
+- **Contexto:** el spec §3.1 define `celery_queue_size` como métrica de la aplicación. Medirla desde la API obliga a un `LLEN` contra Redis dentro del endpoint de métricas (I/O síncrono en contexto async, contra la regla 4 de CLAUDE.md) y a un `Gauge` que cuatro procesos escribirían a la vez, sumando o pisándose según el `multiprocess_mode`.
+- **Decisión:** un servicio `redis-exporter` con `REDIS_EXPORTER_CHECK_KEYS` sobre las 6 colas. Publica `redis_key_size{key="<cola>"}`, que es el largo real de la lista.
+- **Consecuencia:** la profundidad la mide quien es dueño del dato (Redis), una sola vez y sin pasar por la aplicación. Los dashboards y la alerta `ColaCeleryProfunda` consultan `redis_key_size`, no `celery_queue_size` — esa métrica no existe. Las métricas de *tareas* (duración, estado) sí las publica la aplicación por señales de Celery, con las mismas etiquetas que el resto del catálogo y sin un `celery-exporter` más que mantener.
+
+### ADR-050: Loguru por intercepción, sin reescribir los módulos existentes
+- **Fecha:** 2026-09-17
+- **Contexto:** CLAUDE.md (regla 5) pide Loguru con `client_id` y `trace_id` en cada línea, pero los ~40 módulos escritos hasta el Sprint 7 usan `logging` de la stdlib con `logger.info("...%s", x)`. Cambiarlos uno a uno es un diff enorme, sin comportamiento nuevo y con riesgo de romper mensajes en cada archivo tocado.
+- **Decisión:** `setup_logging()` instala un `InterceptHandler` en la raíz de `logging` y no toca ninguna llamada existente. El contexto lo ponen `ObservabilityMiddleware` (API) y `bind_task_context()` (Celery) con `logger.contextualize()`.
+- **Consecuencia:** todo lo que ya se loguea —incluido uvicorn, SQLAlchemy, httpx y Celery— sale con el mismo formato y el mismo contexto. El `filter={"sqlalchemy": "WARNING"}` del spec §2.1 no se usa: ese parámetro de Loguru agregaba un **segundo** sink que duplicaba cada línea de WARNING para arriba; silenciar librerías ruidosas se hace con `logging.getLogger(...).setLevel(...)`. Tampoco hay sink a `/var/log/app/app.log`: ningún contenedor monta ese volumen.
+
+### ADR-051: Índice ciego (HMAC) junto a la columna cifrada
+- **Fecha:** 2026-09-17
+- **Contexto:** el spec §8.4 afirma que "el cifrado es determinístico para un mismo `ENCRYPTION_KEY`". Es falso: `pgp_sym_encrypt()` usa un IV aleatorio y cifra el mismo valor de forma distinta cada vez. Sobre esa premisa se caen dos cosas del sistema real: la búsqueda del webhook (`WHERE identifier_value = :telefono`, que dejaría de encontrar al contacto y crearía uno nuevo en cada mensaje) y el `UNIQUE (client_id, channel, identifier_value)`, que aceptaría como distintos dos ciphertexts del mismo teléfono.
+- **Decisión:** `contact_identifiers` gana `identifier_hash`, el HMAC-SHA256 del valor normalizado con la misma clave (`app.core.encryption.blind_index`). El `UNIQUE` se mueve a esa columna y la búsqueda del webhook pasa por ella. El hash lo mantiene un listener `before_insert`/`before_update` del modelo, no cada llamador.
+- **Por qué HMAC y no SHA-256:** un teléfono tiene poquísima entropía; una columna de hashes sin clave se invierte por fuerza bruta en minutos, y quedaría un identificador personal en claro al lado del cifrado.
+- **Por qué un listener y no un parámetro:** la anonimización de RGPD reescribe `identifier_value`. Con el hash a cargo de quien escribe, ese camino habría dejado una fila anonimizada que se sigue encontrando por el teléfono que se suponía borrado — y sin error visible. Un `UPDATE` masivo con `sqlalchemy.update()` sí se salta el listener: está anotado en el modelo.
+- **Consecuencia:** rotar `ENCRYPTION_KEY` obliga a recalcular la columna entera, no solo a re-cifrar. `contacts.first_name`, `last_name` y `display_name` se quedan en claro: la API del CRM los busca con `ILIKE` y no hay búsqueda parcial posible sobre datos cifrados; el spec los marca como "cifrado opcional por tenant" (§8.3), opcionalidad que necesita infraestructura por tenant que hoy no existe.
+
 ---
 
 ## Bugs Conocidos y Pitfalls
@@ -461,6 +493,25 @@ El agente de RLS de la revisión 2026-09-17 encontró el mismo patrón de BUG-02
 - **Las tres mitades del bug:** no era solo el `SELECT` de `users`. También estaban bloqueados el `SELECT` de `clients` (tiene su propia RLS) y el `UPDATE` de `last_login_at`. El primero se resuelve devolviendo `client_is_active` en la misma fila; el segundo, ejecutándolo dentro de `tenant_session()` una vez que el tenant ya se conoce.
 - **Cobertura:** `tests/integration/test_audit_gdpr.py::TestLoginBajoRls` (login completo bajo `app_user`, token utilizable, tenant suspendido, `last_login_at` escrito) y `::TestFuncionDeBusqueda` (alcance de la función, que sea `SECURITY DEFINER` con `search_path` fijo, y que el resto de la RLS de `users` siga intacta).
 - **Ahora desbloqueado:** la migración 006 dejó `users` sin trigger de auditoría por este bug. Con el login arreglado, agregarlo es viable — pero exige antes auditar que **todos** los caminos de escritura sobre `users` pasen por `tenant_session()`, no solo el del login. Queda como tarea aparte, no se coló en el arreglo.
+
+### BUG-026: Ningún worker de Celery podía arrancar con el docker-compose del repo
+- **Descripción:** `Settings` (app/core/config.py) declara `DATABASE_URL`, `JWT_SECRET` y `ENCRYPTION_KEY` sin valor por defecto: si falta cualquiera de las tres, `get_settings()` lanza `ValidationError`. En `docker-compose.yml`, **ninguno** de los 7 servicios de Celery pasaba `JWT_SECRET`, y `celery-webhooks`, `celery-notifications` y `celery-beat` tampoco `ENCRYPTION_KEY`. El `.env` no entra en la imagen (está en `.dockerignore`), así que el proceso no tenía de dónde leerlas.
+- **Impacto:** cualquier tarea que importara `app.core.config` —es decir, todas— reventaba al cargar. Con `task_acks_late=True`, el mensaje volvía a la cola y se reintentaba en bucle.
+- **Por qué no lo detectó nada:** los tests inyectan las variables desde `tests/conftest.py`, y el smoke test de CI levanta el contenedor de la **API**, que sí las declara. Nadie arrancó un worker con este compose en CI.
+- **Origen:** Sprint 2 (la definición de los servicios de Celery). Salió a la luz en Sprint 8, al necesitar `ENCRYPTION_KEY` dentro del worker de webhooks para el índice ciego.
+- **Estado:** CERRADO 2026-09-17. Los 8 servicios de aplicación (API + 6 workers + beat) declaran ahora las tres variables, más las de observabilidad.
+- **Pendiente relacionado:** no hay ningún test que verifique que un servicio de compose declara lo que su proceso necesita. Un chequeo que cruce las variables requeridas por `Settings` contra el `environment` de cada servicio cerraría esta clase entera de fallo; queda anotado, no implementado.
+
+### BUG-003 (cerrado): el dashboard de token budget apuntaba a un datasource inexistente
+- **Descripción:** `grafana/dashboards/token-budget-monitoring.json` (Sprint 2) consultaba SQL contra un datasource `supabase-db` que el provisioning nunca declaró — y que no se puede declarar sin meter las credenciales de la base de datos en un fichero del repositorio. Los 11 paneles salían en error.
+- **Estado:** CERRADO 2026-09-17. El dashboard se retira y lo reemplaza `grafana/dashboards/tenant_usage.json`, que cubre lo mismo (tokens y costo por tenant, top 10, reparto por canal y por operación) leyendo de Prometheus, donde las métricas ya existen desde este sprint. El JSON viejo sigue en el historial de git si algún día se quiere un datasource SQL de solo lectura contra Supabase.
+
+### Hallazgo: el teléfono quedaba en claro en `contacts.display_name` — CERRADO
+- **Descripción:** `app/tasks/webhook_processor.py::_resolve_contact()` creaba el contacto con `display_name=identifier_value`, o sea, el número de teléfono. Desde Sprint 8, `contact_identifiers.identifier_value` está cifrado — pero el mismo dato seguía en claro, y además indexado para búsqueda `ILIKE`, en la columna de al lado, hasta que un agente le ponía un nombre real al contacto.
+- **Decisión del usuario:** opción (a) de las tres planteadas — enmascarar al crear, dejando el valor completo solo en el identificador cifrado.
+- **Solución:** `app/core/encryption.py::mask_identifier()` conserva los últimos 4 caracteres y reemplaza el resto por `*` (mismo largo que el original, para no delatar la longitud real). `_resolve_contact()` llama a `mask_identifier(identifier_value)` en vez de usar el valor completo. Un identificador de 4 caracteres o menos se enmascara entero.
+- **Las otras dos, y por qué no:** (b) cifrar también `display_name` — pierde la búsqueda por `ILIKE` que usa el CRM (`app/api/v1/contacts.py`); (c) dejarlo como está — el teléfono completo queda visible y buscable dentro del tenant.
+- **Alcance:** solo aplica al `display_name` que se genera **al crear** el contacto. No toca contactos que ya tienen nombre real (un agente ya los identificó) ni el identificador cifrado, que sigue guardando el valor completo para el matching real.
 
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.

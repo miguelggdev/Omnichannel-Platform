@@ -32,6 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import run_isolated, tenant_session
+from app.core.encryption import blind_index, mask_identifier
+from app.core.metrics import record_message
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.conversation import Conversation
@@ -116,10 +118,13 @@ async def _resolve_contact(
     Returns:
         Contacto existente o recien creado.
     """
+    # Por el hash, no por el valor: `identifier_value` esta cifrado con un IV
+    # aleatorio (Sprint 8), asi que comparar contra el ciphertext de esta
+    # llamada nunca encontraria la fila. Ver app/core/encryption.py.
     stmt = select(ContactIdentifier).where(
         ContactIdentifier.client_id == client_id,
         ContactIdentifier.channel == channel,
-        ContactIdentifier.identifier_value == identifier_value,
+        ContactIdentifier.identifier_hash == blind_index(identifier_value),
     )
     existing = (await session.execute(stmt)).scalar_one_or_none()
 
@@ -136,7 +141,10 @@ async def _resolve_contact(
         if contact is not None:
             return contact
 
-    contact = Contact(client_id=client_id, display_name=identifier_value)
+    # Enmascarado, no el valor completo: display_name no esta cifrado y el CRM
+    # lo busca con ILIKE (MEMORY.md, "el telefono queda en claro"). Solo dura
+    # hasta que un agente le pone un nombre real al contacto.
+    contact = Contact(client_id=client_id, display_name=mask_identifier(identifier_value))
     session.add(contact)
     await session.flush()  # necesitamos contact.id para el identifier
 
@@ -271,6 +279,10 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
         conversation_status = conversation.status
 
         await persist_dedup(client_id, message_channel, external_id, session=session)
+
+    # Despues del commit: un mensaje que no llego a persistirse no es un mensaje
+    # procesado, y contarlo aqui dejaria la metrica por encima de la tabla.
+    record_message(str(client_id), message_channel, "inbound")
 
     if conversation_status in HUMAN_OWNED_STATUSES:
         logger.info(

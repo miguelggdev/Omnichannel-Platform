@@ -24,6 +24,8 @@ import uuid
 import pytest
 from sqlalchemy import text
 
+from tests.integration.identifiers import params_identificador
+
 pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.db,
@@ -178,13 +180,16 @@ class TestRLSMVPTables:
             rls_harness["session_b"],
             table="contact_identifiers",
             insert_sql="""
-                INSERT INTO contact_identifiers (id, client_id, contact_id, channel, identifier_value)
-                VALUES (:id, :client_id, :contact_id, 'whatsapp', '+5215599990001')
+                INSERT INTO contact_identifiers
+                    (id, client_id, contact_id, channel, identifier_value, identifier_hash)
+                VALUES (:id, :client_id, :contact_id, :canal,
+                        pgp_sym_encrypt(:valor, :clave), :hash)
             """,
             params={
                 "id": str(uuid.uuid4()),
                 "client_id": cid_a,
                 "contact_id": contact_id,
+                **params_identificador("+5215599990001"),
             },
         )
 

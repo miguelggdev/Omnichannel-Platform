@@ -34,6 +34,7 @@ from app.agents.nodes.token_budget import token_budget_check_node
 from app.core.database import engine, tenant_session
 from app.middleware.token_budget import TokenBudgetGuard
 from app.services.rag import RetrievalResult
+from tests.integration.identifiers import SQL_INSERT_IDENTIFICADOR, params_identificador
 
 pytestmark = pytest.mark.db
 
@@ -119,14 +120,11 @@ async def _sembrar(
             {"id": str(contact_id), "cid": str(client_id)},
         )
         await session.execute(
-            text(
-                "INSERT INTO contact_identifiers (client_id, contact_id, channel, "
-                "identifier_value) VALUES (:cid, :contact, 'whatsapp', :valor)"
-            ),
+            text(SQL_INSERT_IDENTIFICADOR),
             {
                 "cid": str(client_id),
                 "contact": str(contact_id),
-                "valor": f"57300{uuid.uuid4().int % 10_000_000:07d}",
+                **params_identificador(f"57300{uuid.uuid4().int % 10_000_000:07d}"),
             },
         )
         await session.execute(

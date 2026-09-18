@@ -19,6 +19,7 @@ from uuid import UUID
 
 from app.agents.nodes._tenant import get_channel_config, get_contact_identifier
 from app.core.database import tenant_session
+from app.core.metrics import record_message
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.services.messaging.base import MessageContent
@@ -78,6 +79,7 @@ async def deliver_message(
         if conversation is not None:
             conversation.last_message_at = datetime.now(timezone.utc)
 
+    record_message(str(client_id), channel, "outbound")
     logger.info(
         "Mensaje saliente enviado por %s: conversation_id=%s external_id=%s",
         provider_name,

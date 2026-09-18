@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.internal.health import router as health_router
+from app.api.internal.metrics import router as metrics_router
 from app.api.v1.admin import router as admin_router
 from app.api.v1.agent_logs import router as agent_logs_router
 from app.api.v1.auth import router as auth_router
@@ -26,19 +27,22 @@ from app.api.v1.tags import contact_tags_router
 from app.api.v1.tags import router as tags_router
 from app.api.v1.webhooks import router as webhooks_router
 from app.core.config import get_settings
-from app.core.database import dispose_db, init_db
+from app.core.database import dispose_db, engine, init_db
 from app.core.exceptions import (
     AppException,
     app_exception_handler,
     unhandled_exception_handler,
 )
+from app.core.logging import setup_logging
+from app.core.telemetry import setup_telemetry, shutdown_telemetry
 from app.middleware.audit import AuditContextMiddleware
+from app.middleware.observability import ObservabilityMiddleware
 from app.middleware.tenant_context import TenantContextMiddleware
 
-logging.basicConfig(
-    level=getattr(logging, get_settings().LOG_LEVEL.upper(), logging.INFO),
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
+# Loguru sustituye a `logging.basicConfig()` (Sprint 8): `setup_logging()` deja
+# un InterceptHandler en la raiz de `logging`, asi que los ~40 modulos que usan
+# la stdlib siguen funcionando y sus lineas salen con trace_id y client_id.
+setup_logging()
 if TYPE_CHECKING:
     from collections.abc import Awaitable
 
@@ -60,6 +64,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     # ── Startup ──
     logger.info("Iniciando aplicación — env=%s", get_settings().APP_ENV)
+
+    # Tracing: se instrumenta aqui y no en create_app() porque `lifespan` corre
+    # una sola vez por proceso, mientras que create_app() lo llama tambien cada
+    # test que arma su propia app — instrumentar 40 veces el mismo engine deja
+    # 40 listeners sobre la misma conexion.
+    setup_telemetry(app=app, engine=engine)
 
     # Verificar DB
     await init_db()
@@ -83,6 +93,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Cerrando aplicación...")
     await redis_client.close()
     await dispose_db()
+    shutdown_telemetry()
     logger.info("Aplicación cerrada")
 
 
@@ -119,6 +130,10 @@ def create_app() -> FastAPI:
     # `request.state.user_id` que TenantContextMiddleware acaba de poner.
     app.add_middleware(AuditContextMiddleware)
     app.add_middleware(TenantContextMiddleware)
+    # El ultimo registrado es el primero en ejecutarse: ObservabilityMiddleware
+    # envuelve tambien a TenantContextMiddleware, de modo que un 401 por JWT
+    # invalido tambien queda medido y logueado con su trace_id.
+    app.add_middleware(ObservabilityMiddleware)
 
     # ── Exception handlers ──
     app.add_exception_handler(AppException, app_exception_handler)  # type: ignore[arg-type]
@@ -126,6 +141,7 @@ def create_app() -> FastAPI:
 
     # ── Routers ──
     app.include_router(health_router, prefix="/internal", tags=["internal"])
+    app.include_router(metrics_router, prefix="/internal", tags=["internal"])
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
     # Los webhooks NO pasan por TenantContextMiddleware: se autentican por firma
     # HMAC. El prefijo debe coincidir con WEBHOOK_PATHS_PREFIX del middleware.
