@@ -410,11 +410,12 @@ _(nada en progreso)_
 - [x] ADR-047 a ADR-051, BUG-026 y BUG-003 registrados en MEMORY.md
 - [x] 47 tests unitarios nuevos (`test_observability.py`, `test_encryption.py`) y 6 de integración (`tests/integration/test_encryption.py`)
 
-### Verificación local (sesión 24)
-- `ruff check app/ tests/` y `ruff format --check`: limpios
-- `mypy app/`: sin errores propios (los 5 que quedan son librerías que este entorno local no tiene instaladas — `tiktoken`, `psycopg`, `PIL` — y que CI sí instala)
-- `pytest tests/unit/`: **670 tests, 3 fallos**. Los 3 son de `test_documents.py::TestWorkerDeIngesta` y fallan por `pymupdf` sin instalar en este entorno; no los toca esta entrega y en CI pasan
-- Los tests de integración y el e2e necesitan `--run-db`: **la verificación real es el CI del PR**, con Postgres y el rol `app_user` (`NOBYPASSRLS`)
+### Verificación en CI real (sesión 24, [PR #22](https://github.com/miguelggdev/Omnichannel-Platform/pull/22), run 35296764949)
+Leyendo el log, no el checkmark. **Los 9 jobs en verde:**
+- **Unitarios: 686 passed, 1 skipped**, cobertura **88.61%** (antes 554 y 87.37%)
+- **Integración + e2e: 123 passed, 6 skipped** contra Postgres y el rol `app_user` (`NOBYPASSRLS`), incluidos los 6 de `test_encryption.py`
+- `ruff`, `mypy`, Alembic migration check, security scan y el smoke de Docker: limpios
+- **Un fallo real encontrado por CI y corregido:** tres tests de `test_encryption.py` reventaban con "attached to a different loop". No soltaban el pool del engine antes de empezar — `app.core.database.engine` es un singleton de módulo y pytest-asyncio abre un event loop por test. Se agregó la fixture con `await engine.dispose()` que ya usa el resto de la suite, más la limpieza de los tenants que siembra cada test
 
 ### Sin asignar — addendum de operaciones
 `specs/sprint-08-addendum-ops.md` son 6.187 líneas con cuatro features (panel de Celery/Redis, bot de Telegram para super admin, backup avanzado con replicación, y políticas de seguridad de servidor/Cloudflare/Docker). **La matriz de METHODOLOGY.md §Sprint 8 no asigna ninguna de las cuatro a ningún dev.** Queda como decisión de reparto, no adjudicada por cuenta propia.
