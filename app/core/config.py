@@ -145,6 +145,16 @@ class Settings(BaseSettings):
     OPENAI_CHAT_MODEL: str = "gpt-4o"
     OPENAI_FALLBACK_MODEL: str = "gpt-4o-mini"
 
+    # Transcripcion de audios entrantes (Whisper) — Sprint 9
+    WHISPER_MODEL: str = "whisper-1"
+    # Vacio = Whisper detecta el idioma (la plataforma atiende 6 idiomas).
+    WHISPER_LANGUAGE: str = ""
+    # OpenAI acepta hasta 25 MB; se deja margen y se corta antes de gastar la llamada.
+    WHISPER_MAX_AUDIO_BYTES: int = 20 * 1024 * 1024
+    WHISPER_COST_PER_MINUTE_USD: float = 0.006
+    WHISPER_TIMEOUT_SECONDS: float = 60.0
+    MEDIA_DOWNLOAD_TIMEOUT_SECONDS: float = 30.0
+
     # Anthropic (Admin Assistant)
     ANTHROPIC_API_KEY: str = ""
     ADMIN_ASSISTANT_MODEL: str = "claude-sonnet-4-20250514"
