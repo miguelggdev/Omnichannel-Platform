@@ -18,7 +18,12 @@ class User(TenantBaseModel):
     """Usuarios humanos del sistema (agentes, admins, supervisores).
 
     Attributes:
-        email: Email único del usuario (cifrado en DB con pgcrypto).
+        email: Email único del usuario. **En claro** en la base: el docstring decía
+            "cifrado con pgcrypto" y no lo estaba. `auth_lookup_user()`
+            (migración 007) lo compara por igualdad exacta, así que cifrarlo exige
+            antes un índice ciego por tenant como el de `contact_identifiers`
+            (ADR-052) y cambiar esa función; pendiente de decisión, ver
+            MEMORY.md ("users.email sin cifrar").
         password_hash: Hash bcrypt del password.
         first_name: Nombre del usuario.
         last_name: Apellido del usuario.

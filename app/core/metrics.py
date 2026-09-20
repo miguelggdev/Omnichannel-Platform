@@ -10,11 +10,16 @@ para registrarlas. Se expone en dos sitios:
 Multiproceso
 ------------
 Ni la API ni los workers corren en un solo proceso: uvicorn arranca con
-`--workers 2` (Dockerfile) y el servicio `api` tiene `replicas: 2`; cada worker
-de Celery usa el pool prefork con 1-4 hijos. Un contador vive en la memoria del
-proceso que lo incrementa, así que un scrape a `api:8000` devolvería el valor
-de *uno* de los cuatro procesos, eligiendo uno distinto cada vez — la serie
-resultante sube y baja sin relación con el tráfico real.
+`--workers 2` (Dockerfile); cada worker de Celery usa el pool prefork con 1-4
+hijos. Un contador vive en la memoria del proceso que lo incrementa, así que un
+scrape a `api:8000` devolvería el valor de *uno* de los procesos, eligiendo uno
+distinto cada vez — la serie resultante sube y baja sin relación con el tráfico
+real.
+
+`deploy.replicas: 2` del servicio `api` solo lo respeta Swarm: con
+`docker compose up` corre **un** contenedor con 2 procesos uvicorn. Da igual
+para el modo multiproceso (cada contenedor agrega su propio directorio), pero
+conviene no asumir 4 procesos al leer las series.
 
 La solución es el modo multiproceso de `prometheus_client`: con
 `PROMETHEUS_MULTIPROC_DIR` definido, cada proceso escribe sus muestras en
