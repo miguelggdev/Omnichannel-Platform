@@ -117,7 +117,7 @@ class TestFirmaDeSesion:
         assert sesion_de_token(f"{victima}.{firma_propia}") is None
 
     def test_una_firma_manipulada_se_rechaza(self) -> None:
-        session_id, token = nueva_sesion()
+        _session_id, token = nueva_sesion()
         manipulado = token[:-1] + ("A" if token[-1] != "A" else "B")
         assert sesion_de_token(manipulado) is None
 
