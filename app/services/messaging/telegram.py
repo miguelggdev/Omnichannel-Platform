@@ -43,6 +43,7 @@ from app.core.config import get_settings
 from app.schemas.message import ChannelEnum, MessageTypeEnum, NormalizedMessage
 from app.services.messaging.base import (
     ChannelConstraints,
+    IgnoredWebhookError,
     MessageContent,
     MessagingProvider,
     TemplateMessage,
@@ -191,7 +192,7 @@ class TelegramProvider(MessagingProvider):
 
         mensaje = raw_payload.get("message")
         if not isinstance(mensaje, dict):
-            raise ValueError(
+            raise IgnoredWebhookError(
                 "Update de Telegram sin `message` ni `callback_query` "
                 f"(claves: {sorted(k for k in raw_payload if k != 'update_id')})"
             )
@@ -229,7 +230,7 @@ class TelegramProvider(MessagingProvider):
             texto = f"Contacto compartido: {nombre} {contacto.get('phone_number', '')}".strip()
         elif texto is None:
             tipos = sorted(k for k in mensaje if k not in ("message_id", "from", "chat", "date"))
-            raise ValueError(f"Tipo de mensaje de Telegram no soportado: {tipos}")
+            raise IgnoredWebhookError(f"Tipo de mensaje de Telegram no soportado: {tipos}")
 
         return NormalizedMessage(
             channel=ChannelEnum.telegram,
@@ -291,9 +292,13 @@ class TelegramProvider(MessagingProvider):
             ValueError: Si el chat no es privado, no tiene id o lo envia un bot.
         """
         if chat.get("type") != "private" or chat.get("id") is None:
-            raise ValueError(f"Telegram: solo se atienden chats privados (tipo={chat.get('type')})")
+            raise IgnoredWebhookError(
+                f"Telegram: solo se atienden chats privados (tipo={chat.get('type')})"
+            )
         if perfil.get("is_bot"):
-            raise ValueError("Telegram: mensaje de otro bot, se descarta para evitar bucles")
+            raise IgnoredWebhookError(
+                "Telegram: mensaje de otro bot, se descarta para evitar bucles"
+            )
 
     async def validate_signature(self, payload: bytes, signature: str, secret: str) -> bool:
         """Compara el `secret_token` que Telegram devuelve en cada update.
