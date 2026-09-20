@@ -105,7 +105,7 @@ async def deliver_message(
         ChannelNotConfiguredError: Si el canal no tiene proveedor o credenciales.
     """
     identifier = await get_contact_identifier(client_id, contact_id, channel)
-    provider_name, channel_config = get_channel_config(channel)
+    provider_name, channel_config = get_channel_config(channel, client_id)
     provider = get_messaging_provider(provider_name, {"channel": channel})
 
     contexto = await _contexto_de_respuesta(client_id, conversation_id, channel)

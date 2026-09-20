@@ -103,6 +103,28 @@ class Settings(BaseSettings):
     # webhook, pero los dos envian la cabecera Authorization: Basic.
     EMAIL_INBOUND_WEBHOOK_SECRET: str = ""
 
+    # Webchat (widget web sobre WebSocket) — Sprint 9. Token publico que el
+    # widget lleva en la URL del socket (/api/v1/webchat/{channel_token}); es
+    # lo unico que separa el widget de este tenant del de otro, y como viaja en
+    # el HTML de la pagina no es un secreto fuerte: identifica la instalacion,
+    # no al visitante. Vacio = canal deshabilitado (el socket se cierra).
+    WEBCHAT_CHANNEL_TOKEN: str = ""
+    # Cuantos mensajes salientes se le reponen como maximo a un visitante que
+    # reconecta con `last_message_id`.
+    WEBCHAT_REPLAY_LIMIT: int = 50
+    # Tope de mensajes por minuto que acepta un socket antes de cerrarlo. El
+    # canal es publico: sin tope, una pestana abierta puede llenar la cola de
+    # webhooks y el presupuesto de tokens del tenant.
+    WEBCHAT_RATE_LIMIT_PER_MINUTE: int = 30
+
+    # Transcripcion de audio con Whisper (Sprint 9). Las notas de voz que
+    # entran por cualquier canal se transcriben antes de llegar al grafo.
+    WHISPER_MODEL: str = "whisper-1"
+    # Idioma que se le sugiere a Whisper. Vacio = deteccion automatica.
+    WHISPER_LANGUAGE: str = "es"
+    # Tope de descarga de un audio. La API de Whisper rechaza mas de 25 MB.
+    WHISPER_MAX_AUDIO_BYTES: int = 25 * 1024 * 1024
+
     # Google Calendar (Sprint 7) — un service account global (no OAuth2 por
     # tenant): cada tenant comparte su calendario con el email del service
     # account y guarda su calendar_id en agent_configs.config.scheduling.

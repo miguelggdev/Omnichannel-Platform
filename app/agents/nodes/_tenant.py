@@ -56,6 +56,7 @@ CHANNEL_PROVIDERS: dict[str, str] = {
     "facebook": "meta",
     "telegram": "telegram",
     "email": "email",
+    "webchat": "webchat",
 }
 
 
@@ -228,11 +229,16 @@ async def get_contact_identifier(client_id: UUID, contact_id: UUID, channel: str
     return str(identifier)
 
 
-def get_channel_config(channel: str) -> tuple[str, dict[str, Any]]:
+def get_channel_config(channel: str, client_id: UUID | None = None) -> tuple[str, dict[str, Any]]:
     """Resuelve el proveedor y las credenciales de un canal.
 
     Args:
-        channel: Canal de la conversacion (whatsapp, instagram, facebook, telegram).
+        channel: Canal de la conversacion (whatsapp, instagram, facebook,
+            telegram, email, webchat).
+        client_id: Tenant dueno de la conversacion. Hoy solo lo necesita
+            webchat, que enruta lo saliente por un canal de Redis propio de
+            (tenant, sesion); cuando exista la tabla `channel_configs`
+            (Fase 2) toda la config sera por tenant y dejara de ser opcional.
 
     Returns:
         Tupla `(provider_name, channel_config)` lista para la factory de
@@ -256,6 +262,10 @@ def get_channel_config(channel: str) -> tuple[str, dict[str, Any]]:
         }
     elif provider_name == "telegram":
         config = {"bot_token": settings.TELEGRAM_CHANNEL_BOT_TOKEN}
+    elif provider_name == "webchat":
+        # No hay credencial de proveedor: el "destino" es un canal de Redis
+        # y el tenant forma parte de su nombre.
+        config = {"client_id": str(client_id) if client_id else ""}
     elif provider_name == "email":
         config = {
             "smtp_host": settings.EMAIL_SMTP_HOST,
