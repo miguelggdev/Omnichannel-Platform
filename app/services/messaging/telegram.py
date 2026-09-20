@@ -40,6 +40,7 @@ from typing import Any
 import httpx
 
 from app.core.config import get_settings
+from app.core.encryption import mask_identifier
 from app.schemas.message import ChannelEnum, MessageTypeEnum, NormalizedMessage
 from app.services.messaging.base import (
     ChannelConstraints,
@@ -189,6 +190,31 @@ def _telefono_propio(mensaje: dict[str, Any], perfil: dict[str, Any]) -> str | N
     return str(telefono)
 
 
+#: Texto con el que se guarda un contacto propio compartido: el numero no debe
+#: quedar en claro en `messages.content` (se conserva cifrado como identificador).
+TEXTO_TELEFONO_COMPARTIDO = "Compartio su numero de telefono"
+
+
+def _sin_telefono(raw_payload: dict[str, Any]) -> dict[str, Any]:
+    """Copia del update con el telefono del contacto compartido enmascarado.
+
+    `raw_payload` acaba en `messages.metadata` y en la cola de Celery; el numero
+    ya viaja cifrado por `verified_phone` y no hace falta repetirlo en claro.
+
+    Args:
+        raw_payload: `Update` original (no se modifica).
+
+    Returns:
+        Copia con `message.contact.phone_number` enmascarado.
+    """
+    mensaje = dict(raw_payload.get("message") or {})
+    contacto = dict(mensaje.get("contact") or {})
+    if contacto.get("phone_number"):
+        contacto["phone_number"] = mask_identifier(str(contacto["phone_number"]))
+    mensaje["contact"] = contacto
+    return {**raw_payload, "message": mensaje}
+
+
 class TelegramProvider(MessagingProvider):
     """Implementacion de `MessagingProvider` para Telegram (Bot API).
 
@@ -261,6 +287,9 @@ class TelegramProvider(MessagingProvider):
             )
             texto = f"Contacto compartido: {nombre} {contacto.get('phone_number', '')}".strip()
             verified_phone = _telefono_propio(mensaje, perfil)
+            if verified_phone:
+                texto = TEXTO_TELEFONO_COMPARTIDO
+                raw_payload = _sin_telefono(raw_payload)
         elif texto is None:
             tipos = sorted(k for k in mensaje if k not in ("message_id", "from", "chat", "date"))
             raise IgnoredWebhookError(f"Tipo de mensaje de Telegram no soportado: {tipos}")
@@ -372,7 +401,7 @@ class TelegramProvider(MessagingProvider):
             TelegramAPIError: Si Telegram rechaza la peticion o no responde.
         """
         token = channel_config["bot_token"]
-        teclado = self._teclado(content.buttons)
+        teclado = self._teclado(content.buttons, content.metadata)
         ultimo_id = ""
 
         if content.media_url:
@@ -417,15 +446,33 @@ class TelegramProvider(MessagingProvider):
         return ultimo_id
 
     @staticmethod
-    def _teclado(botones: list[dict[str, Any]] | None) -> dict[str, Any] | None:
-        """Arma el teclado inline: un boton por fila.
+    def _teclado(
+        botones: list[dict[str, Any]] | None, metadata: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """Arma el `reply_markup` del mensaje.
+
+        Por prioridad: `metadata["request_contact"]` (un boton de teclado que
+        pide el numero de telefono del usuario; el texto del boton es el valor),
+        `metadata["remove_keyboard"]` (retira el teclado anterior) y, por
+        ultimo, los botones inline.
 
         Args:
             botones: Lista de dicts con `title` e `id`.
+            metadata: `MessageContent.metadata`.
 
         Returns:
-            `reply_markup` de Telegram, o `None` si no hay botones.
+            `reply_markup` de Telegram, o `None` si no hay nada que mostrar.
         """
+        metadata = metadata or {}
+        if metadata.get("request_contact"):
+            return {
+                "keyboard": [[{"text": str(metadata["request_contact"]), "request_contact": True}]],
+                "resize_keyboard": True,
+                # Se oculta tras usarlo: no queda un boton permanente.
+                "one_time_keyboard": True,
+            }
+        if metadata.get("remove_keyboard"):
+            return {"remove_keyboard": True}
         if not botones:
             return None
         return {
