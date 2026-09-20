@@ -1,11 +1,19 @@
 """ContactUnifier — fusión manual de contactos duplicados.
 
-Contrato exacto (`app/api/v1/contacts.py::merge_contacts()`, ya entregado por
-Dev B): `ContactUnifier(session).merge(source_id=..., target_id=...)`, sobre
-una `session` ya abierta con `tenant_session()`. El endpoint valida antes de
-llamar — `source_id != target_id`, ambos contactos existen, ninguno está ya
-fusionado (`merged_into_id is not None`) — así que `merge()` no repite esas
-comprobaciones; solo mueve las filas y marca el origen.
+Contrato (`app/api/v1/contacts.py::merge_contacts()`, de Dev B):
+`ContactUnifier(session).merge(source_id=..., target_id=..., client_id=...)`,
+sobre una `session` ya abierta con `tenant_session()`. El endpoint valida antes
+de llamar — `source_id != target_id`, ambos contactos existen, ninguno está ya
+fusionado (`merged_into_id is not None`) — y `merge()` no repite el chequeo de
+fusión previa; solo mueve las filas y marca el origen.
+
+El `client_id` llega **explícito** del llamador autenticado, no se deduce de la
+fila: `source_id`/`target_id` salen de la URL de un endpoint HTTP, y tomar el
+tenant de la propia fila que se busca sin filtro sería una defensa circular
+(cualquier fila que RLS dejara pasar "confirmaría" su propio tenant). Con él,
+`merge()` comprueba que **origen y destino** pertenecen a ese tenant antes de
+tocar nada: sin la comprobación del destino, `merged_into_id` podría apuntar a
+un contacto de otro tenant.
 
 Solo se implementa `merge()`, no el `resolve_contact()` que trae el spec §8: esa
 resolución automática (buscar contacto por `channel` + `identifier_value` al
@@ -63,7 +71,7 @@ class ContactUnifier:
         """
         self.session = session
 
-    async def merge(self, source_id: UUID, target_id: UUID) -> None:
+    async def merge(self, source_id: UUID, target_id: UUID, client_id: UUID) -> None:
         """Mueve todo lo del contacto origen al destino y marca el origen fusionado.
 
         Mueve, en este orden: identificadores de canal, conversaciones, notas
@@ -73,24 +81,19 @@ class ContactUnifier:
         Args:
             source_id: Contacto duplicado que se absorbe.
             target_id: Contacto que sobrevive a la fusión.
+            client_id: Tenant del usuario autenticado; ambos contactos tienen
+                que pertenecerle.
 
         Raises:
-            ContactNotFoundError: Si `source_id` no resuelve a un contacto en
-                esta sesión (el endpoint ya lo valida antes de llamar; solo
-                pasaría ante una fila borrada entre la validación y esta llamada).
+            ContactNotFoundError: Si `source_id` o `target_id` no resuelven a un
+                contacto de `client_id` (el endpoint ya lo valida antes de
+                llamar; solo pasaría ante una fila borrada entre la validación y
+                esta llamada, o ante un llamador que se salte esa validación).
         """
         logger.info("Fusionando contacto %s en %s", source_id, target_id)
 
-        # Se busca el origen primero (no al final, como en el spec) para tener
-        # su client_id y filtrar con él el resto de las operaciones: RLS ya
-        # aisla por tenant, pero source_id/target_id salen de la URL de un
-        # endpoint HTTP, no de un valor inyectado server-side, así que llevan
-        # la misma defensa explícita que el resto del proyecto (ver
-        # `get_contact_or_404` en `app/api/v1/contacts.py`).
-        source = await self.session.get(Contact, source_id)
-        if source is None:
-            raise ContactNotFoundError(f"Contacto origen {source_id} no encontrado")
-        client_id = source.client_id
+        source = await self._contacto_del_tenant(source_id, client_id, "origen")
+        await self._contacto_del_tenant(target_id, client_id, "destino")
 
         await self.session.execute(
             update(ContactIdentifier)
@@ -144,3 +147,30 @@ class ContactUnifier:
         source.merged_into_id = target_id
 
         logger.info("Contacto %s fusionado en %s", source_id, target_id)
+
+    async def _contacto_del_tenant(self, contact_id: UUID, client_id: UUID, rol: str) -> Contact:
+        """Carga un contacto exigiendo que sea del tenant indicado.
+
+        Filtro explícito en el WHERE además de RLS: `session.get()` no deja ver
+        ningún filtro y, si la política fallara en esa tabla, devolvería el
+        contacto de otro tenant sin que nada avisara.
+
+        Args:
+            contact_id: Contacto buscado.
+            client_id: Tenant al que tiene que pertenecer.
+            rol: `"origen"` o `"destino"`, para el mensaje de error.
+
+        Returns:
+            El contacto.
+
+        Raises:
+            ContactNotFoundError: Si no existe en ese tenant.
+        """
+        contacto = (
+            await self.session.execute(
+                select(Contact).where(Contact.id == contact_id, Contact.client_id == client_id)
+            )
+        ).scalar_one_or_none()
+        if contacto is None:
+            raise ContactNotFoundError(f"Contacto {rol} {contact_id} no encontrado")
+        return contacto
