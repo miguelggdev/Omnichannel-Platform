@@ -150,7 +150,7 @@ async def _resolve_contact(
     stmt = select(ContactIdentifier).where(
         ContactIdentifier.client_id == client_id,
         ContactIdentifier.channel == channel,
-        ContactIdentifier.identifier_hash == blind_index(identifier_value),
+        ContactIdentifier.identifier_hash == blind_index(identifier_value, client_id),
     )
     existing = (await session.execute(stmt)).scalar_one_or_none()
 

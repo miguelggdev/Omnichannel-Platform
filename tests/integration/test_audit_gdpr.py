@@ -113,7 +113,9 @@ async def _sembrar(slug: str) -> Escenario:
             {
                 "cid": str(ids["client_id"]),
                 "contact": str(ids["contact_id"]),
-                **params_identificador(f"57300{uuid.uuid4().int % 10_000_000:07d}"),
+                **params_identificador(
+                    f"57300{uuid.uuid4().int % 10_000_000:07d}", ids["client_id"]
+                ),
             },
         )
         await session.execute(
