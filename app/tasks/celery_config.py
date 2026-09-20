@@ -105,20 +105,14 @@ celery_app.conf.update(
             "schedule": crontab(day_of_month="1", hour=4, minute=0),
             "options": {"queue": "bulk"},
         },
-        "check-token-budgets": {
-            "task": "app.tasks.notification_check_token_budgets",
-            "schedule": 3600.0,  # cada hora
-            "options": {"queue": "notifications"},
-        },
-        "recalculate-lead-scores": {
-            "task": "app.tasks.enrichment_recalculate_scores",
-            "schedule": 1800.0,  # cada 30 minutos
-            "options": {"queue": "lead_enrichment"},
-        },
-        "check-stale-leads": {
-            "task": "app.tasks.enrichment_check_stale_leads",
-            "schedule": 3600.0,  # cada hora
-            "options": {"queue": "lead_enrichment"},
-        },
+        # Cada entrada de aqui tiene que apuntar a una tarea que exista: Beat
+        # publica el mensaje igual, y un worker que no la conoce lo rechaza
+        # como "unregistered task" en cada ciclo, para siempre, sin que nada
+        # falle de forma visible (`tests/unit/test_celery_config.py` lo vigila).
+        # Sprint 2 dejo aqui tres entradas de features que aun no existen y que
+        # se retiraron: `check-token-budgets` (avisos de presupuesto por
+        # `notifications`), `recalculate-lead-scores` y `check-stale-leads`
+        # (Lead Management, Sprints 16-19). Se vuelven a agregar cuando se
+        # entregue la tarea correspondiente, no antes.
     },
 )
