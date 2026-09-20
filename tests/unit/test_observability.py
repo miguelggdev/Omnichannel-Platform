@@ -366,6 +366,35 @@ class TestEndpointDeMetricas:
         assert "text/plain" in respuesta.headers["content-type"]
         assert "http_requests_total" in respuesta.text
 
+    def test_la_lectura_del_registro_corre_fuera_del_event_loop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """En modo multiproceso `collect()` abre y lee archivos: I/O sincrono.
+
+        Tiene que ejecutarse en un hilo aparte, no en el del event loop
+        (CLAUDE.md, regla 4). `TestClient` ya corre la app en un hilo propio, asi
+        que comparar hilos no distinguiria nada: se verifica que el endpoint
+        delega en `asyncio.to_thread`.
+        """
+        import asyncio
+
+        from app.api.internal import metrics as endpoint_module
+        from app.main import create_app
+
+        delegadas: list[Any] = []
+        original = asyncio.to_thread
+
+        async def _espia(funcion: Any, *args: Any, **kwargs: Any) -> Any:
+            delegadas.append(funcion)
+            return await original(funcion, *args, **kwargs)
+
+        monkeypatch.setattr(endpoint_module.asyncio, "to_thread", _espia)
+
+        respuesta = TestClient(create_app()).get("/internal/metrics")
+
+        assert respuesta.status_code == 200
+        assert len(delegadas) == 1, "generate_latest() no se delego a un hilo"
+
     def test_no_requiere_autenticacion(self) -> None:
         """Prometheus scrapea por la red interna, sin JWT."""
         from app.middleware.tenant_context import PUBLIC_PATHS
