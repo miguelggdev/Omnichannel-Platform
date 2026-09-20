@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import tenant_session
 from app.core.dependencies import require_role
 from app.core.exceptions import DUPLICATE, NOT_FOUND, AppException
+from app.models.agent_config import AgentConfig
 from app.models.contact import Contact
 from app.models.conversation import Conversation
 from app.models.quick_reply import QuickReply
@@ -306,6 +307,20 @@ async def render_quick_reply(
             contexto["contact"] = contact
         if agent is not None:
             contexto["agent"] = agent
+
+        # Zona horaria del tenant para `{{date}}`. Se lee la misma config activa
+        # que usa el agendamiento; sin ella, el resolver usa la de por defecto.
+        config = (
+            await session.execute(
+                select(AgentConfig)
+                .where(AgentConfig.client_id == client_id, AgentConfig.is_active.is_(True))
+                .order_by(AgentConfig.created_at.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        zona = ((config.config or {}).get("scheduling") or {}).get("timezone") if config else None
+        if zona:
+            contexto["timezone"] = zona
 
         contenido, sin_resolver = resolve_quick_reply(quick_reply.content, contexto)
 
