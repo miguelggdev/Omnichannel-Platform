@@ -34,7 +34,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import bindparam, select, text
+from sqlalchemy import bindparam, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import tenant_session
@@ -258,6 +258,7 @@ async def _redactar_rastro_de_auditoria(
     client_id: UUID,
     contact_id: UUID,
     mensaje_ids: list[UUID],
+    conversacion_ids: list[UUID],
 ) -> None:
     """Redacta el dato personal dentro de las filas de `audit_logs` ya escritas.
 
@@ -282,6 +283,10 @@ async def _redactar_rastro_de_auditoria(
         contact_id: Contacto cuyas filas de `contacts` hay que redactar.
         mensaje_ids: Mensajes entrantes anonimizados cuyas filas de `messages`
             hay que redactar. Puede ser una lista vacia.
+        conversacion_ids: Conversaciones del contacto, cuyas filas de
+            `conversations` llevan el `subject` (texto libre que escribe un
+            agente y que el export RGPD entrega como dato del contacto). Solo
+            se redacta donde el asunto no era nulo.
     """
     redaccion_contacto = {
         "first_name": ANONIMIZADO,
@@ -306,6 +311,27 @@ async def _redactar_rastro_de_auditoria(
             "contact_id": str(contact_id),
         },
     )
+
+    if conversacion_ids:
+        redaccion_asunto = {"subject": ANONIMIZADO}
+        stmt_asunto = text("""
+            UPDATE audit_logs
+            SET old_values = CASE WHEN old_values->>'subject' IS NOT NULL
+                    THEN old_values || CAST(:redaccion AS jsonb) ELSE old_values END,
+                new_values = CASE WHEN new_values->>'subject' IS NOT NULL
+                    THEN new_values || CAST(:redaccion AS jsonb) ELSE new_values END
+            WHERE client_id = :client_id
+              AND table_name = 'conversations'
+              AND record_id IN :conversacion_ids
+        """).bindparams(bindparam("conversacion_ids", expanding=True))
+        await session.execute(
+            stmt_asunto,
+            {
+                "redaccion": json.dumps(redaccion_asunto),
+                "client_id": str(client_id),
+                "conversacion_ids": [str(c) for c in conversacion_ids],
+            },
+        )
 
     if not mensaje_ids:
         return
@@ -347,7 +373,8 @@ async def gdpr_delete_contact(
       - el valor de cada identificador de canal (telefono, PSID, usuario);
       - el contenido y el media de los mensajes **entrantes**, que son las
         palabras del propio contacto;
-      - las notas internas que el equipo escribio sobre el.
+      - las notas internas que el equipo escribio sobre el;
+      - el asunto (`subject`) de sus conversaciones, texto libre de un agente.
 
     Qué NO se anonimiza, a proposito: los mensajes salientes. Son el registro de
     lo que la empresa respondio, no datos aportados por el contacto, y borrarlos
@@ -463,12 +490,28 @@ async def gdpr_delete_contact(
         for nota in notas:
             nota.content = CONTENIDO_ANONIMIZADO
 
+        if conversaciones:
+            # El asunto es texto libre de un agente y puede llevar datos del
+            # contacto; el export RGPD ya lo entrega, asi que la supresion
+            # tiene que alcanzarlo. Donde es NULL se deja NULL.
+            await session.execute(
+                update(Conversation)
+                .where(
+                    Conversation.client_id == client_id,
+                    Conversation.id.in_(conversaciones),
+                    Conversation.subject.is_not(None),
+                )
+                .values(subject=ANONIMIZADO)
+            )
+
         await session.flush()
 
         # Despues del flush: el UPDATE de anonimizacion de arriba ya disparo el
         # trigger y ya escribio su propia fila en audit_logs con el dato real
         # en old_values. Redactar antes dejaria esa fila afuera.
-        await _redactar_rastro_de_auditoria(session, client_id, contact_id, mensaje_ids)
+        await _redactar_rastro_de_auditoria(
+            session, client_id, contact_id, mensaje_ids, list(conversaciones)
+        )
 
     logger.info(
         "RGPD: contacto %s anonimizado por %s (tenant %s)",
