@@ -476,7 +476,7 @@ Leyendo el log, no el checkmark. **Los 9 jobs en verde:**
 - **El spec de Sprint 9 está desactualizado** en las firmas de `MessagingProvider` y en `channel_configs`/`ProviderFactory` (ver ADR-053): el de Webchat (`WebchatProvider.__init__(provider_config, connection_manager)`) no encaja con la factory real, que construye sin argumentos.
 
 ### Sin resolver en esta entrega (decisiones o trabajo aparte)
-- **Unificación de contacto entre canales (criterio 5 del spec):** resuelta en la rama `feature/sprint-09-unificacion-contactos` (ADR-057), solo por teléfono verificado por el canal y coincidencia inequívoca. Pendiente: botón `request_contact` de Telegram para pedir el número.
+- **Unificación de contacto entre canales (criterio 5 del spec):** resuelta en la rama `feature/sprint-09-unificacion-contactos` (ADR-057), solo por teléfono verificado por el canal y coincidencia inequívoca. El botón `request_contact` de Telegram (`/vincular`) se entrega en la rama `feature/sprint-09-telegram-request-contact` (ADR-058).
 - **Telegram:** `answerCallbackQuery` no se envía (el botón muestra el reloj unos segundos), sin *throttling* de los 30 msg/s por bot, y el webhook se registra a mano con `register_webhook()` (no hay script).
 - **Email:** adjuntos ignorados; el proveedor de Inbound Parse (SendGrid o Mailgun) sigue sin elegirse: el código soporta los dos.
 - **Cuerpo con `Transfer-Encoding: chunked`:** el tope de 32 MB solo aplica a lo que declara `Content-Length` (BUG-040); el resto lo tiene que cortar Traefik/Cloudflare.
