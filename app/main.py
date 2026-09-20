@@ -25,6 +25,7 @@ from app.api.v1.notes import router as notes_router
 from app.api.v1.quick_replies import router as quick_replies_router
 from app.api.v1.tags import contact_tags_router
 from app.api.v1.tags import router as tags_router
+from app.api.v1.webchat import router as webchat_router
 from app.api.v1.webhooks import router as webhooks_router
 from app.core.config import get_settings
 from app.core.database import dispose_db, engine, init_db
@@ -157,6 +158,10 @@ def create_app() -> FastAPI:
     app.include_router(agent_logs_router, prefix="/api/v1/agent-logs", tags=["agent-logs"])
     app.include_router(quick_replies_router, prefix="/api/v1/quick-replies", tags=["quick-replies"])
     app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
+    # El widget de webchat es un WebSocket: no lleva JWT (los middleware son
+    # BaseHTTPMiddleware y dejan pasar de largo todo lo que no sea HTTP) y se
+    # autentica con el token del canal mas el de sesion firmado.
+    app.include_router(webchat_router, prefix="/api/v1/webchat", tags=["webchat"])
 
     return app
 
