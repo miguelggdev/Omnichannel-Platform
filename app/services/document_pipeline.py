@@ -23,6 +23,7 @@ from uuid import UUID
 import pymupdf
 from docx import Document as DocxFile
 from openpyxl import load_workbook
+from sqlalchemy import select
 
 from app.core.database import tenant_session
 from app.models.document import Document
@@ -226,7 +227,13 @@ class DocumentPipeline:
             ValueError: Si el documento no existe para este tenant.
         """
         async with tenant_session(client_id) as session:
-            document = await session.get(Document, document_id)
+            document = (
+                await session.execute(
+                    select(Document).where(
+                        Document.id == document_id, Document.client_id == client_id
+                    )
+                )
+            ).scalar_one_or_none()
             if document is None:
                 raise ValueError(f"Documento {document_id} no encontrado")
 
@@ -256,7 +263,13 @@ class DocumentPipeline:
             ValueError: Si el documento desaparecio durante el procesamiento.
         """
         async with tenant_session(client_id) as session:
-            document = await session.get(Document, document_id)
+            document = (
+                await session.execute(
+                    select(Document).where(
+                        Document.id == document_id, Document.client_id == client_id
+                    )
+                )
+            ).scalar_one_or_none()
             if document is None:
                 raise ValueError(f"Documento {document_id} desaparecio durante el procesamiento")
 

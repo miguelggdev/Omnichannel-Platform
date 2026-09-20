@@ -118,8 +118,9 @@ class TestHumanHandoff:
         self, monkeypatch: pytest.MonkeyPatch, conversacion: FakeConversation | None
     ) -> tuple[list[dict[str, Any]], list[tuple[str, dict[str, Any]]]]:
         """Deja el nodo listo con base, envio y notificaciones falsos."""
-        conversation_id = uuid.UUID(int=1)
-        sesion = FakeSession(objetos={conversation_id: conversacion} if conversacion else {})
+        # La conversacion se busca con select() filtrado por client_id, no con
+        # session.get(): sale de `resultados`, no de `objetos`.
+        sesion = FakeSession(resultados=[conversacion])
         parchear_tenant_session(monkeypatch, handoff_module, sesion)
         parchear_agent_settings(monkeypatch, handoff_module, AgentSettings(model="gpt-4o"))
         envios = _capturar_envios(monkeypatch, handoff_module)
@@ -259,7 +260,7 @@ class TestDelivery:
         """WhatsApp sale por YCloud y queda registrado como saliente del bot."""
         conversation_id = uuid.UUID(int=7)
         conversacion = FakeConversation()
-        sesion = FakeSession(objetos={conversation_id: conversacion})
+        sesion = FakeSession(resultados=[conversacion])
         parchear_tenant_session(monkeypatch, delivery_module, sesion)
 
         enviados: list[dict[str, Any]] = []

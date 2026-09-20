@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import select
+
 from app.agents.nodes._delivery import deliver_message
 from app.agents.nodes._notifications import enqueue_notification
 from app.agents.nodes._state import ConversationState
@@ -122,7 +124,13 @@ async def human_handoff_node(state: ConversationState) -> dict[str, Any]:
     registro = _handoff_metadata(state, reason)
 
     async with tenant_session(client_id) as session:
-        conversation = await session.get(Conversation, conversation_id)
+        conversation = (
+            await session.execute(
+                select(Conversation).where(
+                    Conversation.id == conversation_id, Conversation.client_id == client_id
+                )
+            )
+        ).scalar_one_or_none()
         if conversation is None:
             logger.error("Conversacion %s inexistente al escalar a humano", conversation_id)
         else:

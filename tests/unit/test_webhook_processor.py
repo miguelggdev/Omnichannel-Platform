@@ -30,13 +30,17 @@ class FakeResult:
 
 
 class FakeSession:
-    """AsyncSession minima: registra los objetos agregados y sirve resultados."""
+    """AsyncSession minima: registra los objetos agregados y sirve resultados.
 
-    def __init__(self, results: list[Any] | None = None, gets: dict[Any, Any] | None = None):
+    A proposito **no** tiene `get()`: `webhook_processor` busca los contactos con
+    `select()` filtrado por `client_id`, y si alguien vuelve a `session.get()`
+    (sin filtro visible, dependiendo solo de RLS) estos tests fallan.
+    """
+
+    def __init__(self, results: list[Any] | None = None):
         self.added: list[Any] = []
         self.flushes = 0
         self._results = list(results or [])
-        self._gets = gets or {}
 
     async def execute(self, *args: Any, **kwargs: Any) -> FakeResult:
         """Consume el siguiente resultado programado."""
@@ -52,10 +56,6 @@ class FakeSession:
     async def flush(self) -> None:
         """Cuenta los flush."""
         self.flushes += 1
-
-    async def get(self, model: Any, pk: Any) -> Any:
-        """Devuelve el objeto preprogramado para esa PK."""
-        return self._gets.get(pk)
 
 
 class FakeRedisList:
@@ -149,7 +149,7 @@ class TestResolverContacto:
         contacto_id = uuid.uuid4()
         existente = type("Ident", (), {"contact_id": contacto_id})()
         contacto = type("Contact", (), {"id": contacto_id, "merged_into_id": None})()
-        session = FakeSession(results=[existente], gets={contacto_id: contacto})
+        session = FakeSession(results=[existente, contacto])
 
         resultado = await wp._resolve_contact(session, client_id, "whatsapp", "573001112233")
 
@@ -163,7 +163,7 @@ class TestResolverContacto:
         viejo = type("Contact", (), {"id": viejo_id, "merged_into_id": nuevo_id})()
         nuevo = type("Contact", (), {"id": nuevo_id, "merged_into_id": None})()
         existente = type("Ident", (), {"contact_id": viejo_id})()
-        session = FakeSession(results=[existente], gets={viejo_id: viejo, nuevo_id: nuevo})
+        session = FakeSession(results=[existente, viejo, nuevo])
 
         resultado = await wp._resolve_contact(session, client_id, "whatsapp", "x")
 
@@ -176,7 +176,7 @@ class TestResolverContacto:
         a = type("Contact", (), {"id": a_id, "merged_into_id": b_id})()
         b = type("Contact", (), {"id": b_id, "merged_into_id": a_id})()
         existente = type("Ident", (), {"contact_id": a_id})()
-        session = FakeSession(results=[existente], gets={a_id: a, b_id: b})
+        session = FakeSession(results=[existente, a, b, a])
 
         resultado = await wp._resolve_contact(session, client_id, "whatsapp", "x")
 

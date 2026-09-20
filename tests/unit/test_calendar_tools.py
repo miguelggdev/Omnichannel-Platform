@@ -7,7 +7,7 @@ en `tests/unit/test_calendar_service.py`).
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -357,9 +357,9 @@ class TestModifyAppointment:
         apt_id, tipo_id = uuid.uuid4(), uuid.uuid4()
         cita = _FakeAppointment(id_=apt_id, service_type_id=tipo_id, google_event_id="evt-1")
         tipo = _FakeServiceType(id_=tipo_id, duration_minutes=30)
-        parchear_tenant_session(
-            monkeypatch, modulo, FakeSession(resultados=[cita], objetos={tipo_id: tipo})
-        )
+        # El tipo de servicio se busca con select() filtrado por client_id, no
+        # con session.get(): sale de `resultados` justo despues de la cita.
+        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[cita, tipo]))
         fake_calendar = _FakeCalendarService()
         _parchear_calendar(monkeypatch, fake_calendar)
 
@@ -370,6 +370,9 @@ class TestModifyAppointment:
 
         assert "Cita reprogramada" in resultado
         assert cita.starts_at == datetime(2026, 9, 22, 11, 0, tzinfo=ZoneInfo("America/Bogota"))
+        # La duracion sale del tipo de servicio (30 min), no del respaldo de 60:
+        # si la busqueda del tipo se rompiera, este assert lo delata.
+        assert cita.ends_at == cita.starts_at + timedelta(minutes=30)
         assert fake_calendar.modified["event_id"] == "evt-1"
 
 

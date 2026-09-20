@@ -98,6 +98,32 @@ def _resolve_client_id(provider: str, channel: str) -> UUID:
         raise ClientResolutionError(f"DEFAULT_CLIENT_ID no es un UUID valido: {raw}") from exc
 
 
+async def _contacto_del_tenant(
+    session: AsyncSession, client_id: UUID, contact_id: UUID
+) -> Contact | None:
+    """Carga un contacto del tenant con el `client_id` explicito en el WHERE.
+
+    `session.get()` no deja ver ningun filtro: si la politica RLS fallara en
+    `contacts`, devolveria el contacto de otro tenant sin que nada avisara. Aqui
+    el id viene de una fila ya filtrada por tenant (`contact_identifiers`) o de
+    `merged_into_id`, asi que el riesgo real es bajo, pero es el mismo patron
+    que el resto del proyecto exige para no depender solo de RLS.
+
+    Args:
+        session: Sesion con el contexto de tenant ya aplicado.
+        client_id: Tenant propietario.
+        contact_id: Contacto buscado.
+
+    Returns:
+        El contacto, o `None` si no existe en ese tenant.
+    """
+    return (
+        await session.execute(
+            select(Contact).where(Contact.id == contact_id, Contact.client_id == client_id)
+        )
+    ).scalar_one_or_none()
+
+
 async def _resolve_contact(
     session: AsyncSession,
     client_id: UUID,
@@ -129,7 +155,7 @@ async def _resolve_contact(
     existing = (await session.execute(stmt)).scalar_one_or_none()
 
     if existing is not None:
-        contact = await session.get(Contact, existing.contact_id)
+        contact = await _contacto_del_tenant(session, client_id, existing.contact_id)
         # Seguir la cadena de merge hasta el contacto superviviente.
         seen: set[UUID] = set()
         while contact is not None and contact.merged_into_id is not None:
@@ -137,7 +163,7 @@ async def _resolve_contact(
                 logger.error("Ciclo de merges detectado en contacto %s", contact.id)
                 break
             seen.add(contact.id)
-            contact = await session.get(Contact, contact.merged_into_id)
+            contact = await _contacto_del_tenant(session, client_id, contact.merged_into_id)
         if contact is not None:
             return contact
 
