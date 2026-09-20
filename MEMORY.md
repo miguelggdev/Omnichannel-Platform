@@ -306,6 +306,38 @@
      ```
   5. **Reversa**: `alembic downgrade 008_encrypt_contact_identifiers` (también necesita la clave) y volver a desplegar el código anterior, en el mismo orden parar/migrar/arrancar.
 
+### ADR-053: Telegram y email siguen el patrón real de canales (ABC de Sprint 4, credenciales por entorno), no el del spec
+- **Fecha:** 2026-09-20
+- **Contexto:** `specs/sprint-09-channels.md` describe una `MessagingProvider` con `parse_webhook(payload, headers)` y `send_message(recipient_id, content, **kwargs) -> dict`, una tabla `channel_configs` con `provider_config` y `webhook_secret` por tenant, una clase `ProviderFactory` y un endpoint `POST /webhooks/telegram/{channel_config_id}`. Nada de eso existe: la ABC real es `parse_webhook(raw_payload)` / `send_message(to, content, channel_config) -> str`, las credenciales son globales por entorno (ADR-030, `DEFAULT_CLIENT_ID`) y el endpoint es el genérico `POST /api/v1/webhooks/{provider}/{channel}`.
+- **Decisión:** `TelegramProvider` y `EmailProvider` implementan la ABC real, se registran en `factory._PROVIDERS` y en `CHANNEL_PROVIDERS`, y sus credenciales salen de `Settings` (`TELEGRAM_CHANNEL_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `EMAIL_SMTP_*`, `EMAIL_FROM_ADDRESS`, `EMAIL_INBOUND_WEBHOOK_SECRET`). Sin constructor con config (como `YCloudProvider`): el token/SMTP viaja por llamada en `channel_config`.
+- **Desviaciones de fondo, cada una por lo que rompería en producción:**
+  - **Telegram sin `getFile` en `parse_webhook`:** el webhook debe responder en <100 ms; `media_url` = `telegram-file:<file_id>` y `TelegramProvider.get_file_url()` lo resuelve después (lo necesita la transcripción de audio, Dev B).
+  - **Sin `parse_mode: HTML`:** el texto lo genera un LLM; un `<` o `&` sin escapar da 400 "can't parse entities" y el mensaje se pierde.
+  - **Troceo propio a 4096:** nada aguas arriba consulta `get_channel_constraints()` (se comprobó con grep), así que lo hace el provider.
+  - **`update_id` como id externo, no `message_id`:** `message_id` solo es único dentro de un chat y la clave de deduplicación es global por canal.
+  - **Solo chats privados, y se descartan otros bots:** en un grupo, responder al `from.id` escribe un DM que Telegram rechaza; dos bots hablándose son un bucle.
+  - **Sin lista blanca de IPs:** el mecanismo documentado es el `secret_token` de `setWebhook`; una lista depende de reenviar bien la IP tras Cloudflare/Traefik y falla en silencio.
+  - **Email: TLS según el puerto.** El spec usa `use_tls=True` con el 587 por defecto; `use_tls` es TLS implícito (465), el 587 es STARTTLS y el handshake fallaría.
+  - **Email: solo texto plano.** El spec llama a un `_render_html_template` que no define; un cuerpo de LLM insertado en HTML es un vector de inyección.
+- **Consecuencia:** cuando exista `channel_configs` (Fase 2), `get_channel_config()` y `_resolve_client_id()` son los dos únicos puntos a cambiar, igual que para YCloud y Meta.
+
+### ADR-054: Los descartes intencionales de un webhook son `IgnoredWebhookError` (200 `ignored`, sin traceback)
+- **Fecha:** 2026-09-20
+- **Contexto:** el endpoint trataba cualquier excepción de `parse_webhook()` como `parse_error`, con `logger.exception` (traceback completo). Con Telegram y email hay descartes legítimos y **frecuentes**: mensajes de grupos, stickers, autorrespuestas, listas de correo, rebotes. Registrarlos como errores llena el log de tracebacks y esconde los errores reales.
+- **Decisión:** `IgnoredWebhookError(ValueError)` en `app/services/messaging/base.py`. El endpoint la atrapa antes del `except Exception`, responde 200 `{"status": "ignored"}` (el proveedor no reintenta) y registra un `INFO` sin traceback. Los payloads rotos siguen siendo `ValueError`/otra excepción → `parse_error` con traceback.
+- **Consecuencia:** es un `ValueError` a propósito, para que nada que ya atrapara ese tipo cambie. Un provider nuevo distingue "no es para mí" (`IgnoredWebhookError`) de "está mal formado" (`ValueError`).
+
+### ADR-055: Email — entrada autenticada con Basic auth en la URL, sin responder a automáticos, hilo por el último mensaje entrante
+- **Fecha:** 2026-09-20
+- **Contexto:** ni SendGrid ni Mailgun firman el Inbound Parse. Sin autenticación, cualquiera puede inyectar "emails de clientes" al agente. Además, un bot que contesta emails tiene dos riesgos propios: el bucle (contestar a otro autorespondedor) y abrir un hilo nuevo en el cliente de correo si faltan `In-Reply-To`/`References`.
+- **Decisión:**
+  - **Autenticación:** las credenciales van en la URL del webhook (`https://usuario:password@host/...`), los dos proveedores envían `Authorization: Basic`, y `validate_signature()` lo compara con `EMAIL_INBOUND_WEBHOOK_SECRET` (`usuario:password`) en tiempo constante. Secreto vacío = nunca valida.
+  - **Anti-bucle:** `parse_webhook` descarta (`IgnoredWebhookError`) `Auto-Submitted` ≠ `no`, `Precedence: bulk|list|junk`, `List-Id`/`List-Unsubscribe`, `X-Autoreply`/`X-Autorespond`, `Return-Path: <>`, buzones de sistema (`mailer-daemon`, `noreply`...) y la propia `EMAIL_FROM_ADDRESS`. Los envíos propios llevan `Auto-Submitted: auto-replied` (RFC 3834).
+  - **Hilo:** `deliver_message()` toma subject/`In-Reply-To`/`References` del último mensaje **entrante** de la conversación (`messages.metadata`), no del asunto como propone el spec, que uniría conversaciones ajenas con el mismo "Re: consulta". `MessageContent` gana `metadata` (solo lo usa email). El `Message-ID` propio queda como `external_message_id` para que el `In-Reply-To` del cliente lo resuelva.
+  - **Inyección de cabeceras:** el asunto lo escribe un tercero; se colapsa a una línea antes de usarlo (y `EmailMessage` rechaza saltos de línea).
+  - **`raw_payload` compacto** (`subject`, `message_id`, `in_reply_to`, `references`, `from`, `to`): acaba en `messages.metadata`, en la cola de Celery y en `audit_logs`; no el HTML ni el cuerpo.
+- **Consecuencia:** el secreto viaja en la URL de configuración del proveedor (no en los logs de acceso: va en la cabecera, no en el path). Adjuntos ignorados (son `UploadFile`, no serializables a Celery; guardarlos exige Storage y límites).
+
 ---
 
 ## Bugs Conocidos y Pitfalls
@@ -593,6 +625,16 @@ Cuatro agentes en paralelo (RLS/multi-tenancy, async/concurrencia, seguridad, l�
 ### Hallazgos menores de esa revisión que NO se corrigieron, y por qué
 - **`users.email` sin cifrar** (CLAUDE.md, regla 3 pide cifrar emails): se corrigió el docstring, que decía "cifrado", pero cifrarlo es una **decisión pendiente**, no un arreglo: `auth_lookup_user()` lo compara por igualdad exacta, así que exige un índice ciego por tenant como el de ADR-052, cambiar esa función `SECURITY DEFINER` y una migración de datos sobre la tabla de login. Riesgo de romper el acceso de todos los usuarios si se hace mal.
 - **Índice de `identifier_hash` no compuesto con `client_id`:** no hace falta. El `UNIQUE (client_id, channel, identifier_hash)` ya cubre las búsquedas por ese prefijo; el índice de una columna es redundante pero inocuo, y quitarlo es una migración sin beneficio funcional.
+
+### BUG-039: El `access_token` de Meta (y ahora el token del bot de Telegram) llegaba a los spans de Jaeger
+- **Descripción:** la instrumentación de httpx (PR #22) guarda la URL completa en `http.url` de cada span. `meta.py` manda el Page Access Token como **query param** (`params={"access_token": ...}`), así que quedaba en la traza de cada mensaje enviado por Instagram/Facebook desde el Sprint 8. Telegram (Sprint 9) lo empeora: la Bot API exige el token en el **path** (`/bot<TOKEN>/metodo`), sin alternativa.
+- **Estado:** CERRADO. `app/core/telemetry.py::redactar_url()` reemplaza por `***` el token del path de Telegram y los query params sensibles (`access_token`, `token`, `api_key`, `key`, `secret`), enganchada como `request_hook` y `async_request_hook` del instrumentador. Probado con el instrumentador real y un exportador en memoria, con cliente síncrono y asíncrono.
+- **Complemento en el provider:** `TelegramProvider` reescribe los errores de red sin la URL (`str(httpx.HTTPError)` la incluye) y no encadena la excepción original (`from None`), porque ese texto acaba en los logs de la tarea de Celery.
+- **Lección transferible:** una instrumentación automática que registra "la URL" registra también lo que viaja en ella; hay que revisar qué APIs ponen credenciales en la URL antes de activarla.
+
+### BUG-040: El endpoint de webhooks leía el cuerpo entero antes de autenticar, sin tope
+- **Descripción:** `receive_webhook()` hace `await request.body()` al empezar (el HMAC lo necesita) y solo después valida la firma. Sin límite, cualquiera puede mandarle cientos de MB a `POST /api/v1/webhooks/...` y cargarlos en memoria sin autenticarse. Con el Inbound Parse de email (que admite adjuntos de hasta 30 MB) el problema deja de ser teórico.
+- **Estado:** CERRADO para lo que declara `Content-Length`: se rechaza con 413 (`PAYLOAD_TOO_LARGE`) lo que supere `MAX_WEBHOOK_BODY_BYTES` (32 MB), sin leerlo. **No cubre** un cuerpo con `Transfer-Encoding: chunked` (no trae `Content-Length`); ahí el tope tiene que ponerlo Traefik/Cloudflare.
 
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.
