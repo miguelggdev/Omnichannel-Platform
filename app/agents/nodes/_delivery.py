@@ -17,6 +17,8 @@ import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
+from sqlalchemy import select
+
 from app.agents.nodes._tenant import get_channel_config, get_contact_identifier
 from app.core.database import tenant_session
 from app.core.metrics import record_message
@@ -75,7 +77,13 @@ async def deliver_message(
                 sender_id=None,
             )
         )
-        conversation = await session.get(Conversation, conversation_id)
+        conversation = (
+            await session.execute(
+                select(Conversation).where(
+                    Conversation.id == conversation_id, Conversation.client_id == client_id
+                )
+            )
+        ).scalar_one_or_none()
         if conversation is not None:
             conversation.last_message_at = datetime.now(timezone.utc)
 

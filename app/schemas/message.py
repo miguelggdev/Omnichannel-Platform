@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class MessageCreate(BaseModel):
@@ -114,3 +114,32 @@ class NormalizedMessage(BaseModel):
 
     location: dict[str, Any] | None = None
     interactive_response: dict[str, Any] | None = None
+
+    @field_validator("sender_identifier")
+    @classmethod
+    def sender_identifier_no_vacio(cls, v: str) -> str:
+        """Rechaza un identificador vacio o solo espacios.
+
+        `_resolve_contact()` (`app/tasks/webhook_processor.py`) busca el
+        contacto por el hash ciego de este valor (`blind_index()`), que es
+        determinista: un payload mal formado con el remitente ausente
+        (`.get("from", "")` en los providers) produciria siempre el mismo
+        hash para el mismo tenant y canal, y el primer mensaje asi creado
+        se convertiria en un iman que atrae a cualquier otro remitente real
+        que tambien llegue sin identificador — mezclando las conversaciones
+        de clientes finales distintos bajo un solo contacto. Rechazarlo aqui,
+        antes de que exista una fila, es mas simple que defenderse despues.
+
+        Args:
+            v: Valor del campo tal como llego del payload del proveedor.
+
+        Returns:
+            El valor sin espacios al borde.
+
+        Raises:
+            ValueError: Si queda vacio despues de recortar los espacios.
+        """
+        recortado = v.strip()
+        if not recortado:
+            raise ValueError("sender_identifier no puede estar vacio")
+        return recortado

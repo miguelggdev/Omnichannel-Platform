@@ -20,7 +20,22 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 import app.services.dedup as dedup_module
-from app.core.database import run_isolated
+from app.core.database import engine, run_isolated
+
+
+class TestEcho:
+    """`echo` del engine: nunca en True, ni en desarrollo.
+
+    `echo=True` imprime cada sentencia con sus bind params reales por el
+    logger propio de SQLAlchemy, que no respeta el `setLevel(WARNING)` de
+    `app/core/logging.py` (usa `InstanceLogger`, que llama `logger._log()`
+    directo). Contra una columna cifrada con pgcrypto eso filtraria el valor
+    en claro y la propia `ENCRYPTION_KEY` por stdout, fuera de Loguru.
+    """
+
+    def test_echo_es_false(self) -> None:
+        """Sin importar `APP_ENV`, el engine nunca hace echo de las queries."""
+        assert engine.echo is False
 
 
 class TestRunIsolated:

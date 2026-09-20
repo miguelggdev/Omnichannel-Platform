@@ -336,10 +336,9 @@ class TestMerge:
         """
         source = FakeContact()
         target = FakeContact()
-        sesion = CrmSession(
-            resultados=[source, target, None, None, None, [], []],
-            objetos={source.id: source},
-        )
+        # get_contact_or_404 x2 (endpoint), luego las dos busquedas del tenant
+        # de merge(), los 3 UPDATE y los 2 SELECT de etiquetas.
+        sesion = CrmSession(resultados=[source, target, source, target, None, None, None, [], []])
         _usa_sesion(monkeypatch, sesion)
 
         response = await authenticated_client.post(f"{URL}/{source.id}/merge/{target.id}")

@@ -11,6 +11,7 @@ en la tabla.
 
 import uuid
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -176,7 +177,7 @@ class TestIndiceCiego:
                 text("SELECT identifier_hash FROM contact_identifiers WHERE contact_id = :id"),
                 {"id": str(contact_id)},
             )
-        assert guardado == blind_index(telefono)
+        assert guardado == blind_index(telefono, client_id)
 
     async def test_se_encuentra_buscando_por_el_hash(self) -> None:
         """La busqueda del webhook (`_resolve_contact`) sigue funcionando.
@@ -203,7 +204,7 @@ class TestIndiceCiego:
                     select(ContactIdentifier).where(
                         ContactIdentifier.client_id == client_id,
                         ContactIdentifier.channel == "whatsapp",
-                        ContactIdentifier.identifier_hash == blind_index(telefono),
+                        ContactIdentifier.identifier_hash == blind_index(telefono, client_id),
                     )
                 )
             ).scalar_one_or_none()
@@ -264,7 +265,101 @@ class TestIndiceCiego:
         async with tenant_session(cliente_b) as session:
             visibles = await session.scalar(
                 text("SELECT count(*) FROM contact_identifiers WHERE identifier_hash = :h"),
-                {"h": blind_index(telefono)},
+                {"h": blind_index(telefono, cliente_b)},
             )
-        # Uno solo: la RLS tapa la fila del otro tenant aunque el hash coincida.
+            del_otro_tenant = await session.scalar(
+                text("SELECT count(*) FROM contact_identifiers WHERE identifier_hash = :h"),
+                {"h": blind_index(telefono, cliente_a)},
+            )
         assert visibles == 1
+        assert del_otro_tenant == 0
+
+    async def test_el_mismo_telefono_guarda_hashes_distintos_por_tenant(self) -> None:
+        """Cada fila guarda el hash de su propio tenant, no uno compartido.
+
+        Con el hash global, las dos filas tendrian el mismo `identifier_hash`, y
+        un dump o un rol con BYPASSRLS mostraria que la misma persona escribe a
+        dos clientes de la plataforma. Aqui cada tenant lee su propia fila (la
+        RLS no deja mirar la del otro) y se comprueba que los valores guardados
+        difieren y coinciden con `blind_index(telefono, <su tenant>)`.
+        """
+        cliente_a, contacto_a = await _sembrar_tenant(f"hash-a-{uuid.uuid4().hex[:8]}")
+        cliente_b, contacto_b = await _sembrar_tenant(f"hash-b-{uuid.uuid4().hex[:8]}")
+        telefono = f"+57300{uuid.uuid4().int % 10_000_000:07d}"
+        guardados: dict[uuid.UUID, str] = {}
+
+        for cliente, contacto in ((cliente_a, contacto_a), (cliente_b, contacto_b)):
+            async with tenant_session(cliente) as session:
+                session.add(
+                    ContactIdentifier(
+                        client_id=cliente,
+                        contact_id=contacto,
+                        channel="whatsapp",
+                        identifier_value=telefono,
+                    )
+                )
+            async with tenant_session(cliente) as session:
+                guardados[cliente] = await session.scalar(
+                    text("SELECT identifier_hash FROM contact_identifiers WHERE contact_id = :id"),
+                    {"id": str(contacto)},
+                )
+
+        assert guardados[cliente_a] != guardados[cliente_b]
+        assert guardados[cliente_a] == blind_index(telefono, cliente_a)
+        assert guardados[cliente_b] == blind_index(telefono, cliente_b)
+
+
+def _cargar_migracion_009() -> Any:
+    """Carga el modulo de la migracion 009 por ruta de archivo.
+
+    `migrations/` no es un paquete y el nombre empieza por un digito, asi que
+    `import` normal no sirve. Es sincrona a proposito: resuelve rutas.
+
+    Returns:
+        El modulo de la migracion, con `HASH_POR_TENANT` y `HASH_GLOBAL`.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    ruta = Path(__file__).resolve().parents[2] / "migrations" / "versions"
+    ruta = ruta / "009_blind_index_per_tenant.py"
+    spec = importlib.util.spec_from_file_location("migracion_009", ruta)
+    assert spec is not None
+    assert spec.loader is not None
+    modulo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modulo)
+    return modulo
+
+
+class TestParidadConLaMigracion:
+    """La expresion SQL de la migracion 009 y `blind_index()` dan lo mismo.
+
+    Si divergen, la aplicacion deja de encontrar las filas que migro el script:
+    cada mensaje entrante crearia un contacto nuevo. Solo se puede comprobar
+    contra Postgres real, porque `hmac()` es de pgcrypto.
+    """
+
+    @pytest.mark.parametrize(
+        "valor",
+        ["+573001234567", "  Juan@X.com  ", "[ELIMINADO-abc12345]", "PSID-6789000000000001"],
+    )
+    async def test_el_sql_y_python_calculan_el_mismo_hash(self, valor: str) -> None:
+        """Se evalua la expresion de la migracion sobre un valor cifrado real."""
+        migracion = _cargar_migracion_009()
+        cliente, _ = await _sembrar_tenant(f"paridad-{uuid.uuid4().hex[:8]}")
+        clave = get_settings().ENCRYPTION_KEY
+
+        async with tenant_session(cliente) as session:
+            # La expresion de la migracion lee `client_id` e `identifier_value`
+            # de la fila: se evalua sobre una subconsulta que los aporta.
+            expresion = migracion.HASH_POR_TENANT
+            desde_sql = await session.scalar(
+                text(
+                    f"SELECT {expresion} FROM "  # noqa: S608
+                    "(SELECT CAST(:cliente AS uuid) AS client_id, "
+                    "pgp_sym_encrypt(:valor, :clave) AS identifier_value) t"
+                ),
+                {"cliente": str(cliente), "valor": valor, "clave": clave},
+            )
+
+        assert desde_sql == blind_index(valor, cliente)

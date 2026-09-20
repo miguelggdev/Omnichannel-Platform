@@ -384,7 +384,9 @@ async def merge_contacts(
                 message="El contacto destino ya fue fusionado; usar el destino final",
             )
 
-        await ContactUnifier(session).merge(source_id=contact_id, target_id=target_id)
+        await ContactUnifier(session).merge(
+            source_id=contact_id, target_id=target_id, client_id=client_id
+        )
 
         await session.flush()
         await session.refresh(target)

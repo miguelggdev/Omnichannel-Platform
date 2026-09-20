@@ -160,12 +160,23 @@ def setup_logging(force: bool = False) -> None:
     nivel = settings.LOG_LEVEL.upper()
 
     logger.remove()
+    # enqueue=True: el sink corre en un hilo de fondo propio de Loguru, con una
+    # cola en medio. Sin esto, cada logger.*() —incluido lo que llega via el
+    # InterceptHandler desde SQLAlchemy/httpx/uvicorn/Celery— escribe a stdout
+    # en el hilo llamante; en la API ese hilo es el unico del event loop, asi
+    # que un stdout con backpressure (log shipper lento, pipe de Docker lleno)
+    # bloquearia todas las requests concurrentes del proceso (CLAUDE.md, regla
+    # 4). Por eso `_instrumentar_proceso` en app/tasks/observability.py llama
+    # `setup_logging(force=True)` despues del fork en cada worker de Celery:
+    # el hilo de este sink no sobrevive un fork, y sin reconfigurar ahi los
+    # hijos se quedarian sin el suyo.
     if settings.LOG_FORMAT.lower() == "json":
-        logger.add(_sink_json, level=nivel)
+        logger.add(_sink_json, level=nivel, enqueue=True)
     else:
         logger.add(
             sys.stderr,
             level=nivel,
+            enqueue=True,
             format=(
                 "<green>{time:HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | "
                 "<cyan>{extra[trace_id]}</cyan> | <magenta>{extra[client_id]}</magenta> | "

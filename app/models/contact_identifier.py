@@ -35,7 +35,7 @@ class ContactIdentifier(TenantBaseModel):
         channel: Canal de comunicación (whatsapp, instagram, facebook, email, etc.).
         identifier_value: Valor del identificador (teléfono, email, ID de red
             social). Cifrado en la base, en claro en Python.
-        identifier_hash: HMAC-SHA256 del valor normalizado. Es la columna por la
+        identifier_hash: HMAC-SHA256 del valor normalizado y del tenant. Es la columna por la
             que se busca y sobre la que vive el UNIQUE.
     """
 
@@ -73,4 +73,4 @@ def _sincronizar_indice_ciego(_mapper: Any, _connection: Any, target: ContactIde
         _connection: Conexión en curso (no se usa).
         target: Fila que está a punto de escribirse.
     """
-    target.identifier_hash = blind_index(target.identifier_value) or ""
+    target.identifier_hash = blind_index(target.identifier_value, target.client_id) or ""

@@ -155,6 +155,37 @@ class TestNormalizedMessage:
         assert mensaje.media_url is None
         assert mensaje.media_type is None
 
+    @pytest.mark.parametrize("valor", ["", "   "])
+    def test_sender_identifier_vacio_o_solo_espacios_se_rechaza(self, valor: str) -> None:
+        """Un payload sin remitente no debe convertirse en un contacto fantasma.
+
+        `_resolve_contact()` busca por el hash ciego (determinista) de este
+        valor: un identificador vacio le daria a cualquier mensaje mal formado
+        el mismo hash, y el primer contacto asi creado atraeria a cualquier
+        otro remitente real que tambien llegue sin identificador — mezclando
+        conversaciones de clientes finales distintos bajo un solo contacto.
+        """
+        with pytest.raises(Exception):  # noqa: B017,PT011 — ValidationError de Pydantic
+            NormalizedMessage(
+                channel="whatsapp",
+                sender_identifier=valor,
+                timestamp="2026-09-09T20:00:00+00:00",
+                external_message_id="wamid.X",
+                raw_payload={},
+            )
+
+    def test_sender_identifier_recorta_espacios_al_borde(self) -> None:
+        """`  573001112233  ` no debe convertirse en un identificador distinto."""
+        mensaje = NormalizedMessage(
+            channel="whatsapp",
+            sender_identifier="  573001112233  ",
+            timestamp="2026-09-09T20:00:00+00:00",
+            external_message_id="wamid.X",
+            raw_payload={},
+        )
+
+        assert mensaje.sender_identifier == "573001112233"
+
     def test_external_message_id_es_obligatorio(self) -> None:
         """Sin el, la deduplicacion no tiene clave y el endpoint no puede seguir."""
         with pytest.raises(Exception):  # noqa: B017,PT011 — ValidationError de Pydantic

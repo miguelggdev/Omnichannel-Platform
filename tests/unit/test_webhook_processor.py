@@ -30,13 +30,17 @@ class FakeResult:
 
 
 class FakeSession:
-    """AsyncSession minima: registra los objetos agregados y sirve resultados."""
+    """AsyncSession minima: registra los objetos agregados y sirve resultados.
 
-    def __init__(self, results: list[Any] | None = None, gets: dict[Any, Any] | None = None):
+    A proposito **no** tiene `get()`: `webhook_processor` busca los contactos con
+    `select()` filtrado por `client_id`, y si alguien vuelve a `session.get()`
+    (sin filtro visible, dependiendo solo de RLS) estos tests fallan.
+    """
+
+    def __init__(self, results: list[Any] | None = None):
         self.added: list[Any] = []
         self.flushes = 0
         self._results = list(results or [])
-        self._gets = gets or {}
 
     async def execute(self, *args: Any, **kwargs: Any) -> FakeResult:
         """Consume el siguiente resultado programado."""
@@ -52,10 +56,6 @@ class FakeSession:
     async def flush(self) -> None:
         """Cuenta los flush."""
         self.flushes += 1
-
-    async def get(self, model: Any, pk: Any) -> Any:
-        """Devuelve el objeto preprogramado para esa PK."""
-        return self._gets.get(pk)
 
 
 class FakeRedisList:
@@ -139,9 +139,29 @@ class TestResolverContacto:
 
         # Enmascarado: display_name no esta cifrado y el CRM lo busca con
         # ILIKE, asi que no lleva el telefono completo (MEMORY.md).
-        assert contacto.display_name == "********2233"
+        assert contacto.display_name == f"********2233 #{contacto.id.hex[:4]}"
+        assert "573001112233" not in contacto.display_name
         assert len(session.added) == 2, "debe crear contacto e identifier"
         assert session.added[1].identifier_value == "573001112233"
+
+    async def test_dos_numeros_que_terminan_igual_no_se_ven_iguales(self) -> None:
+        """Con solo los ultimos 4 digitos, el agente no distinguiria dos contactos.
+
+        El sufijo del id del contacto los diferencia en la bandeja sin volver a
+        mostrar el numero completo.
+        """
+        client_id = uuid.uuid4()
+
+        uno = await wp._resolve_contact(
+            FakeSession(results=[None]), client_id, "whatsapp", "573001114567"
+        )
+        dos = await wp._resolve_contact(
+            FakeSession(results=[None]), client_id, "whatsapp", "573009994567"
+        )
+
+        assert uno.display_name != dos.display_name
+        assert uno.display_name.startswith("********4567 #")
+        assert dos.display_name.startswith("********4567 #")
 
     async def test_reutiliza_contacto_existente(self) -> None:
         """Si ya hay identifier no se crea nada nuevo."""
@@ -149,7 +169,7 @@ class TestResolverContacto:
         contacto_id = uuid.uuid4()
         existente = type("Ident", (), {"contact_id": contacto_id})()
         contacto = type("Contact", (), {"id": contacto_id, "merged_into_id": None})()
-        session = FakeSession(results=[existente], gets={contacto_id: contacto})
+        session = FakeSession(results=[existente, contacto])
 
         resultado = await wp._resolve_contact(session, client_id, "whatsapp", "573001112233")
 
@@ -163,7 +183,7 @@ class TestResolverContacto:
         viejo = type("Contact", (), {"id": viejo_id, "merged_into_id": nuevo_id})()
         nuevo = type("Contact", (), {"id": nuevo_id, "merged_into_id": None})()
         existente = type("Ident", (), {"contact_id": viejo_id})()
-        session = FakeSession(results=[existente], gets={viejo_id: viejo, nuevo_id: nuevo})
+        session = FakeSession(results=[existente, viejo, nuevo])
 
         resultado = await wp._resolve_contact(session, client_id, "whatsapp", "x")
 
@@ -176,7 +196,7 @@ class TestResolverContacto:
         a = type("Contact", (), {"id": a_id, "merged_into_id": b_id})()
         b = type("Contact", (), {"id": b_id, "merged_into_id": a_id})()
         existente = type("Ident", (), {"contact_id": a_id})()
-        session = FakeSession(results=[existente], gets={a_id: a, b_id: b})
+        session = FakeSession(results=[existente, a, b, a])
 
         resultado = await wp._resolve_contact(session, client_id, "whatsapp", "x")
 

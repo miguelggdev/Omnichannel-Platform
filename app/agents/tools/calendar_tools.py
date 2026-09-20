@@ -286,7 +286,14 @@ async def modify_appointment(
         if appointment.status == "cancelled":
             return "Esa cita ya fue cancelada. Puedo crear una nueva si lo deseas."
 
-        service_type = await session.get(ServiceType, appointment.service_type_id)
+        service_type = (
+            await session.execute(
+                select(ServiceType).where(
+                    ServiceType.id == appointment.service_type_id,
+                    ServiceType.client_id == client_id,
+                )
+            )
+        ).scalar_one_or_none()
 
         calendar = await GoogleCalendarService.from_tenant(client_id)
         new_start = _localizar(new_start, calendar.timezone)

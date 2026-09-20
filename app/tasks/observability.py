@@ -74,7 +74,12 @@ def _instrumentar_proceso(**_: Any) -> None:
     """Instrumenta OpenTelemetry en cada proceso hijo del pool prefork."""
     from app.core.telemetry import setup_celery_telemetry
 
-    setup_logging()
+    # force=True: `_configurado` ya es True en el hijo porque el fork copia la
+    # memoria del maestro, donde `worker_init` ya llamo a `setup_logging()`. Sin
+    # forzar, esta llamada seria un no-op y el hijo heredaria un sink
+    # `enqueue=True` cuyo hilo de fondo NO sobrevive al fork — los logs de cada
+    # worker quedarian encolados sin nadie que los escriba.
+    setup_logging(force=True)
     setup_celery_telemetry()
 
 
@@ -101,11 +106,32 @@ def _al_empezar(task_id: str | None = None, task: Any = None, **kwargs: Any) -> 
     _en_curso[task_id] = (contexto, time.monotonic())
 
 
+def _estado_efectivo(state: str | None, retval: Any) -> str:
+    """Distingue un éxito real de un mensaje enviado a la DLQ.
+
+    `process_incoming_message` no relanza la excepción cuando agota los
+    reintentos: escribe en la DLQ y devuelve `{"status": "dlq"}`, así que para
+    Celery la tarea terminó en `SUCCESS`. Contarla así ocultaba en el dashboard
+    y en las alertas un mensaje abandonado que alguien tiene que revisar.
+
+    Args:
+        state: Estado que reporta Celery.
+        retval: Valor de retorno de la tarea.
+
+    Returns:
+        `"DLQ"` si la tarea devolvió `{"status": "dlq"}`; si no, el estado tal cual.
+    """
+    if isinstance(retval, dict) and retval.get("status") == "dlq":
+        return "DLQ"
+    return str(state or "UNKNOWN")
+
+
 @task_postrun.connect
 def _al_terminar(
     task_id: str | None = None,
     task: Any = None,
     state: str | None = None,
+    retval: Any = None,
     **_: Any,
 ) -> None:
     """Cierra el contexto de log y registra duración y estado.
@@ -114,6 +140,7 @@ def _al_terminar(
         task_id: Identificador de la tarea.
         task: Instancia de la tarea.
         state: Estado final (`SUCCESS`, `FAILURE`, `RETRY`, ...).
+        retval: Valor de retorno de la tarea (para detectar la DLQ).
         **_: Resto de la señal.
     """
     import time
@@ -134,7 +161,7 @@ def _al_terminar(
             contexto.__exit__(None, None, None)
 
     try:
-        celery_tasks_total.labels(nombre, cola, str(state or "UNKNOWN")).inc()
+        celery_tasks_total.labels(nombre, cola, _estado_efectivo(state, retval)).inc()
     except Exception:  # pragma: no cover — defensivo
         logger.debug("No se pudo contar la tarea %s", nombre, exc_info=True)
 

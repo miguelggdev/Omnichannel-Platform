@@ -7,6 +7,7 @@ que la columna en disco sea ilegible— se verifica contra Postgres real en
 """
 
 import uuid
+from typing import Any
 
 import pytest
 from sqlalchemy import select
@@ -29,35 +30,67 @@ def _sql(stmt: object) -> str:
     return str(stmt.compile(dialect=postgresql.dialect()))  # type: ignore[attr-defined]
 
 
+CLIENTE = uuid.UUID("11111111-1111-1111-1111-111111111111")
+OTRO_CLIENTE = uuid.UUID("22222222-2222-2222-2222-222222222222")
+
+
 class TestIndiceCiego:
-    """`blind_index()`: determinismo, normalizacion y dependencia de la clave."""
+    """`blind_index()`: determinismo, normalizacion, tenant y dependencia de la clave."""
 
     def test_es_determinista(self) -> None:
-        """El mismo valor da siempre el mismo hash: sin eso no hay UNIQUE."""
-        assert blind_index("+573001234567") == blind_index("+573001234567")
+        """El mismo valor y tenant dan siempre el mismo hash: sin eso no hay UNIQUE."""
+        assert blind_index("+573001234567", CLIENTE) == blind_index("+573001234567", CLIENTE)
 
     def test_normaliza_espacios_y_mayusculas(self) -> None:
         """`  Juan@X.com ` y `juan@x.com` son el mismo identificador."""
-        assert blind_index("  Juan@X.com ") == blind_index("juan@x.com")
+        assert blind_index("  Juan@X.com ", CLIENTE) == blind_index("juan@x.com", CLIENTE)
 
     def test_sin_normalizar_distingue_mayusculas(self) -> None:
         """Con `normalizar=False` las mayusculas si cuentan."""
-        assert blind_index("ABC", normalizar=False) != blind_index("abc", normalizar=False)
+        assert blind_index("ABC", CLIENTE, normalizar=False) != blind_index(
+            "abc", CLIENTE, normalizar=False
+        )
 
     def test_valores_distintos_dan_hashes_distintos(self) -> None:
         """Dos telefonos distintos no pueden colisionar en el UNIQUE."""
-        assert blind_index("+573001234567") != blind_index("+573001234568")
+        assert blind_index("+573001234567", CLIENTE) != blind_index("+573001234568", CLIENTE)
 
     def test_none_devuelve_none(self) -> None:
         """Un identificador ausente no se hashea a la cadena vacia."""
-        assert blind_index(None) is None
+        assert blind_index(None, CLIENTE) is None
 
     def test_longitud_de_sha256(self) -> None:
         """64 caracteres hex: es lo que declara la columna `String(64)`."""
-        hash_ = blind_index("+573001234567")
+        hash_ = blind_index("+573001234567", CLIENTE)
         assert hash_ is not None
         assert len(hash_) == 64
         assert int(hash_, 16) >= 0  # es hexadecimal valido
+
+    def test_el_mismo_valor_en_otro_tenant_da_otro_hash(self) -> None:
+        """El hash no sirve para correlacionar tenants.
+
+        Con una clave global y un mensaje sin tenant, el mismo telefono daba el
+        mismo hash en todos: quien tuviera lectura cruda de la tabla (un dump,
+        un rol con BYPASSRLS) veia por igualdad que la misma persona escribe a
+        dos clientes distintos de la plataforma.
+        """
+        assert blind_index("+573001234567", CLIENTE) != blind_index("+573001234567", OTRO_CLIENTE)
+
+    def test_el_tenant_como_texto_da_el_mismo_hash_que_como_uuid(self) -> None:
+        """`str(uuid)` y el `UUID` son el mismo tenant, en mayusculas o minusculas.
+
+        La migracion 009 calcula el hash en SQL con `client_id::text`, siempre en
+        minusculas: si Python distinguiera, dejaria de encontrar esas filas.
+        """
+        base = blind_index("+573001234567", CLIENTE)
+        assert blind_index("+573001234567", str(CLIENTE)) == base
+        assert blind_index("+573001234567", str(CLIENTE).upper()) == base
+
+    @pytest.mark.parametrize("vacio", ["", None])
+    def test_sin_tenant_falla_en_vez_de_volver_al_hash_global(self, vacio: Any) -> None:
+        """Un hash sin tenant seria el mismo en todos: mejor un error visible."""
+        with pytest.raises(ValueError, match="client_id"):
+            blind_index("+573001234567", vacio)
 
     def test_depende_de_la_clave(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Rotar `ENCRYPTION_KEY` cambia todos los hashes.
@@ -65,11 +98,11 @@ class TestIndiceCiego:
         No es un detalle: es la razon por la que rotar la clave obliga a
         recalcular la columna entera, no solo a re-cifrar.
         """
-        original = blind_index("+573001234567")
+        original = blind_index("+573001234567", CLIENTE)
 
         settings = get_settings()
         monkeypatch.setattr(settings, "ENCRYPTION_KEY", "otra-clave-de-mas-de-32-caracteres-x")
-        assert blind_index("+573001234567") != original
+        assert blind_index("+573001234567", CLIENTE) != original
 
 
 class TestTipoCifrado:
@@ -148,7 +181,9 @@ class TestSincronizacionDelHash:
         # El listener corre en el flush; se invoca directo para no necesitar DB.
         assert event.contains(ContactIdentifier, "before_insert", _listener())
         _listener()(None, None, identificador)
-        assert identificador.identifier_hash == blind_index("+573001234567")
+        assert identificador.identifier_hash == blind_index(
+            "+573001234567", identificador.client_id
+        )
 
     def test_cambiar_el_valor_recalcula_el_hash(self) -> None:
         """Un UPDATE del valor deja el hash consistente.
@@ -166,7 +201,9 @@ class TestSincronizacionDelHash:
         _listener()(None, None, identificador)
         identificador.identifier_value = "[ELIMINADO-abc12345]"
         _listener()(None, None, identificador)
-        assert identificador.identifier_hash == blind_index("[ELIMINADO-abc12345]")
+        assert identificador.identifier_hash == blind_index(
+            "[ELIMINADO-abc12345]", identificador.client_id
+        )
 
 
 def _listener() -> object:

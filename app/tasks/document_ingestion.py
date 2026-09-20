@@ -23,6 +23,7 @@ from uuid import UUID
 
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.database import run_isolated, tenant_session
@@ -86,7 +87,13 @@ async def _mark_document_failed(document_id: UUID, client_id: UUID, error: str) 
     """
     try:
         async with tenant_session(client_id) as session:
-            document = await session.get(Document, document_id)
+            document = (
+                await session.execute(
+                    select(Document).where(
+                        Document.id == document_id, Document.client_id == client_id
+                    )
+                )
+            ).scalar_one_or_none()
             if document is None:
                 logger.warning("Documento %s ya no existe; no se marca como fallido", document_id)
                 return

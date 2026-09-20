@@ -112,6 +112,44 @@ class TestLoggingEstructurado:
         setup_logging(force=True)
         assert any(isinstance(h, InterceptHandler) for h in logging.root.handlers)
 
+    def test_el_sink_escribe_desde_un_hilo_de_fondo(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`enqueue=True`: un stdout lento no debe bloquear el event loop de la API.
+
+        Sin la cola, cada `logger.*()` escribe a stdout en el hilo llamante, que
+        en la API es el unico del event loop del proceso (CLAUDE.md, regla 4).
+        """
+        opciones: list[dict[str, Any]] = []
+        original = logger.add
+
+        def _espia(*args: Any, **kwargs: Any) -> int:
+            opciones.append(kwargs)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(logger, "add", _espia)
+
+        setup_logging(force=True)
+
+        assert opciones, "setup_logging() no registro ningun sink"
+        assert all(o.get("enqueue") is True for o in opciones)
+
+    def test_el_hijo_prefork_de_celery_reconfigura_el_logging(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """El fork copia `_configurado=True`, pero no el hilo del sink `enqueue`.
+
+        Si `_instrumentar_proceso` llamara `setup_logging()` sin `force`, seria un
+        no-op y los logs de cada worker quedarian encolados sin quien los escriba.
+        """
+        from app.tasks import observability as obs_module
+
+        llamadas: list[bool] = []
+        monkeypatch.setattr(obs_module, "setup_logging", lambda force=False: llamadas.append(force))
+        monkeypatch.setattr(telemetry_module, "setup_celery_telemetry", lambda: None)
+
+        obs_module._instrumentar_proceso()
+
+        assert llamadas == [True]
+
     def test_el_json_lleva_los_tres_campos_de_contexto(self) -> None:
         """`trace_id`, `client_id` y `user_id` en toda línea, aunque estén vacíos."""
         capturado: list[str] = []
@@ -328,6 +366,35 @@ class TestEndpointDeMetricas:
         assert "text/plain" in respuesta.headers["content-type"]
         assert "http_requests_total" in respuesta.text
 
+    def test_la_lectura_del_registro_corre_fuera_del_event_loop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """En modo multiproceso `collect()` abre y lee archivos: I/O sincrono.
+
+        Tiene que ejecutarse en un hilo aparte, no en el del event loop
+        (CLAUDE.md, regla 4). `TestClient` ya corre la app en un hilo propio, asi
+        que comparar hilos no distinguiria nada: se verifica que el endpoint
+        delega en `asyncio.to_thread`.
+        """
+        import asyncio
+
+        from app.api.internal import metrics as endpoint_module
+        from app.main import create_app
+
+        delegadas: list[Any] = []
+        original = asyncio.to_thread
+
+        async def _espia(funcion: Any, *args: Any, **kwargs: Any) -> Any:
+            delegadas.append(funcion)
+            return await original(funcion, *args, **kwargs)
+
+        monkeypatch.setattr(endpoint_module.asyncio, "to_thread", _espia)
+
+        respuesta = TestClient(create_app()).get("/internal/metrics")
+
+        assert respuesta.status_code == 200
+        assert len(delegadas) == 1, "generate_latest() no se delego a un hilo"
+
     def test_no_requiere_autenticacion(self) -> None:
         """Prometheus scrapea por la red interna, sin JWT."""
         from app.middleware.tenant_context import PUBLIC_PATHS
@@ -383,6 +450,49 @@ class TestObservabilidadDeCelery:
             'celery_task_duration_seconds_count{queue="bulk",task="app.tasks.bulk_prueba"} 1.0'
             in texto
         )
+
+    def test_un_mensaje_enviado_a_la_dlq_no_cuenta_como_exito(self) -> None:
+        """`process_incoming_message` devuelve `{"status": "dlq"}` en vez de relanzar.
+
+        Para Celery esa tarea termino en SUCCESS: sin distinguirlo, un mensaje
+        abandonado tras agotar reintentos —que alguien tiene que revisar—
+        quedaba en el dashboard y en las alertas como un exito mas.
+        """
+        from app.tasks import observability
+
+        class _TareaFalsa:
+            name = "app.tasks.webhook_dlq_prueba"
+            request = type("R", (), {"delivery_info": {"routing_key": "webhooks"}})()
+
+        tarea = _TareaFalsa()
+        observability._al_empezar(task_id="t-dlq", task=tarea, kwargs={})
+        observability._al_terminar(
+            task_id="t-dlq", task=tarea, state="SUCCESS", retval={"status": "dlq"}
+        )
+
+        texto = generate_latest(build_registry()).decode()
+        assert (
+            'celery_tasks_total{queue="webhooks",state="DLQ",task="app.tasks.webhook_dlq_prueba"} 1.0'
+            in texto
+        )
+        assert 'state="SUCCESS",task="app.tasks.webhook_dlq_prueba"' not in texto
+
+    @pytest.mark.parametrize(
+        ("state", "retval", "esperado"),
+        [
+            ("SUCCESS", {"status": "processed"}, "SUCCESS"),
+            ("SUCCESS", None, "SUCCESS"),
+            ("FAILURE", None, "FAILURE"),
+            (None, None, "UNKNOWN"),
+        ],
+    )
+    def test_estado_efectivo_deja_lo_demas_como_estaba(
+        self, state: str | None, retval: Any, esperado: str
+    ) -> None:
+        """Solo `{"status": "dlq"}` cambia el estado que reporta Celery."""
+        from app.tasks.observability import _estado_efectivo
+
+        assert _estado_efectivo(state, retval) == esperado
 
     def test_postrun_sin_prerun_no_revienta(self) -> None:
         """Un postrun huérfano (worker reiniciado) no puede tumbar la tarea."""

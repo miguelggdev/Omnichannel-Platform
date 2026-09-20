@@ -285,6 +285,14 @@
 - **Por qué un listener y no un parámetro:** la anonimización de RGPD reescribe `identifier_value`. Con el hash a cargo de quien escribe, ese camino habría dejado una fila anonimizada que se sigue encontrando por el teléfono que se suponía borrado — y sin error visible. Un `UPDATE` masivo con `sqlalchemy.update()` sí se salta el listener: está anotado en el modelo.
 - **Consecuencia:** rotar `ENCRYPTION_KEY` obliga a recalcular la columna entera, no solo a re-cifrar. `contacts.first_name`, `last_name` y `display_name` se quedan en claro: la API del CRM los busca con `ILIKE` y no hay búsqueda parcial posible sobre datos cifrados; el spec los marca como "cifrado opcional por tenant" (§8.3), opcionalidad que necesita infraestructura por tenant que hoy no existe.
 
+### ADR-052: El índice ciego es por tenant (`HMAC(clave, "{client_id}:{valor}")`)
+- **Fecha:** 2026-09-19
+- **Contexto:** ADR-051 calculaba `identifier_hash` con una clave global y sin tenant en el mensaje, así que el mismo teléfono daba el **mismo** hash en todos los tenants. La unicidad y las búsquedas de la aplicación ya llevaban `client_id`, así que no había fuga por la API; pero quien tuviera lectura cruda de la tabla (un rol con `BYPASSRLS`, un dump, un backup, el soporte del proveedor de base de datos) podía correlacionar por igualdad de hash que la misma persona escribe a dos clientes distintos de la plataforma — justo lo que el aislamiento por tenant pretende impedir entre clientes B2B que pueden ser competidores.
+- **Decisión:** `blind_index(valor, client_id)` hashea `"{client_id}:{valor normalizado}"`. `client_id` es **obligatorio** (falla con `ValueError` si viene vacío): si fuera opcional, olvidarlo volvería en silencio al hash global. Migración `009_blind_index_per_tenant` recalcula todas las filas descifrando `identifier_value` (sin cambio de esquema ni de `UNIQUE`: dos filas con el mismo tenant/canal/valor siguen dando el mismo hash, así que no puede introducir duplicados).
+- **Por qué el tenant en el mensaje y no una clave derivada por tenant:** el resultado es equivalente para el atacante, no exige gestionar sub-claves y la migración se expresa en una sola sentencia SQL (`encode(hmac(client_id::text || ':' || lower(trim(...)), :clave, 'sha256'), 'hex')`).
+- **Riesgo que se controla con una prueba:** la expresión SQL de la migración y `blind_index()` tienen que dar lo mismo, o la aplicación deja de encontrar las filas migradas y cada mensaje entrante crea un contacto nuevo. `tests/integration/test_encryption.py::TestParidadConLaMigracion` evalúa la expresión de la migración contra Postgres real y la compara con la función de Python.
+- **Consecuencia:** la migración toma bloqueos de fila sobre toda la tabla mientras dura; en una tabla grande, ventana de bajo tráfico. Necesita `ENCRYPTION_KEY` y la clave correcta (con otra, `pgp_sym_decrypt` falla y la transacción se revierte entera).
+
 ---
 
 ## Bugs Conocidos y Pitfalls
@@ -512,6 +520,49 @@ El agente de RLS de la revisión 2026-09-17 encontró el mismo patrón de BUG-02
 - **Solución:** `app/core/encryption.py::mask_identifier()` conserva los últimos 4 caracteres y reemplaza el resto por `*` (mismo largo que el original, para no delatar la longitud real). `_resolve_contact()` llama a `mask_identifier(identifier_value)` en vez de usar el valor completo. Un identificador de 4 caracteres o menos se enmascara entero.
 - **Las otras dos, y por qué no:** (b) cifrar también `display_name` — pierde la búsqueda por `ILIKE` que usa el CRM (`app/api/v1/contacts.py`); (c) dejarlo como está — el teléfono completo queda visible y buscable dentro del tenant.
 - **Alcance:** solo aplica al `display_name` que se genera **al crear** el contacto. No toca contactos que ya tienen nombre real (un agente ya los identificó) ni el identificador cifrado, que sigue guardando el valor completo para el matching real.
+
+### Revisión de bugs 2026-09-19 (pedida por el usuario, foco en el código de Sprint 8)
+
+Cuatro agentes en paralelo (RLS/multi-tenancy, async/concurrencia, seguridad, lógica de negocio) sobre lo recién mergeado. 19 hallazgos reales, varios confirmados por más de un agente; se corrigieron los 3 de alto impacto y los de impacto medio. Rama `fix/sprint-08-hallazgos-auditoria`.
+
+### BUG-027: `echo=True` del engine filtraba `ENCRYPTION_KEY` y datos cifrados por stdout
+- **Descripción:** `app/core/database.py` creaba el engine con `echo=(APP_ENV == "development")`, y `.env.example` deja `APP_ENV=development` por defecto. Con `echo=True` SQLAlchemy usa `InstanceLogger`, que llama `logger._log()` directo (sin `isEnabledFor()`) y, si el logger no tiene handlers, instala su propio `StreamHandler(stdout)`. Por eso el `setLevel(WARNING)` de `app/core/logging.py` no lo silenciaba y salía fuera del pipeline de Loguru. Con columnas pgcrypto, los bind params incluyen el valor en claro que se cifra y la propia `ENCRYPTION_KEY`.
+- **Estado:** CERRADO. `echo=False` siempre; la visibilidad de queries la da `SQLAlchemyInstrumentor` (OpenTelemetry), que no expone bind params.
+- **Lección transferible:** silenciar un logger con `setLevel` no funciona si la librería tiene un camino que se salta `isEnabledFor()`; y un flag "solo en desarrollo" que imprime parámetros de queries deja de ser inocuo el día que una columna se cifra.
+
+### BUG-028: El borrado RGPD no borraba nada: `audit_logs` conservaba el dato personal
+- **Descripción:** el trigger de la migración 006 audita con `to_jsonb(OLD)`/`to_jsonb(NEW)` completos. El propio UPDATE de anonimización de `gdpr_delete_contact()` quedaba auditado con `old_values` = nombre y contenido reales, y el INSERT original también los tenía. El endpoint respondía "anonimizado" sin serlo. Encontrado por **dos agentes de forma independiente**.
+- **Estado:** CERRADO. `_redactar_rastro_de_auditoria()` (`app/api/v1/admin.py`) sobreescribe, al final de la misma transacción y tras el flush, las claves sensibles (`first_name`/`last_name`/`display_name`/`metadata` de `contacts`; `content`/`media_url`/`metadata` de `messages`) en **todas** las filas de `audit_logs` de ese contacto y esos mensajes, sin importar cuándo se escribieron. Se conserva el resto (quién, cuándo, qué tabla): RGPD exige borrar el dato personal, no la prueba de que hubo una operación. Los salientes no se anonimizan y su auditoría tampoco se redacta. Cubierto con 3 tests de integración nuevos (a verificar en CI real).
+- **Lección transferible:** un rastro de auditoría que copia filas completas es una segunda copia del dato personal; toda operación de supresión tiene que alcanzarlo o no suprime.
+
+### BUG-029: Un `sender_identifier` vacío mezclaba conversaciones de clientes finales distintos
+- **Descripción:** `ycloud.py`/`meta.py` extraen el remitente con `.get(..., "")` y `NormalizedMessage.sender_identifier: str` no validaba nada. `blind_index("")` es un HMAC estable, así que un payload mal formado creaba un contacto "fantasma" y cualquier otro remitente real que también llegara sin identificador (mismo tenant y canal) caía en el mismo contacto.
+- **Estado:** CERRADO. Validador en el schema que rechaza vacío o solo-espacios (y recorta bordes). El endpoint ya trata cualquier excepción de `parse_webhook()` como `parse_error` (200, sin reintento del proveedor), así que el mensaje se descarta en vez de crear una fila peligrosa.
+
+### BUG-030: `session.get()` sin `client_id` explícito (9 sitios) y `ContactUnifier.merge()` con defensa circular
+- **Descripción:** el proyecto exige el `client_id` en el WHERE además de RLS. Nueve sitios usaban `session.get()` (`webhook_processor` ×2, `document_pipeline` ×2, `document_ingestion`, `human_handoff`, `_delivery`, `calendar_tools`, `contact_unifier`). El de `merge()` era además circular: tomaba `client_id = source.client_id` de la misma fila que buscaba sin filtro, y el **destino no se verificaba** (`merged_into_id` podía apuntar a un contacto de otro tenant si un llamador se saltaba la validación del endpoint). Ninguno era explotable hoy.
+- **Estado:** CERRADO. `select()` filtrado por `(id, client_id)` en todos; `merge(source_id, target_id, client_id)` recibe el tenant del llamador autenticado y verifica origen y destino antes de tocar nada. Los `FakeSession` de `test_webhook_processor.py` ya no tienen `get()`: si alguien vuelve a `session.get()`, fallan.
+
+### BUG-031: Tres entradas de `beat_schedule` apuntaban a tareas inexistentes
+- **Descripción:** `check-token-budgets`, `recalculate-lead-scores` y `check-stale-leads` (Sprint 2) son de features que no existen. Beat las publicaba en cada ciclo y los workers las rechazaban como "unregistered task", sin ningún error visible.
+- **Estado:** CERRADO. Se retiran (se vuelven a agregar con la tarea). `tests/unit/test_celery_config.py` verifica que toda entrada apunte a una tarea registrada y a una cola declarada; se comprobó que falla contra la configuración anterior.
+
+### BUG-032: Observabilidad — DLQ contada como éxito, scrape bloqueante y sinks de Loguru síncronos
+- **Descripción:** (a) `process_incoming_message` devuelve `{"status": "dlq"}` en vez de relanzar, y `celery_tasks_total` lo contaba como `SUCCESS`; (b) `/internal/metrics` leía los `.db` del modo multiproceso en el hilo del event loop; (c) los sinks de Loguru escribían a stdout en el hilo llamante (en la API, el único del event loop), y `enqueue=True` obliga a reconfigurar tras el fork en Celery porque el hilo del sink no sobrevive un `fork()` y `_configurado` sí se hereda.
+- **Estado:** CERRADO. (a) estado `DLQ` a partir del `retval`, y la alerta `TareasFallando` y el panel de fallos pasan a `state=~"FAILURE|DLQ"`; (b) `asyncio.to_thread`; (c) `enqueue=True` + `setup_logging(force=True)` en `worker_process_init`.
+- **Parte del hallazgo que NO aplicaba:** `mark_process_dead()` solo borra archivos de `Gauge`, y el catálogo no tiene ninguno (ADR-049); los archivos de contadores/histogramas de procesos muertos se conservan a propósito (son acumulativos) y `/tmp/prometheus` es tmpfs. No se agregó.
+
+### BUG-033: Jaeger, Prometheus y Grafana publicados en `0.0.0.0`
+- **Descripción:** `"16686:16686"` y `"9090:9090"` publican en todas las interfaces del host aunque el comentario dijera "solo localhost". Jaeger y Prometheus no autentican y las series llevan `client_id`.
+- **Estado:** CERRADO. `127.0.0.1:puerto:puerto` en los tres, con test (`tests/unit/test_docker_compose.py`).
+- **Pendiente, no tocado (fuera de lo pedido):** `redis` (6379) y el dashboard de Traefik (8080) también se publican en todas las interfaces desde Sprint 2.
+
+### BUG-034: Dos contactos con los mismos últimos 4 dígitos se veían iguales en la bandeja
+- **Descripción:** `mask_identifier()` deja solo los últimos 4 caracteres; dos teléfonos de la misma longitud que terminen igual daban el mismo `display_name` provisional.
+- **Estado:** CERRADO. `_resolve_contact()` agrega un sufijo corto del id del contacto (`********4567 #a1b2`); el id se genera en cliente (`uuid4`) para no necesitar un UPDATE extra (que además quedaría auditado).
+
+### Hallazgos menores de esa revisión, sin corregir
+`users.email` sin cifrar aunque el docstring del modelo dice lo contrario; timing side-channel en `/auth/login` para enumerar emails (no se llama a `verify_password` si el email no existe); `Conversation.subject` (texto libre) no se anonimiza en RGPD; `_date()` de las respuestas rápidas fija a UTC; el índice de `identifier_hash` no es compuesto con `client_id` (nota de rendimiento); `deploy.replicas: 2` se ignora fuera de Swarm y el comentario de `metrics.py` asume 4 procesos; los workers de Celery no instrumentan el engine de SQLAlchemy (solo la API genera spans SQL).
 
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.

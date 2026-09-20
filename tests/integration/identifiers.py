@@ -2,7 +2,7 @@
 
 Desde la migración `008_encrypt_contact_identifiers`,
 `contact_identifiers.identifier_value` es `BYTEA` cifrado con pgcrypto y la
-tabla tiene además `identifier_hash` (índice ciego) como NOT NULL. Los tests de
+tabla tiene además `identifier_hash` (índice ciego, por tenant) como NOT NULL. Los tests de
 integración que insertan filas con SQL crudo —sin pasar por el ORM, que es
 quien normalmente calcula el hash— tienen que cifrar y hashear a mano.
 
@@ -10,6 +10,8 @@ Concentrarlo aquí evita que cada archivo de test invente su propia versión: si
 la normalización del hash cambia en `app.core.encryption`, hay un solo sitio
 que ajustar.
 """
+
+import uuid
 
 from app.core.config import get_settings
 from app.core.encryption import blind_index
@@ -29,11 +31,15 @@ SQL_SELECT_IDENTIFICADOR = (
 )
 
 
-def params_identificador(valor: str, canal: str = "whatsapp") -> dict[str, str]:
+def params_identificador(
+    valor: str, client_id: uuid.UUID | str, canal: str = "whatsapp"
+) -> dict[str, str]:
     """Parámetros para insertar un identificador cifrado.
 
     Args:
         valor: Identificador en claro (teléfono, email, handle).
+        client_id: Tenant del identificador: el índice ciego es por tenant
+            (migración 009), así que el hash depende de él.
         canal: Canal del identificador.
 
     Returns:
@@ -43,5 +49,5 @@ def params_identificador(valor: str, canal: str = "whatsapp") -> dict[str, str]:
         "canal": canal,
         "valor": valor,
         "clave": get_settings().ENCRYPTION_KEY,
-        "hash": blind_index(valor) or "",
+        "hash": blind_index(valor, client_id) or "",
     }

@@ -14,6 +14,7 @@ principal, y además `make_asgi_app()` fija el registro por defecto, que en modo
 multiproceso es justo el que no hay que servir (ver `app/core/metrics.py`).
 """
 
+import asyncio
 import logging
 
 from fastapi import APIRouter
@@ -31,14 +32,15 @@ router = APIRouter()
 async def metrics() -> PlainTextResponse:
     """Expone las métricas en el formato de texto de Prometheus.
 
-    `generate_latest()` solo serializa muestras que ya están en memoria (o en
-    los ficheros mmap del modo multiproceso): no hace I/O de red, así que no
-    rompe la regla de "nada síncrono en un endpoint async".
+    No hace I/O de red, pero **sí de archivo**: en modo multiproceso
+    `MultiProcessCollector.collect()` hace `glob` del directorio y abre, mapea
+    y lee cada `.db` de cada proceso, todo síncrono. En tmpfs son microsegundos
+    con pocos archivos, pero el coste crece con los procesos que hayan pasado
+    por el contenedor, y corre en el hilo del event loop compitiendo con las
+    requests reales (CLAUDE.md, regla 4). Por eso va a un hilo aparte.
 
     Returns:
         Las métricas del proceso en `text/plain; version=0.0.4`.
     """
-    return PlainTextResponse(
-        content=generate_latest(build_registry()),
-        media_type=CONTENT_TYPE_LATEST,
-    )
+    contenido = await asyncio.to_thread(lambda: generate_latest(build_registry()))
+    return PlainTextResponse(content=contenido, media_type=CONTENT_TYPE_LATEST)

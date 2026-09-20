@@ -189,7 +189,7 @@ class TestRLSMVPTables:
                 "id": str(uuid.uuid4()),
                 "client_id": cid_a,
                 "contact_id": contact_id,
-                **params_identificador("+5215599990001"),
+                **params_identificador("+5215599990001", cid_a),
             },
         )
 

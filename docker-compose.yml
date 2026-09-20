@@ -480,9 +480,11 @@ services:
       SPAN_STORAGE_TYPE: memory
       MEMORY_MAX_TRACES: "50000"
     ports:
-      # Solo la UI sale a localhost. Los puertos OTLP (4317/4318) se quedan
-      # dentro de la red `backend`: los usan la API y los workers, nadie mas.
-      - "16686:16686"
+      # Solo la UI sale del contenedor, y solo a localhost del host: sin el
+      # "127.0.0.1:" Docker publica en 0.0.0.0 y Jaeger (sin autenticacion
+      # propia) quedaria abierto a cualquiera que llegue a la IP del servidor.
+      # Los puertos OTLP (4317/4318) se quedan dentro de la red `backend`.
+      - "127.0.0.1:16686:16686"
     networks:
       - backend
     healthcheck:
@@ -527,7 +529,9 @@ services:
       - "--storage.tsdb.retention.time=15d"
       - "--web.enable-lifecycle"
     ports:
-      - "9090:9090"
+      # Solo localhost del host: Prometheus no autentica y sus series llevan
+      # `client_id` como label (actividad y costos por tenant).
+      - "127.0.0.1:9090:9090"
     networks:
       - backend
     healthcheck:
@@ -554,7 +558,8 @@ services:
       # Los JSON de dashboards viven en options.path del provider, no en provisioning/.
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
-      - "3000:3000"
+      # Solo localhost del host; para verlo desde fuera, tunel SSH o Traefik.
+      - "127.0.0.1:3000:3000"
     depends_on:
       prometheus:
         condition: service_healthy
