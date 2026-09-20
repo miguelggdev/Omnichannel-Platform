@@ -105,6 +105,12 @@ class NormalizedMessage(BaseModel):
             trae (Telegram, cabecera `From` de un email). Solo sirve para que el
             agente reconozca al contacto en la bandeja; nunca identifica: para eso
             esta `sender_identifier`.
+        verified_phone: Telefono que el canal PRUEBA que es de quien escribe,
+            distinto del identificador del canal. Solo lo rellena un provider
+            cuando el propio canal lo garantiza (Telegram, si el usuario comparte
+            su propio contacto); nunca desde un dato que el remitente pueda
+            falsear. Habilita la unificacion automatica de contactos
+            (`app/services/phone_unification.py`).
     """
 
     channel: ChannelEnum
@@ -119,6 +125,7 @@ class NormalizedMessage(BaseModel):
     location: dict[str, Any] | None = None
     interactive_response: dict[str, Any] | None = None
     sender_name: str | None = None
+    verified_phone: str | None = None
 
     @field_validator("sender_identifier")
     @classmethod

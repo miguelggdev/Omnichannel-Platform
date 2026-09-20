@@ -157,6 +157,80 @@ class TestParseWebhook:
 
         assert normalizado.text == "Contacto compartido: Grace +573001234567"
 
+    async def test_el_contacto_propio_verifica_el_telefono(
+        self, provider: TelegramProvider
+    ) -> None:
+        """`contact.user_id == from.id`: el usuario compartio SU numero."""
+        normalizado = await provider.parse_webhook(
+            _update(contact={"phone_number": "+573001234567", "first_name": "Ada", "user_id": 789})
+        )
+
+        assert normalizado.verified_phone == "+573001234567"
+
+    async def test_un_mensaje_sin_contacto_no_verifica_nada(
+        self, provider: TelegramProvider
+    ) -> None:
+        normalizado = await provider.parse_webhook(_update(text="hola"))
+
+        assert normalizado.verified_phone is None
+
+    @pytest.mark.parametrize(
+        "contacto",
+        [
+            # Tarjeta de otra persona: `user_id` es el de esa cuenta.
+            {"phone_number": "+573001234567", "first_name": "Grace", "user_id": 555},
+            # Contacto de alguien que no esta en Telegram: no hay `user_id`.
+            {"phone_number": "+573001234567", "first_name": "Grace"},
+            # `user_id` que no es un entero (dato manipulado).
+            {"phone_number": "+573001234567", "first_name": "Ada", "user_id": "789"},
+            {"phone_number": "+573001234567", "first_name": "Ada", "user_id": True},
+            # Sin telefono.
+            {"first_name": "Ada", "user_id": 789},
+        ],
+    )
+    async def test_un_contacto_que_no_es_del_remitente_no_verifica(
+        self, provider: TelegramProvider, contacto: dict[str, Any]
+    ) -> None:
+        """Aceptarlo dejaria a cualquiera reclamar el telefono de otro."""
+        normalizado = await provider.parse_webhook(_update(contact=contacto))
+
+        assert normalizado.verified_phone is None
+        # El contacto sigue llegando como texto para el agente.
+        assert normalizado.text is not None
+
+    async def test_un_user_id_booleano_no_se_confunde_con_un_id(
+        self, provider: TelegramProvider
+    ) -> None:
+        """`True == 1` en Python: un remitente con id 1 no puede quedar "verificado"."""
+        update = _update(
+            contact={"phone_number": "+573001234567", "first_name": "Ada", "user_id": True}
+        )
+        update["message"]["from"]["id"] = 1
+
+        normalizado = await provider.parse_webhook(update)
+
+        assert normalizado.verified_phone is None
+
+    @pytest.mark.parametrize(
+        "reenvio",
+        [
+            {"forward_origin": {"type": "user"}},
+            {"forward_from": {"id": 789}},
+            {"forward_date": FECHA},
+        ],
+    )
+    async def test_un_contacto_reenviado_no_verifica(
+        self, provider: TelegramProvider, reenvio: dict[str, Any]
+    ) -> None:
+        normalizado = await provider.parse_webhook(
+            _update(
+                contact={"phone_number": "+573001234567", "first_name": "Ada", "user_id": 789},
+                **reenvio,
+            )
+        )
+
+        assert normalizado.verified_phone is None
+
     async def test_toque_de_boton(self, provider: TelegramProvider) -> None:
         """Un `callback_query` llega como texto y como `interactive_response`."""
         update = {

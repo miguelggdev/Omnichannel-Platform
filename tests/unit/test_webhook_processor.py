@@ -18,6 +18,26 @@ from app.tasks import webhook_processor as wp
 # ─── Dobles ──────────────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _sin_unificacion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Estos tests usan una sesion falsa sin savepoints ni consultas reales.
+
+    La unificacion por telefono tiene sus propios tests (`TestUnificacionDeContactos`
+    aqui, `test_phone_unification.py` y los de integracion); para el resto se
+    sustituye por un paso directo.
+    """
+
+    async def _pasar(
+        session: Any, client_id: Any, contact: Any, normalized: Any, creado: Any
+    ) -> Any:
+        return contact
+
+    monkeypatch.setattr(wp, "_unificar_contacto", _pasar)
+
+
+_UNIFICAR_REAL = wp._unificar_contacto
+
+
 class FakeResult:
     """Resultado de `session.execute()` con un valor prefijado."""
 
@@ -669,6 +689,126 @@ class TestEncoladoDeTranscripcion:
             message_id=uuid.uuid4(),
             message_data={},
         )
+
+
+# ─── Unificacion de contactos por telefono verificado ────────────────────────
+
+
+class _SesionConSavepoint:
+    """Sesion falsa con `begin_nested()` (savepoint)."""
+
+    def __init__(self) -> None:
+        self.savepoints = 0
+
+    def begin_nested(self) -> Any:
+        sesion = self
+
+        class _Ctx:
+            async def __aenter__(self) -> None:
+                sesion.savepoints += 1
+
+            async def __aexit__(self, *exc: Any) -> None:
+                return None
+
+        return _Ctx()
+
+
+class TestUnificacionDeContactos:
+    """Cuando se intenta unificar y cuando no; nunca a costa del mensaje."""
+
+    def _mensaje(self, canal: str, **extra: Any) -> Any:
+        from app.schemas.message import NormalizedMessage
+
+        return NormalizedMessage(
+            channel=canal,
+            sender_identifier="573001112233" if canal == "whatsapp" else "789",
+            text="hola",
+            timestamp=datetime(2026, 9, 1, tzinfo=timezone.utc),
+            external_message_id="x1",
+            raw_payload={},
+            **extra,
+        )
+
+    @pytest.fixture
+    def llamadas(self, monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+        """Captura las llamadas al servicio de unificacion."""
+        registro: list[Any] = []
+
+        async def _unificar(session: Any, client_id: Any, contacto: Any, telefono: str) -> Any:
+            registro.append(telefono)
+            return type("R", (), {"contacto": "superviviente"})()
+
+        monkeypatch.setattr(wp, "unificar_por_telefono", _unificar)
+        return registro
+
+    async def test_whatsapp_recien_creado_se_evalua(self, llamadas: list[Any]) -> None:
+        resultado = await _UNIFICAR_REAL(
+            _SesionConSavepoint(), uuid.uuid4(), "actual", self._mensaje("whatsapp"), True
+        )
+
+        assert llamadas == ["573001112233"]
+        assert resultado == "superviviente"
+
+    async def test_whatsapp_de_un_contacto_existente_no_se_reevalua(
+        self, llamadas: list[Any]
+    ) -> None:
+        """Una consulta por cada mensaje seria costo sin beneficio: si el telefono
+        se registra despues por otro canal, ese canal hace la union."""
+        resultado = await _UNIFICAR_REAL(
+            _SesionConSavepoint(), uuid.uuid4(), "actual", self._mensaje("whatsapp"), False
+        )
+
+        assert llamadas == []
+        assert resultado == "actual"
+
+    async def test_telegram_con_telefono_verificado_se_evalua_siempre(
+        self, llamadas: list[Any]
+    ) -> None:
+        for creado in (True, False):
+            await _UNIFICAR_REAL(
+                _SesionConSavepoint(),
+                uuid.uuid4(),
+                "actual",
+                self._mensaje("telegram", verified_phone="+573001112233"),
+                creado,
+            )
+
+        assert llamadas == ["573001112233", "573001112233"]
+
+    @pytest.mark.parametrize("canal", ["telegram", "instagram", "facebook", "email"])
+    async def test_sin_telefono_verificado_no_se_toca_nada(
+        self, llamadas: list[Any], canal: str
+    ) -> None:
+        resultado = await _UNIFICAR_REAL(
+            _SesionConSavepoint(), uuid.uuid4(), "actual", self._mensaje(canal), True
+        )
+
+        assert llamadas == []
+        assert resultado == "actual"
+
+    async def test_corre_dentro_de_un_savepoint(self, llamadas: list[Any]) -> None:
+        """Si falla, solo se revierte la unificacion: no el mensaje ni el contacto."""
+        sesion = _SesionConSavepoint()
+
+        await _UNIFICAR_REAL(sesion, uuid.uuid4(), "actual", self._mensaje("whatsapp"), True)
+
+        assert sesion.savepoints == 1
+
+    async def test_un_fallo_no_pierde_el_mensaje(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mejor dos contactos sin unir que un mensaje del cliente perdido."""
+
+        async def _revienta(*args: Any) -> Any:
+            raise RuntimeError("violacion de unicidad")
+
+        monkeypatch.setattr(wp, "unificar_por_telefono", _revienta)
+
+        contacto = type("Contact", (), {"id": uuid.uuid4()})()
+
+        resultado = await _UNIFICAR_REAL(
+            _SesionConSavepoint(), uuid.uuid4(), contacto, self._mensaje("whatsapp"), True
+        )
+
+        assert resultado is contacto
 
 
 # ─── Tarea Celery: reintentos y DLQ ──────────────────────────────────────────

@@ -158,6 +158,37 @@ def _nombre(perfil: dict[str, Any]) -> str | None:
     return f"@{usuario}" if usuario else None
 
 
+#: Claves con las que Telegram marca un mensaje reenviado (segun la version de la API).
+_CLAVES_REENVIO = ("forward_origin", "forward_from", "forward_from_chat", "forward_date")
+
+
+def _telefono_propio(mensaje: dict[str, Any], perfil: dict[str, Any]) -> str | None:
+    """Telefono de un contacto compartido, solo si es el de quien lo envia.
+
+    Telegram verifica el telefono de cada cuenta, y en un contacto compartido
+    rellena `user_id` con la cuenta a la que pertenece ese numero. Que
+    `contact.user_id` sea el mismo `from.id` prueba que el usuario compartio *su
+    propio* numero. Un contacto ajeno (una tarjeta de otra persona) o reenviado
+    NO prueba nada: aceptarlo dejaria a cualquiera "reclamar" el telefono de otro
+    y quedar unificado con su historial.
+
+    Args:
+        mensaje: Objeto `message` del update.
+        perfil: Objeto `from` del mensaje.
+
+    Returns:
+        El telefono tal como lo entrego Telegram, o `None` si no es verificable.
+    """
+    contacto = mensaje.get("contact") or {}
+    telefono = contacto.get("phone_number")
+    user_id = contacto.get("user_id")
+    if not telefono or not isinstance(user_id, int) or isinstance(user_id, bool):
+        return None
+    if user_id != perfil.get("id") or any(clave in mensaje for clave in _CLAVES_REENVIO):
+        return None
+    return str(telefono)
+
+
 class TelegramProvider(MessagingProvider):
     """Implementacion de `MessagingProvider` para Telegram (Bot API).
 
@@ -205,6 +236,7 @@ class TelegramProvider(MessagingProvider):
         media_url: str | None = None
         media_type: MessageTypeEnum | None = None
         location: dict[str, Any] | None = None
+        verified_phone: str | None = None
 
         if mensaje.get("photo"):
             # `photo` trae la misma imagen en varios tamanos, de menor a mayor.
@@ -228,6 +260,7 @@ class TelegramProvider(MessagingProvider):
                 p for p in (contacto.get("first_name"), contacto.get("last_name")) if p
             )
             texto = f"Contacto compartido: {nombre} {contacto.get('phone_number', '')}".strip()
+            verified_phone = _telefono_propio(mensaje, perfil)
         elif texto is None:
             tipos = sorted(k for k in mensaje if k not in ("message_id", "from", "chat", "date"))
             raise IgnoredWebhookError(f"Tipo de mensaje de Telegram no soportado: {tipos}")
@@ -243,6 +276,7 @@ class TelegramProvider(MessagingProvider):
             external_message_id=str(update_id),
             raw_payload=raw_payload,
             location=location,
+            verified_phone=verified_phone,
         )
 
     def _parse_callback(self, raw_payload: dict[str, Any], update_id: str) -> NormalizedMessage:

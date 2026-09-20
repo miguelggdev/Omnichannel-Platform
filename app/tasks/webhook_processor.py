@@ -40,6 +40,7 @@ from app.models.conversation import Conversation
 from app.models.message import Message
 from app.schemas.message import MessageTypeEnum, NormalizedMessage
 from app.services.dedup import get_redis, is_duplicate_persisted, persist_dedup
+from app.services.phone_unification import telefono_verificado, unificar_por_telefono
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -133,6 +134,31 @@ async def _resolve_contact(
 ) -> Contact:
     """Busca el contacto por (canal, identifier) o lo crea.
 
+    Args:
+        session: Sesion con el contexto de tenant ya aplicado (SET LOCAL).
+        client_id: Tenant propietario.
+        channel: Canal del identificador.
+        identifier_value: Telefono, PSID o username segun el canal.
+        sender_name: Nombre publico del remitente, si el canal lo trae.
+
+    Returns:
+        Contacto existente o recien creado (ver `_find_or_create_contact`).
+    """
+    contact, _ = await _find_or_create_contact(
+        session, client_id, channel, identifier_value, sender_name
+    )
+    return contact
+
+
+async def _find_or_create_contact(
+    session: AsyncSession,
+    client_id: UUID,
+    channel: str,
+    identifier_value: str,
+    sender_name: str | None = None,
+) -> tuple[Contact, bool]:
+    """Busca el contacto por (canal, identifier) o lo crea.
+
     Si el contacto encontrado fue fusionado (`merged_into_id`), se sigue la cadena
     hasta el contacto superviviente.
 
@@ -146,7 +172,8 @@ async def _resolve_contact(
             **crear** el contacto, como `display_name`.
 
     Returns:
-        Contacto existente o recien creado.
+        Tupla `(contacto, creado)`: el contacto existente o el recien creado, y
+        si se creo en esta llamada.
     """
     # Por el hash, no por el valor: `identifier_value` esta cifrado con un IV
     # aleatorio (Sprint 8), asi que comparar contra el ciphertext de esta
@@ -169,7 +196,7 @@ async def _resolve_contact(
             seen.add(contact.id)
             contact = await _contacto_del_tenant(session, client_id, contact.merged_into_id)
         if contact is not None:
-            return contact
+            return contact, False
 
     # Enmascarado, no el valor completo: display_name no esta cifrado y el CRM
     # lo busca con ILIKE (MEMORY.md, "el telefono queda en claro"). Solo dura
@@ -202,7 +229,54 @@ async def _resolve_contact(
         )
     )
     await session.flush()
-    return contact
+    return contact, True
+
+
+async def _unificar_contacto(
+    session: AsyncSession,
+    client_id: UUID,
+    contact: Contact,
+    normalized: NormalizedMessage,
+    creado: bool,
+) -> Contact:
+    """Une el contacto con otro de otro canal si el telefono verificado coincide.
+
+    Solo actua cuando el canal prueba un telefono (WhatsApp: el remitente;
+    Telegram: el usuario comparte su propio contacto) y bajo las reglas
+    estrictas de `app/services/phone_unification.py`. En WhatsApp solo se
+    evalua al **crear** el contacto: si el telefono se registra despues por otro
+    canal, es ese canal quien hace la unificacion.
+
+    Nunca hace fallar el mensaje: se ejecuta en un savepoint y cualquier error se
+    registra y se ignora (mejor dos contactos sin unir que un mensaje perdido).
+
+    Args:
+        session: Sesion con el contexto de tenant ya aplicado (SET LOCAL).
+        client_id: Tenant propietario.
+        contact: Contacto resuelto para el remitente.
+        normalized: Mensaje entrante.
+        creado: Si `contact` se creo con este mensaje.
+
+    Returns:
+        El contacto con el que seguir: el superviviente si hubo fusion, o el
+        mismo `contact` en cualquier otro caso.
+    """
+    telefono = telefono_verificado(normalized)
+    if telefono is None:
+        return contact
+    if normalized.channel.value == "whatsapp" and not creado:
+        return contact
+
+    try:
+        async with session.begin_nested():
+            resolucion = await unificar_por_telefono(session, client_id, contact, telefono)
+    except Exception:
+        logger.exception(
+            "Fallo la unificacion por telefono verificado (contacto %s); el mensaje sigue",
+            contact.id,
+        )
+        return contact
+    return resolucion.contacto
 
 
 async def _resolve_conversation(
@@ -303,9 +377,10 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
             logger.info("Mensaje ya procesado (webhook_dedup): %s", external_id)
             return
 
-        contact = await _resolve_contact(
+        contact, contact_creado = await _find_or_create_contact(
             session, client_id, message_channel, sender_identifier, normalized.sender_name
         )
+        contact = await _unificar_contacto(session, client_id, contact, normalized, contact_creado)
         conversation = await _resolve_conversation(session, client_id, contact.id, message_channel)
 
         message_id = uuid4()
