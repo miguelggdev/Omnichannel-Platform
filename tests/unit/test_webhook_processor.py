@@ -144,6 +144,60 @@ class TestResolverContacto:
         assert len(session.added) == 2, "debe crear contacto e identifier"
         assert session.added[1].identifier_value == "573001112233"
 
+    async def test_usa_el_nombre_publico_del_remitente_si_el_canal_lo_trae(self) -> None:
+        """Un id de Telegram o un email enmascarados no le dicen nada al agente.
+
+        Es el nombre que la propia persona eligio mostrar en su perfil, no el
+        identificador: ese sigue sin aparecer en claro.
+        """
+        session = FakeSession(results=[None])
+
+        contacto = await wp._resolve_contact(
+            session, uuid.uuid4(), "telegram", "789", sender_name="Ada Lovelace"
+        )
+
+        assert contacto.display_name == "Ada Lovelace"
+        assert "789" not in contacto.display_name
+        assert session.added[1].identifier_value == "789"
+
+    @pytest.mark.parametrize("nombre", [None, "", "   "])
+    async def test_sin_nombre_cae_al_identificador_enmascarado(self, nombre: str | None) -> None:
+        """Sin nombre util se mantiene el comportamiento de siempre."""
+        session = FakeSession(results=[None])
+
+        contacto = await wp._resolve_contact(
+            session, uuid.uuid4(), "whatsapp", "573001112233", sender_name=nombre
+        )
+
+        assert contacto.display_name.startswith("********2233 #")
+
+    async def test_el_nombre_se_recorta_al_ancho_de_la_columna(self) -> None:
+        """`contacts.display_name` es `String(200)`: uno mas largo revienta el INSERT."""
+        session = FakeSession(results=[None])
+
+        contacto = await wp._resolve_contact(
+            session, uuid.uuid4(), "telegram", "789", sender_name="A" * 500
+        )
+
+        assert len(contacto.display_name) == 200
+
+    async def test_un_contacto_existente_conserva_su_nombre(self) -> None:
+        """El nombre publico solo se usa al crear: no pisa el que un agente puso."""
+        contacto_id = uuid.uuid4()
+        existente = type("Ident", (), {"contact_id": contacto_id})()
+        contacto = type(
+            "Contact",
+            (),
+            {"id": contacto_id, "merged_into_id": None, "display_name": "Cliente VIP"},
+        )()
+        session = FakeSession(results=[existente, contacto])
+
+        resultado = await wp._resolve_contact(
+            session, uuid.uuid4(), "telegram", "789", sender_name="Otro Nombre"
+        )
+
+        assert resultado.display_name == "Cliente VIP"
+
     async def test_dos_numeros_que_terminan_igual_no_se_ven_iguales(self) -> None:
         """Con solo los ultimos 4 digitos, el agente no distinguiria dos contactos.
 

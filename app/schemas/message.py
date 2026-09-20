@@ -101,6 +101,10 @@ class NormalizedMessage(BaseModel):
         location: Coordenadas `{"latitude": ..., "longitude": ...}` si el
             mensaje es de ubicacion.
         interactive_response: Payload de la respuesta a un boton/quick reply.
+        sender_name: Nombre que el remitente publica en su perfil, si el canal lo
+            trae (Telegram, cabecera `From` de un email). Solo sirve para que el
+            agente reconozca al contacto en la bandeja; nunca identifica: para eso
+            esta `sender_identifier`.
     """
 
     channel: ChannelEnum
@@ -114,6 +118,7 @@ class NormalizedMessage(BaseModel):
 
     location: dict[str, Any] | None = None
     interactive_response: dict[str, Any] | None = None
+    sender_name: str | None = None
 
     @field_validator("sender_identifier")
     @classmethod
