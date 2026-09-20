@@ -12,6 +12,9 @@ COMPOSE = Path(__file__).resolve().parents[2] / "docker-compose.yml"
 # con credenciales por defecto (Grafana), cuyas series/trazas llevan `client_id`.
 OBSERVABILIDAD = ("jaeger", "prometheus", "grafana")
 
+# Puertos que SI pueden salir a todas las interfaces: el gateway publico.
+PUBLICOS = {("traefik", "80:80"), ("traefik", "443:443")}
+
 
 def _servicios() -> dict[str, Any]:
     """Carga los servicios del compose.
@@ -41,3 +44,20 @@ class TestPuertosPublicados:
             assert str(mapeo).startswith("127.0.0.1:"), (
                 f"{servicio} publica {mapeo!r} en todas las interfaces"
             )
+
+    def test_solo_el_gateway_publica_a_todas_las_interfaces(self) -> None:
+        """Cualquier otro puerto publicado tiene que ir a `127.0.0.1`.
+
+        Cubre lo que la lista de observabilidad no nombra: Redis (con
+        `requirepass`, pero un Redis abierto a internet es blanco de fuerza
+        bruta) y el dashboard de Traefik (`api.insecure: true`, sin
+        autenticacion). Un servicio nuevo con `ports:` mal escrito falla aqui.
+        """
+        expuestos = [
+            (nombre, str(mapeo))
+            for nombre, servicio in _servicios().items()
+            for mapeo in servicio.get("ports", [])
+            if not str(mapeo).startswith("127.0.0.1:") and (nombre, str(mapeo)) not in PUBLICOS
+        ]
+
+        assert not expuestos, f"puertos publicados en todas las interfaces: {expuestos}"
