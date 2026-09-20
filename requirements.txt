@@ -6,8 +6,11 @@
 
 # ─── Framework Web ───────────────────────────────────────────────────────────
 fastapi>=0.110.0
-uvicorn[standard]>=0.27.0
+uvicorn[standard]>=0.27.0  # `standard` trae `websockets`, que necesita el canal webchat
 python-multipart>=0.0.9
+# Llega como dependencia de starlette/httpx, pero `app/api/v1/webchat.py` lo importa
+# directo (el task group del socket), asi que se declara.
+anyio>=4.0.0
 
 # ─── Database ────────────────────────────────────────────────────────────────
 sqlalchemy[asyncio]>=2.0.25
