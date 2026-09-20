@@ -145,10 +145,32 @@ class TestLoggingEstructurado:
         llamadas: list[bool] = []
         monkeypatch.setattr(obs_module, "setup_logging", lambda force=False: llamadas.append(force))
         monkeypatch.setattr(telemetry_module, "setup_celery_telemetry", lambda: None)
+        monkeypatch.setattr(telemetry_module, "setup_telemetry", lambda **_: None)
 
         obs_module._instrumentar_proceso()
 
         assert llamadas == [True]
+
+    def test_el_hijo_instrumenta_tambien_sql_redis_y_httpx(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Solo `CeleryInstrumentor` no basta: casi todo el trabajo esta en el worker.
+
+        Las queries, Redis y las llamadas a YCloud/OpenAI ocurren en las tareas.
+        Si el hijo no instrumenta el engine, la traza de un mensaje se corta en
+        cuanto la tarea empieza a trabajar.
+        """
+        from app.core.database import engine
+        from app.tasks import observability as obs_module
+
+        recibidos: list[dict[str, Any]] = []
+        monkeypatch.setattr(obs_module, "setup_logging", lambda force=False: None)
+        monkeypatch.setattr(telemetry_module, "setup_celery_telemetry", lambda: None)
+        monkeypatch.setattr(telemetry_module, "setup_telemetry", lambda **kw: recibidos.append(kw))
+
+        obs_module._instrumentar_proceso()
+
+        assert recibidos == [{"engine": engine}]
 
     def test_el_json_lleva_los_tres_campos_de_contexto(self) -> None:
         """`trace_id`, `client_id` y `user_id` en toda línea, aunque estén vacíos."""
