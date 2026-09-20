@@ -104,6 +104,136 @@ class TestTelemetria:
         assert isinstance(provider.sampler, ParentBased)
 
 
+class TestRedaccionDeUrls:
+    """Las credenciales que viajan en la URL no llegan a los spans (ni a Jaeger)."""
+
+    @pytest.mark.parametrize(
+        ("url", "esperada"),
+        [
+            (
+                "https://api.telegram.org/bot123456789:AAH-tok_en/sendMessage",
+                "https://api.telegram.org/bot***/sendMessage",
+            ),
+            (
+                "https://graph.facebook.com/v19.0/me/messages?access_token=EAAB123&x=1",
+                "https://graph.facebook.com/v19.0/me/messages?access_token=***&x=1",
+            ),
+            (
+                "https://api.example.com/v1?a=1&api_key=SECRETO&b=2",
+                "https://api.example.com/v1?a=1&api_key=***&b=2",
+            ),
+            (
+                "https://api.ycloud.com/v2/whatsapp/messages",
+                "https://api.ycloud.com/v2/whatsapp/messages",
+            ),
+            ("https://x.test/a?page=3&size=10", "https://x.test/a?page=3&size=10"),
+        ],
+    )
+    def test_redactar_url(self, url: str, esperada: str) -> None:
+        """Quita el token del path de Telegram y los query params sensibles."""
+        from app.core.telemetry import redactar_url
+
+        assert redactar_url(url) == esperada
+
+    @staticmethod
+    def _exportador() -> tuple[Any, Any]:
+        """Provider de prueba con un exportador en memoria.
+
+        Returns:
+            Tupla `(provider, exportador)`.
+        """
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        exportador = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exportador))
+        return provider, exportador
+
+    def test_los_spans_de_un_cliente_async_salen_sin_el_token(self) -> None:
+        """Con el instrumentor real, `http.url` y `url.full` no llevan el token.
+
+        La instrumentacion guarda la URL completa en cada span; `meta.py` manda
+        el `access_token` como query param y Telegram lleva el token del bot en
+        el path. Un `AsyncClient` necesita el hook async (el codigo de
+        produccion pasa los dos a `instrument()`).
+        """
+        import asyncio
+
+        import httpx
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+        from app.core.telemetry import _redactar_span_httpx_async
+
+        provider, exportador = self._exportador()
+
+        async def _llamar() -> None:
+            transporte = httpx.MockTransport(lambda r: httpx.Response(200, json={"ok": True}))
+            async with httpx.AsyncClient(transport=transporte) as cliente:
+                HTTPXClientInstrumentor.instrument_client(
+                    cliente, tracer_provider=provider, request_hook=_redactar_span_httpx_async
+                )
+                await cliente.post("https://api.telegram.org/bot123456:SECRETO-token/sendMessage")
+                await cliente.get("https://graph.facebook.com/v19.0/me?access_token=EAABSECRETO")
+
+        asyncio.run(_llamar())
+
+        spans = exportador.get_finished_spans()
+        assert len(spans) == 2
+        for span in spans:
+            assert "SECRETO" not in str(dict(span.attributes))
+        assert spans[0].attributes["url.full"] == "https://api.telegram.org/bot***/sendMessage"
+        assert spans[1].attributes["http.url"].endswith("?access_token=***")
+
+    def test_los_spans_de_un_cliente_sincrono_salen_sin_el_token(self) -> None:
+        """Lo mismo con `httpx.Client` y el hook sincrono."""
+        import httpx
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+        from app.core.telemetry import _redactar_span_httpx
+
+        provider, exportador = self._exportador()
+        transporte = httpx.MockTransport(lambda r: httpx.Response(200, json={"ok": True}))
+        with httpx.Client(transport=transporte) as cliente:
+            HTTPXClientInstrumentor.instrument_client(
+                cliente, tracer_provider=provider, request_hook=_redactar_span_httpx
+            )
+            cliente.post("https://api.telegram.org/bot123456:SECRETO-token/sendMessage")
+
+        (span,) = exportador.get_finished_spans()
+        assert "SECRETO" not in str(dict(span.attributes))
+
+    def test_una_url_sin_credenciales_no_toca_el_span(self) -> None:
+        """Solo se sobreescribe el atributo cuando hay algo que redactar."""
+        import asyncio
+
+        import httpx
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+        from app.core.telemetry import _redactar_span_httpx_async
+
+        provider, exportador = self._exportador()
+
+        async def _llamar() -> None:
+            transporte = httpx.MockTransport(lambda r: httpx.Response(200, json={}))
+            async with httpx.AsyncClient(transport=transporte) as cliente:
+                HTTPXClientInstrumentor.instrument_client(
+                    cliente, tracer_provider=provider, request_hook=_redactar_span_httpx_async
+                )
+                await cliente.get("https://api.ycloud.com/v2/whatsapp/messages?page=2")
+
+        asyncio.run(_llamar())
+
+        (span,) = exportador.get_finished_spans()
+        assert span.attributes["http.url"] == "https://api.ycloud.com/v2/whatsapp/messages?page=2"
+        # `url.full` no lo pone el instrumentador por defecto: si el hook no
+        # tiene nada que redactar, tampoco lo inventa.
+        assert "url.full" not in span.attributes
+
+
 class TestLoggingEstructurado:
     """El intercept de la stdlib y el formato JSON."""
 
