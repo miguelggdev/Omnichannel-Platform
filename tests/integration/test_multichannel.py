@@ -6,25 +6,27 @@ contacto (con el nombre publico del remitente), identificador cifrado,
 conversacion por canal y mensaje. Y, para email, que la respuesta saliente se
 cuelga del hilo del ultimo mensaje entrante.
 
-Lo que **no** cubre, a proposito: la unificacion de un mismo contacto entre
-canales (criterio 5 del spec). Telegram no expone el telefono del usuario en sus
-mensajes, y unificar por telefono exige un flujo propio de resolucion que no
-existe todavia; aqui se fija el comportamiento actual (un contacto por
-canal e identificador) para que el dia que se implemente, el cambio sea
-deliberado y no una regresion silenciosa.
+Tambien la unificacion de un mismo contacto entre canales (criterio 5 del spec):
+solo por telefono **verificado por el propio canal** y solo si la coincidencia es
+inequivoca (`app/services/phone_unification.py`). Cada test de "no une" protege
+una fuga entre personas o entre tenants.
 
 Requiere base de datos: `pytest tests/ --run-db`.
 """
 
 import uuid
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
 
 from app.agents.nodes import _delivery as delivery_module
 from app.core.config import get_settings
 from app.core.database import tenant_session
+from app.models.contact import Contact
+from app.models.contact_identifier import ContactIdentifier
 from app.models.message import Message
 from app.tasks.webhook_processor import _process_message
 from tests.integration.identifiers import SQL_SELECT_IDENTIFICADOR
@@ -329,21 +331,332 @@ class TestRespuestaEnElHilo:
         assert saliente.external_message_id == "<bot-1@empresa.com>"
 
 
-class TestSinUnificacionEntreCanales:
-    """Comportamiento actual: un contacto por (canal, identificador)."""
+TELEFONO = "573001112233"
+
+
+async def _filas(client_id: uuid.UUID, sql: str, **params: Any) -> list[Any]:
+    """Ejecuta una consulta con el contexto de tenant aplicado.
+
+    Args:
+        client_id: Tenant.
+        sql: Consulta con `:cid` para el tenant.
+        **params: Otros parametros.
+
+    Returns:
+        Todas las filas.
+    """
+    async with tenant_session(client_id) as session:
+        return list((await session.execute(text(sql), {"cid": str(client_id), **params})).all())
+
+
+async def _activos(client_id: uuid.UUID) -> list[uuid.UUID]:
+    """Ids de los contactos vigentes (no fusionados) del tenant."""
+    filas = await _filas(
+        client_id, "SELECT id FROM contacts WHERE client_id = :cid AND merged_into_id IS NULL"
+    )
+    return [uuid.UUID(str(f.id)) for f in filas]
+
+
+async def _canales_de(client_id: uuid.UUID, contact_id: uuid.UUID) -> set[str]:
+    """Canales de los identificadores que tiene un contacto."""
+    filas = await _filas(
+        client_id,
+        "SELECT channel FROM contact_identifiers WHERE client_id = :cid AND contact_id = :ct",
+        ct=str(contact_id),
+    )
+    return {f.channel for f in filas}
+
+
+async def _sembrar(
+    client_id: uuid.UUID, identificadores: dict[str, str], *, borrado_gdpr: bool = False
+) -> uuid.UUID:
+    """Crea un contacto ya existente, con los identificadores dados.
+
+    Args:
+        client_id: Tenant.
+        identificadores: `canal -> valor`.
+        borrado_gdpr: Si el contacto ya fue anonimizado por GDPR.
+
+    Returns:
+        Id del contacto.
+    """
+    contact_id = uuid.uuid4()
+    async with tenant_session(client_id) as session:
+        session.add(
+            Contact(
+                id=contact_id,
+                client_id=client_id,
+                display_name="Sembrado",
+                is_gdpr_deleted=borrado_gdpr,
+            )
+        )
+        await session.flush()
+        for canal, valor in identificadores.items():
+            session.add(
+                ContactIdentifier(
+                    client_id=client_id,
+                    contact_id=contact_id,
+                    channel=canal,
+                    identifier_value=valor,
+                )
+            )
+    return contact_id
+
+
+def _telegram(chat_id: str, external_id: str, telefono: str | None) -> dict[str, Any]:
+    """Mensaje de Telegram; con `telefono`, como si el usuario compartiera el suyo."""
+    return _normalized(
+        "telegram",
+        chat_id,
+        external_id,
+        "Contacto compartido" if telefono else "Hola",
+        verified_phone=telefono,
+    )
+
+
+async def _whatsapp(external_id: str, telefono: str = TELEFONO) -> None:
+    await _process_message("ycloud", "whatsapp", _normalized("whatsapp", telefono, external_id))
+
+
+@pytest_asyncio.fixture
+async def otro_tenant() -> AsyncGenerator[uuid.UUID, None]:
+    """Un segundo tenant commiteado, con su limpieza."""
+    client_id = uuid.uuid4()
+    async with tenant_session(client_id) as session:
+        await session.execute(
+            text(
+                "INSERT INTO clients (id, name, slug, plan, is_active) "
+                "VALUES (:id, 'Otro Tenant', :slug, 'free', true)"
+            ),
+            {"id": str(client_id), "slug": f"otro-tenant-{client_id.hex[:8]}"},
+        )
+
+    yield client_id
+
+    async with tenant_session(client_id) as session:
+        for tabla in (
+            "messages",
+            "conversations",
+            "contact_identifiers",
+            "contacts",
+            "webhook_dedup",
+        ):
+            await session.execute(
+                text(f"DELETE FROM {tabla} WHERE client_id = :cid"),  # noqa: S608
+                {"cid": str(client_id)},
+            )
+        await session.execute(text("DELETE FROM clients WHERE id = :cid"), {"cid": str(client_id)})
+
+
+class TestUnificacionPorTelefonoVerificado:
+    """La misma persona en dos canales es un solo contacto, con prueba."""
+
+    async def test_telegram_con_su_propio_telefono_se_une_al_contacto_de_whatsapp(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        await _whatsapp("w1")
+
+        await _process_message("telegram", "telegram", _telegram("789", "t1", TELEFONO))
+
+        activos = await _activos(webhook_tenant)
+        assert len(activos) == 1
+        assert await _canales_de(webhook_tenant, activos[0]) == {"whatsapp", "telegram"}
+
+    async def test_las_conversaciones_de_los_dos_canales_cuelgan_del_mismo_contacto(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        await _whatsapp("w1")
+        await _process_message("telegram", "telegram", _telegram("789", "t1", TELEFONO))
+
+        filas = await _filas(
+            webhook_tenant, "SELECT channel, contact_id FROM conversations WHERE client_id = :cid"
+        )
+
+        assert {f.channel for f in filas} == {"whatsapp", "telegram"}
+        assert len({f.contact_id for f in filas}) == 1
+
+    async def test_un_mensaje_posterior_de_telegram_sigue_en_el_contacto_unido(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        """El identificador de Telegram ahora apunta al superviviente."""
+        await _whatsapp("w1")
+        await _process_message("telegram", "telegram", _telegram("789", "t1", TELEFONO))
+
+        await _process_message("telegram", "telegram", _telegram("789", "t2", None))
+
+        assert len(await _activos(webhook_tenant)) == 1
+        assert await _contar(webhook_tenant, "conversations") == 2
+
+    async def test_whatsapp_posterior_se_une_al_contacto_de_telegram(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        """Orden inverso: el telefono verificado de Telegram quedo registrado."""
+        await _process_message("telegram", "telegram", _telegram("789", "t1", TELEFONO))
+
+        await _whatsapp("w1")
+
+        activos = await _activos(webhook_tenant)
+        assert len(activos) == 1
+        assert await _canales_de(webhook_tenant, activos[0]) == {
+            "telegram",
+            "verified_phone",
+            "whatsapp",
+        }
+
+    async def test_el_telefono_verificado_no_es_un_canal_para_responder(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        """Ninguna conversacion puede usar `verified_phone` como canal de envio."""
+        from app.agents.nodes._tenant import ChannelNotConfiguredError, get_channel_config
+
+        with pytest.raises(ChannelNotConfiguredError):
+            get_channel_config("verified_phone")
+
+    async def test_el_telefono_verificado_se_guarda_cifrado(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        await _process_message("telegram", "telegram", _telegram("789", "t1", TELEFONO))
+
+        (fila,) = await _filas(
+            webhook_tenant,
+            "SELECT identifier_value FROM contact_identifiers "
+            "WHERE client_id = :cid AND channel = 'verified_phone'",
+        )
+
+        assert TELEFONO.encode() not in bytes(fila.identifier_value)
+
+    async def test_el_superviviente_deja_traza_sin_datos_personales(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        await _whatsapp("w1")
+        await _process_message("telegram", "telegram", _telegram("789", "t1", TELEFONO))
+        (contacto,) = await _activos(webhook_tenant)
+
+        (fila,) = await _filas(
+            webhook_tenant,
+            "SELECT jsonb_array_length(metadata->'unifications') AS n, "
+            "metadata->'unifications'->0->>'reason' AS motivo, "
+            "(metadata->'unifications')::text AS crudo "
+            "FROM contacts WHERE id = :ct",
+            ct=str(contacto),
+        )
+
+        assert fila.n == 1
+        assert fila.motivo == "verified_phone"
+        assert TELEFONO not in fila.crudo
+
+
+class TestNoUneSinCoincidenciaInequivoca:
+    """Cada uno de estos casos evita mezclar a dos personas."""
 
     async def test_el_mismo_texto_en_dos_canales_son_dos_contactos(
         self, webhook_tenant: uuid.UUID
     ) -> None:
-        """Un id de Telegram y un numero de WhatsApp iguales no se confunden.
+        """Un id de Telegram con forma de telefono no se confunde con un telefono."""
+        await _process_message("telegram", "telegram", _telegram(TELEFONO, "t1", None))
+        await _whatsapp("w1")
 
-        Tampoco se unifican por telefono: eso (criterio 5 del spec) necesita un
-        flujo de resolucion que no existe. Este test fija lo que hay hoy.
-        """
-        await _process_message(
-            "telegram", "telegram", _normalized("telegram", "573001112233", "t1")
-        )
-        await _process_message("ycloud", "whatsapp", _normalized("whatsapp", "573001112233", "w1"))
-
-        assert await _contar(webhook_tenant, "contacts") == 2
+        assert len(await _activos(webhook_tenant)) == 2
         assert await _contar(webhook_tenant, "conversations") == 2
+
+    async def test_telegram_sin_telefono_verificado_no_une(self, webhook_tenant: uuid.UUID) -> None:
+        """Un contacto ajeno o reenviado llega sin `verified_phone` (lo filtra el provider)."""
+        await _whatsapp("w1")
+
+        await _process_message("telegram", "telegram", _telegram("789", "t1", None))
+
+        assert len(await _activos(webhook_tenant)) == 2
+
+    async def test_instagram_y_email_nunca_unen(self, webhook_tenant: uuid.UUID) -> None:
+        await _whatsapp("w1")
+
+        await _process_message(
+            "meta",
+            "instagram",
+            _normalized("instagram", "6789000000000001", "ig1", verified_phone=TELEFONO),
+        )
+        await _process_message(
+            "email",
+            "email",
+            _normalized("email", "juan@example.com", "e1", verified_phone=TELEFONO),
+        )
+
+        assert len(await _activos(webhook_tenant)) == 3
+
+    async def test_dos_titulares_previos_es_ambiguo(self, webhook_tenant: uuid.UUID) -> None:
+        """No se sabe cual es el correcto: queda para la fusion manual."""
+        await _sembrar(webhook_tenant, {"whatsapp": f"+{TELEFONO}"})
+        await _sembrar(webhook_tenant, {"verified_phone": TELEFONO})
+
+        await _process_message("telegram", "telegram", _telegram("789", "t1", TELEFONO))
+
+        assert len(await _activos(webhook_tenant)) == 3
+
+    async def test_otro_telefono_ya_registrado_no_se_pisa(self, webhook_tenant: uuid.UUID) -> None:
+        await _process_message("telegram", "telegram", _telegram("789", "t1", TELEFONO))
+
+        await _process_message("telegram", "telegram", _telegram("789", "t2", "573109998877"))
+
+        filas = await _filas(
+            webhook_tenant,
+            "SELECT id FROM contact_identifiers "
+            "WHERE client_id = :cid AND channel = 'verified_phone'",
+        )
+        assert len(filas) == 1
+        assert len(await _activos(webhook_tenant)) == 1
+
+    async def test_dos_cuentas_de_telegram_no_se_unen(self, webhook_tenant: uuid.UUID) -> None:
+        """Un contacto de WhatsApp que ya tiene OTRA cuenta de Telegram."""
+        await _sembrar(webhook_tenant, {"whatsapp": TELEFONO, "telegram": "111"})
+
+        await _process_message("telegram", "telegram", _telegram("222", "t1", TELEFONO))
+
+        assert len(await _activos(webhook_tenant)) == 2
+
+    async def test_un_contacto_borrado_por_gdpr_no_se_une(self, webhook_tenant: uuid.UUID) -> None:
+        await _sembrar(webhook_tenant, {"whatsapp": TELEFONO}, borrado_gdpr=True)
+
+        await _process_message("telegram", "telegram", _telegram("789", "t1", TELEFONO))
+
+        assert len(await _activos(webhook_tenant)) == 2
+
+
+class TestAislamientoEntreTenants:
+    """El mismo telefono en dos tenants son dos personas distintas para cada uno."""
+
+    async def test_el_mismo_telefono_en_otro_tenant_no_se_une(
+        self,
+        webhook_tenant: uuid.UUID,
+        otro_tenant: uuid.UUID,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await _whatsapp("w1")
+        contacto_a = (await _activos(webhook_tenant))[0]
+        monkeypatch.setattr(get_settings(), "DEFAULT_CLIENT_ID", str(otro_tenant))
+
+        await _process_message("telegram", "telegram", _telegram("789", "t1", TELEFONO))
+
+        # El tenant A no cambia: un contacto, un solo canal, sin fusiones.
+        assert await _activos(webhook_tenant) == [contacto_a]
+        assert await _canales_de(webhook_tenant, contacto_a) == {"whatsapp"}
+        # El tenant B tiene su propio contacto, sin nada del A.
+        activos_b = await _activos(otro_tenant)
+        assert len(activos_b) == 1
+        assert activos_b[0] != contacto_a
+        assert await _canales_de(otro_tenant, activos_b[0]) == {"telegram", "verified_phone"}
+
+    async def test_los_hashes_del_mismo_telefono_difieren_por_tenant(
+        self, webhook_tenant: uuid.UUID, otro_tenant: uuid.UUID
+    ) -> None:
+        """La barrera de fondo: aunque un filtro fallara, el indice ciego no coincide."""
+        await _whatsapp("w1")
+        (fila_a,) = await _filas(
+            webhook_tenant,
+            "SELECT identifier_hash FROM contact_identifiers WHERE client_id = :cid",
+        )
+        await _sembrar(otro_tenant, {"whatsapp": TELEFONO})
+        (fila_b,) = await _filas(
+            otro_tenant, "SELECT identifier_hash FROM contact_identifiers WHERE client_id = :cid"
+        )
+
+        assert fila_a.identifier_hash != fila_b.identifier_hash
