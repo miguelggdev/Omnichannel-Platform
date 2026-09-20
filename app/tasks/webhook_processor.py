@@ -14,7 +14,9 @@ Flujo por mensaje (todo dentro de UNA transaccion con SET LOCAL):
 6. Registrar en `webhook_dedup`.
 7. Encolar el procesamiento de IA, salvo que la conversacion ya sea de un humano
    (`HUMAN_OWNED_STATUSES`): el bot no le responde a un contacto que un agente
-   ya esta atendiendo o que acaba de ser escalado.
+   ya esta atendiendo o que acaba de ser escalado. Si el mensaje es una nota de
+   voz, primero se encola la transcripcion (Sprint 9), que encola la IA al
+   terminar.
 
 Reintentos: 5s -> 25s -> 125s (exponencial). Tras 3 fallos el mensaje va a la Dead
 Letter Queue de Redis (`dlq:webhook_messages`) para revision manual.
@@ -38,7 +40,7 @@ from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.conversation import Conversation
 from app.models.message import Message
-from app.schemas.message import NormalizedMessage
+from app.schemas.message import MessageTypeEnum, NormalizedMessage
 from app.services.dedup import get_redis, is_duplicate_persisted, persist_dedup
 
 if TYPE_CHECKING:
@@ -339,12 +341,91 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
         )
         return
 
+    # Una nota de voz pasa antes por Whisper: el grafo lee `message["text"]` y
+    # sin transcribir le llegaria vacia. La tarea de transcripcion encola la IA
+    # cuando termina, incluso si no pudo transcribir (Sprint 9, ADR-058).
+    if _es_nota_de_voz(normalized):
+        _enqueue_transcription(
+            client_id=client_id,
+            conversation_id=conversation.id,
+            contact_id=contact.id,
+            channel=message_channel,
+            message_data=message_data,
+        )
+        return
+
     # Fuera de la transaccion: la IA no debe encolarse si el commit fallo.
     _enqueue_ai_processing(
         client_id=client_id,
         conversation_id=conversation.id,
         contact_id=contact.id,
         channel=message_channel,
+        message_data=message_data,
+    )
+
+
+def _es_nota_de_voz(normalized: NormalizedMessage) -> bool:
+    """Dice si el mensaje hay que transcribir antes de pasarlo al grafo.
+
+    Un audio con texto (el pie de un audio en WhatsApp) ya tiene con que
+    responder: se deja pasar tal cual, sin gastar una llamada a Whisper.
+
+    Args:
+        normalized: Mensaje entrante ya normalizado.
+
+    Returns:
+        True si es audio, trae media y no trae texto.
+    """
+    return (
+        normalized.media_type == MessageTypeEnum.audio
+        and bool(normalized.media_url)
+        and not (normalized.text or "").strip()
+    )
+
+
+def _enqueue_transcription(
+    client_id: UUID,
+    conversation_id: UUID,
+    contact_id: UUID,
+    channel: str,
+    message_data: dict[str, Any],
+) -> None:
+    """Encola la transcripcion de una nota de voz.
+
+    Si no se puede encolar, se cae a la IA directamente: mejor una respuesta
+    con el texto vacio que ninguna respuesta. El fallo se registra como CRITICAL.
+
+    Args:
+        client_id: Tenant propietario.
+        conversation_id: Conversacion del mensaje.
+        contact_id: Contacto que escribio.
+        channel: Canal de origen.
+        message_data: `NormalizedMessage` serializado.
+    """
+    try:
+        from app.tasks.audio_transcription import transcribe_audio
+
+        transcribe_audio.delay(
+            client_id=str(client_id),
+            conversation_id=str(conversation_id),
+            contact_id=str(contact_id),
+            channel=channel,
+            message_data=message_data,
+        )
+        return
+    except Exception:
+        logger.critical(
+            "No se pudo encolar la transcripcion; se procesa el audio sin texto: "
+            "conversation_id=%s",
+            conversation_id,
+            exc_info=True,
+        )
+
+    _enqueue_ai_processing(
+        client_id=client_id,
+        conversation_id=conversation_id,
+        contact_id=contact_id,
+        channel=channel,
         message_data=message_data,
     )
 

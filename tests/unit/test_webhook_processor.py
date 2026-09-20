@@ -617,3 +617,147 @@ class TestDedupPersistente:
             )
             is False
         )
+
+
+# ─── Notas de voz: transcribir antes de pasar al grafo (Sprint 9) ────────────
+
+
+class TestNotaDeVoz:
+    """Un audio sin texto va primero a Whisper, no directo al grafo."""
+
+    def _normalizado(self, **extra: Any) -> Any:
+        """Arma un NormalizedMessage con lo que pida cada caso.
+
+        Args:
+            **extra: Campos que sustituyen a los del audio.
+
+        Returns:
+            El mensaje normalizado.
+        """
+        from app.schemas.message import NormalizedMessage
+
+        datos: dict[str, Any] = {
+            "channel": "whatsapp",
+            "sender_identifier": "573001112233",
+            "text": None,
+            "media_url": "https://cdn.ycloud.com/a.ogg",
+            "media_type": "audio",
+            "timestamp": "2026-09-20T10:00:00+00:00",
+            "external_message_id": "wamid.voz",
+            "raw_payload": {},
+        }
+        datos.update(extra)
+        return NormalizedMessage(**datos)
+
+    def test_un_audio_sin_texto_se_transcribe(self) -> None:
+        assert wp._es_nota_de_voz(self._normalizado()) is True
+
+    def test_un_audio_con_texto_no_gasta_una_llamada_a_whisper(self) -> None:
+        """El pie de un audio ya le da al grafo con que responder."""
+        assert wp._es_nota_de_voz(self._normalizado(text="mira esto")) is False
+
+    def test_un_audio_sin_media_url_no_se_transcribe(self) -> None:
+        assert wp._es_nota_de_voz(self._normalizado(media_url=None)) is False
+
+    @pytest.mark.parametrize("tipo", ["text", "image", "video", "document"])
+    def test_lo_que_no_es_audio_no_se_transcribe(self, tipo: str) -> None:
+        assert wp._es_nota_de_voz(self._normalizado(media_type=tipo)) is False
+
+    def test_encola_la_transcripcion_y_no_la_ia(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.tasks import audio_transcription as at
+
+        encolados: list[dict[str, Any]] = []
+        monkeypatch.setattr(at.transcribe_audio, "delay", lambda **kw: encolados.append(kw))
+
+        ia: list[Any] = []
+        monkeypatch.setattr(wp, "_enqueue_ai_processing", lambda **kw: ia.append(kw))
+
+        wp._enqueue_transcription(
+            client_id=uuid.uuid4(),
+            conversation_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
+            channel="whatsapp",
+            message_data={"external_message_id": "wamid.voz"},
+        )
+
+        assert len(encolados) == 1
+        assert encolados[0]["channel"] == "whatsapp"
+        assert ia == []
+
+    def test_si_no_se_puede_encolar_la_transcripcion_responde_igual(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mejor una respuesta sin el texto del audio que ninguna respuesta."""
+        from app.tasks import audio_transcription as at
+
+        def _sin_broker(**kwargs: Any) -> None:
+            raise ConnectionError("broker no disponible")
+
+        monkeypatch.setattr(at.transcribe_audio, "delay", _sin_broker)
+
+        ia: list[Any] = []
+        monkeypatch.setattr(wp, "_enqueue_ai_processing", lambda **kw: ia.append(kw))
+
+        wp._enqueue_transcription(
+            client_id=uuid.uuid4(),
+            conversation_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
+            channel="whatsapp",
+            message_data={"external_message_id": "wamid.voz"},
+        )
+
+        assert len(ia) == 1
+
+    async def test_process_message_deriva_el_audio_a_la_transcripcion(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """El recorrido completo: guarda el mensaje y encola Whisper, no la IA."""
+        client_id = uuid.uuid4()
+        monkeypatch.setattr(wp, "_resolve_client_id", lambda provider, channel: client_id)
+
+        session = FakeSession(results=[None, None])
+
+        class FakeTenantSession:
+            async def __aenter__(self) -> FakeSession:
+                return session
+
+            async def __aexit__(self, *exc: Any) -> None:
+                return None
+
+        monkeypatch.setattr(wp, "tenant_session", lambda _client_id: FakeTenantSession())
+
+        async def sin_duplicado(*args: Any, **kwargs: Any) -> bool:
+            return False
+
+        async def persistido_ok(*args: Any, **kwargs: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(wp, "is_duplicate_persisted", sin_duplicado)
+        monkeypatch.setattr(wp, "persist_dedup", persistido_ok)
+
+        transcripciones: list[dict[str, Any]] = []
+        ia: list[Any] = []
+        monkeypatch.setattr(wp, "_enqueue_transcription", lambda **kw: transcripciones.append(kw))
+        monkeypatch.setattr(wp, "_enqueue_ai_processing", lambda **kw: ia.append(kw))
+
+        await wp._process_message(
+            "ycloud",
+            "whatsapp",
+            {
+                "channel": "whatsapp",
+                "sender_identifier": "573001112233",
+                "text": None,
+                "media_url": "https://cdn.ycloud.com/a.ogg",
+                "media_type": "audio",
+                "timestamp": "2026-09-20T10:00:00+00:00",
+                "external_message_id": "wamid.voz",
+                "raw_payload": {},
+            },
+        )
+
+        assert len(transcripciones) == 1
+        assert ia == []
+        # El mensaje se guardo igual, con su tipo y su media.
+        guardado = next(obj for obj in session.added if type(obj).__name__ == "Message")
+        assert guardado.message_type == "audio"
+        assert guardado.media_url == "https://cdn.ycloud.com/a.ogg"

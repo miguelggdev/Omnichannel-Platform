@@ -24,6 +24,7 @@ TASK_MODULES = (
     "app.tasks.ai_processor",
     "app.tasks.auto_close",
     "app.tasks.maintenance",
+    "app.tasks.audio_transcription",
 )
 
 celery_app.conf.update(imports=TASK_MODULES)

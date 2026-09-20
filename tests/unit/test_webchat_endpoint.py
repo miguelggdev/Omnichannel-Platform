@@ -17,7 +17,7 @@ from starlette.testclient import TestClient
 from app.api.v1 import webchat as webchat_module
 from app.services.messaging.webchat import canal_de_sesion, firmar_sesion, sesion_de_token
 
-CHANNEL_TOKEN = "token-de-instalacion-del-widget"  # noqa: S105 — valor de prueba
+CHANNEL_TOKEN = "token-de-instalacion-del-widget"
 CLIENT_ID = "11111111-1111-1111-1111-111111111111"
 URL = f"/api/v1/webchat/{CHANNEL_TOKEN}"
 
@@ -126,9 +126,7 @@ def tarea(monkeypatch: pytest.MonkeyPatch) -> TareaDoble:
 
 
 @pytest.fixture
-def cliente(
-    monkeypatch: pytest.MonkeyPatch, entorno: None, pubsub: PubSubDoble
-) -> TestClient:
+def cliente(monkeypatch: pytest.MonkeyPatch, entorno: None, pubsub: PubSubDoble) -> TestClient:
     """Cliente de test con solo el router de webchat montado."""
     import app.services.dedup as dedup_module
 
@@ -167,9 +165,11 @@ class TestTokenDeCanal:
     def test_token_invalido_cierra_con_4001(self, cliente: TestClient) -> None:
         from starlette.websockets import WebSocketDisconnect
 
-        with pytest.raises(WebSocketDisconnect) as excinfo:  # noqa: PT012
-            with cliente.websocket_connect("/api/v1/webchat/otro-token") as ws:
-                ws.receive_json()
+        with (
+            pytest.raises(WebSocketDisconnect) as excinfo,
+            cliente.websocket_connect("/api/v1/webchat/otro-token") as ws,
+        ):
+            ws.receive_json()
         assert excinfo.value.code == webchat_module.CIERRE_TOKEN_INVALIDO
 
     def test_canal_sin_configurar_cierra_con_4001(
@@ -181,9 +181,11 @@ class TestTokenDeCanal:
         from app.core.config import get_settings
 
         monkeypatch.setattr(get_settings(), "WEBCHAT_CHANNEL_TOKEN", "")
-        with pytest.raises(WebSocketDisconnect) as excinfo:  # noqa: PT012
-            with cliente.websocket_connect(URL) as ws:
-                ws.receive_json()
+        with (
+            pytest.raises(WebSocketDisconnect) as excinfo,
+            cliente.websocket_connect(URL) as ws,
+        ):
+            ws.receive_json()
         assert excinfo.value.code == webchat_module.CIERRE_TOKEN_INVALIDO
 
     def test_sin_default_client_id_cierra(
@@ -194,9 +196,11 @@ class TestTokenDeCanal:
         from app.core.config import get_settings
 
         monkeypatch.setattr(get_settings(), "DEFAULT_CLIENT_ID", "")
-        with pytest.raises(WebSocketDisconnect) as excinfo:  # noqa: PT012
-            with cliente.websocket_connect(URL) as ws:
-                ws.receive_json()
+        with (
+            pytest.raises(WebSocketDisconnect) as excinfo,
+            cliente.websocket_connect(URL) as ws,
+        ):
+            ws.receive_json()
         assert excinfo.value.code == webchat_module.CIERRE_TOKEN_INVALIDO
 
     def test_resolver_tenant_devuelve_el_uuid(self, entorno: None) -> None:
@@ -418,12 +422,16 @@ class TestEntrada:
 
         monkeypatch.setattr(get_settings(), "WEBCHAT_RATE_LIMIT_PER_MINUTE", 2)
 
-        with pytest.raises(WebSocketDisconnect) as excinfo:  # noqa: PT012
+        def _spamear() -> None:
+            """Manda cuatro mensajes seguidos con el limite en dos."""
             with cliente.websocket_connect(URL) as ws:
                 ws.receive_json()
                 for i in range(4):
                     ws.send_json({"type": "message", "text": f"spam {i}"})
                     ws.receive_json()
+
+        with pytest.raises(WebSocketDisconnect) as excinfo:
+            _spamear()
         assert excinfo.value.code == webchat_module.CIERRE_EXCESO_DE_MENSAJES
         assert len(tarea.llamadas) == 2
 

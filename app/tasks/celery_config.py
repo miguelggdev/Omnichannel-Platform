@@ -1,7 +1,7 @@
 """Configuracion de Celery — Plataforma SaaS Omnicanal Multi-Tenant.
 
 Define colas, routing y configuracion del broker/backend.
-6 colas especializadas con routing automatico por nombre de tarea.
+7 colas especializadas con routing automatico por nombre de tarea.
 
 Colas:
     - webhooks: Procesamiento de webhooks entrantes (c=4)
@@ -10,6 +10,7 @@ Colas:
     - notifications: Envio de notificaciones (c=2)
     - bulk: Operaciones masivas secuenciales (c=1)
     - lead_enrichment: Enriquecimiento asincrono de leads (c=2) — ADR-022
+    - media: Transcripcion de audio con Whisper (c=2) — ADR-058
 """
 
 import os
@@ -74,6 +75,11 @@ celery_app.conf.update(
             Exchange("lead_enrichment", type="direct"),
             routing_key="lead_enrichment",
         ),
+        Queue(
+            "media",
+            Exchange("media", type="direct"),
+            routing_key="media",
+        ),
     ),
     # ─── Routing automatico por nombre de tarea ────────────────────────────
     task_routes={
@@ -83,6 +89,7 @@ celery_app.conf.update(
         "app.tasks.notification_*": {"queue": "notifications"},
         "app.tasks.bulk_*": {"queue": "bulk"},
         "app.tasks.enrichment_*": {"queue": "lead_enrichment"},
+        "app.tasks.media_*": {"queue": "media"},
     },
     # Cola por defecto si no matchea ningun patron
     task_default_queue="webhooks",

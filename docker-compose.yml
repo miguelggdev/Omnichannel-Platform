@@ -433,7 +433,61 @@ services:
       start_period: 40s
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 10. CELERY-BEAT — Scheduler para tareas periodicas
+  # 10. CELERY-MEDIA — Worker para transcripcion de audio (Whisper)
+  #    Concurrencia: 2 (descarga + llamada a la API de OpenAI)
+  #    ADR-058: cola propia para que una nota de voz no espere detras del OCR
+  # ─────────────────────────────────────────────────────────────────────────────
+  celery-media:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    command: >
+      celery -A app.tasks.celery_config worker
+      -Q media
+      -c ${CELERY_MEDIA_CONCURRENCY:-2}
+      --loglevel=${LOG_LEVEL:-info}
+      -n media@%h
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - WHISPER_MODEL=${WHISPER_MODEL}
+      - WHISPER_LANGUAGE=${WHISPER_LANGUAGE}
+      - WHISPER_MAX_AUDIO_BYTES=${WHISPER_MAX_AUDIO_BYTES}
+      # El audio de Telegram se descarga con getFile, que necesita el token.
+      - TELEGRAM_CHANNEL_BOT_TOKEN=${TELEGRAM_CHANNEL_BOT_TOKEN}
+      - TELEGRAM_API_BASE_URL=${TELEGRAM_API_BASE_URL}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - LOG_FORMAT=${LOG_FORMAT}
+      - JWT_SECRET=${JWT_SECRET}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_SERVICE_NAME=omnichannel-worker-media
+      - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+    tmpfs:
+      # Metricas multiproceso de prometheus_client: en RAM y vacio en
+      # cada arranque, que es lo que exige el modo multiproceso (si
+      # arrastra ficheros de procesos muertos, los suma al scrape).
+      - /tmp/prometheus
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_config inspect ping -d media@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 11. CELERY-BEAT — Scheduler para tareas periodicas
   # ─────────────────────────────────────────────────────────────────────────────
   celery-beat:
     build:
@@ -469,7 +523,7 @@ services:
       - backend
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 11. JAEGER — Collector OTLP y UI de trazas
+  # 12. JAEGER — Collector OTLP y UI de trazas
   #     Recibe los spans de la API y de los workers por gRPC (4317). El
   #     almacenamiento de all-in-one es en memoria: sirve para operar y depurar,
   #     no para retencion historica. Para eso, cambiar a Tempo o a un collector
@@ -499,7 +553,7 @@ services:
       retries: 3
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 12. REDIS-EXPORTER — Metricas de Redis y profundidad de las colas de Celery
+  # 13. REDIS-EXPORTER — Metricas de Redis y profundidad de las colas de Celery
   #     `check-keys` publica el largo de cada lista como `redis_key_size`, que es
   #     exactamente la profundidad de cada cola. La alternativa —medirla desde la
   #     aplicacion— obligaria a un LLEN sincrono dentro del endpoint async de
@@ -519,7 +573,7 @@ services:
         condition: service_healthy
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 13. PROMETHEUS — Recoleccion de metricas
+  # 14. PROMETHEUS — Recoleccion de metricas
   # ─────────────────────────────────────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:v2.54.1
@@ -546,7 +600,7 @@ services:
       retries: 3
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # 14. GRAFANA — Dashboards de observabilidad
+  # 15. GRAFANA — Dashboards de observabilidad
   # ─────────────────────────────────────────────────────────────────────────────
   grafana:
     image: grafana/grafana:11.2.0
