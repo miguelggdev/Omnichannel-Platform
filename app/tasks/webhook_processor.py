@@ -38,7 +38,7 @@ from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.conversation import Conversation
 from app.models.message import Message
-from app.schemas.message import NormalizedMessage
+from app.schemas.message import MessageTypeEnum, NormalizedMessage
 from app.services.dedup import get_redis, is_duplicate_persisted, persist_dedup
 
 if TYPE_CHECKING:
@@ -308,8 +308,10 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
         )
         conversation = await _resolve_conversation(session, client_id, contact.id, message_channel)
 
+        message_id = uuid4()
         session.add(
             Message(
+                id=message_id,
                 client_id=client_id,
                 conversation_id=conversation.id,
                 direction="inbound",
@@ -339,6 +341,24 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
         )
         return
 
+    # Un audio sin texto no le sirve al grafo: primero se transcribe, y la tarea
+    # de transcripcion es quien encola la IA cuando ya hay texto.
+    if normalized.media_type == MessageTypeEnum.audio and not normalized.text:
+        if normalized.media_url:
+            _enqueue_transcription(
+                client_id=client_id,
+                conversation_id=conversation.id,
+                contact_id=contact.id,
+                channel=message_channel,
+                message_id=message_id,
+                message_data=message_data,
+            )
+        else:
+            logger.warning(
+                "Audio sin media_url en la conversacion %s; no hay que transcribir", conversation.id
+            )
+        return
+
     # Fuera de la transaccion: la IA no debe encolarse si el commit fallo.
     _enqueue_ai_processing(
         client_id=client_id,
@@ -347,6 +367,48 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
         channel=message_channel,
         message_data=message_data,
     )
+
+
+def _enqueue_transcription(
+    client_id: UUID,
+    conversation_id: UUID,
+    contact_id: UUID,
+    channel: str,
+    message_id: UUID,
+    message_data: dict[str, Any],
+) -> None:
+    """Encola la transcripcion de un audio entrante.
+
+    Misma politica de fallos que `_enqueue_ai_processing`: el mensaje ya esta
+    commiteado y en `webhook_dedup`, asi que nada se propaga; un broker caido se
+    registra como CRITICAL porque es un audio que se quedo sin atender.
+
+    Args:
+        client_id: Tenant propietario.
+        conversation_id: Conversacion del mensaje.
+        contact_id: Contacto que escribio.
+        channel: Canal de origen.
+        message_id: Mensaje de audio recien persistido.
+        message_data: NormalizedMessage serializado.
+    """
+    try:
+        from app.tasks.audio_transcription import transcribe_audio_message
+
+        transcribe_audio_message.delay(
+            client_id=str(client_id),
+            conversation_id=str(conversation_id),
+            contact_id=str(contact_id),
+            channel=channel,
+            message_id=str(message_id),
+            message_data=message_data,
+        )
+    except Exception:
+        logger.critical(
+            "No se pudo encolar la transcripcion; el audio quedo guardado y sin "
+            "respuesta automatica: conversation_id=%s",
+            conversation_id,
+            exc_info=True,
+        )
 
 
 def _enqueue_ai_processing(
