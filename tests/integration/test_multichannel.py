@@ -660,3 +660,65 @@ class TestAislamientoEntreTenants:
         )
 
         assert fila_a.identifier_hash != fila_b.identifier_hash
+
+
+class TestFlujoDeTelefonoTelegram:
+    """Pedir y agradecer el telefono, de punta a punta contra Postgres real."""
+
+    @pytest.fixture
+    def respuestas(self, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+        """Captura las respuestas fijas que el webhook encola."""
+        from app.tasks import webhook_processor
+
+        capturadas: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            webhook_processor, "_enqueue_channel_reply", lambda **kw: capturadas.append(kw)
+        )
+        return capturadas
+
+    async def test_vincular_ofrece_el_boton_y_no_llama_a_la_ia(
+        self,
+        webhook_tenant: uuid.UUID,
+        respuestas: list[dict[str, Any]],
+        ia_encolada: list[dict[str, Any]],
+    ) -> None:
+        mensaje = _normalized("telegram", "789", "t1", "/vincular")
+
+        await _process_message("telegram", "telegram", mensaje)
+
+        assert [r["metadata"] for r in respuestas] == [
+            {"request_contact": "📱 Compartir mi numero"}
+        ]
+        assert ia_encolada == []
+        # El mensaje del usuario si queda en el historial.
+        assert await _contar(webhook_tenant, "messages") == 1
+
+    async def test_compartir_el_numero_agradece_une_y_no_guarda_el_numero_en_claro(
+        self,
+        webhook_tenant: uuid.UUID,
+        respuestas: list[dict[str, Any]],
+        ia_encolada: list[dict[str, Any]],
+    ) -> None:
+        await _whatsapp("w1")
+        ia_encolada.clear()
+        compartido = _normalized(
+            "telegram",
+            "789",
+            "t1",
+            "Compartio su numero de telefono",
+            verified_phone=TELEFONO,
+            raw_payload={"message": {"contact": {"phone_number": "********2233", "user_id": 789}}},
+        )
+
+        await _process_message("telegram", "telegram", compartido)
+
+        assert [r["metadata"] for r in respuestas] == [{"remove_keyboard": True}]
+        assert ia_encolada == []
+        assert len(await _activos(webhook_tenant)) == 1
+        filas = await _filas(
+            webhook_tenant,
+            "SELECT content, metadata::text AS crudo FROM messages "
+            "WHERE client_id = :cid AND external_message_id = 't1'",
+        )
+        assert TELEFONO not in filas[0].content
+        assert TELEFONO not in filas[0].crudo
