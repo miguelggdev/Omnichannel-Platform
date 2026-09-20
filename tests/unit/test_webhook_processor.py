@@ -139,9 +139,29 @@ class TestResolverContacto:
 
         # Enmascarado: display_name no esta cifrado y el CRM lo busca con
         # ILIKE, asi que no lleva el telefono completo (MEMORY.md).
-        assert contacto.display_name == "********2233"
+        assert contacto.display_name == f"********2233 #{contacto.id.hex[:4]}"
+        assert "573001112233" not in contacto.display_name
         assert len(session.added) == 2, "debe crear contacto e identifier"
         assert session.added[1].identifier_value == "573001112233"
+
+    async def test_dos_numeros_que_terminan_igual_no_se_ven_iguales(self) -> None:
+        """Con solo los ultimos 4 digitos, el agente no distinguiria dos contactos.
+
+        El sufijo del id del contacto los diferencia en la bandeja sin volver a
+        mostrar el numero completo.
+        """
+        client_id = uuid.uuid4()
+
+        uno = await wp._resolve_contact(
+            FakeSession(results=[None]), client_id, "whatsapp", "573001114567"
+        )
+        dos = await wp._resolve_contact(
+            FakeSession(results=[None]), client_id, "whatsapp", "573009994567"
+        )
+
+        assert uno.display_name != dos.display_name
+        assert uno.display_name.startswith("********4567 #")
+        assert dos.display_name.startswith("********4567 #")
 
     async def test_reutiliza_contacto_existente(self) -> None:
         """Si ya hay identifier no se crea nada nuevo."""

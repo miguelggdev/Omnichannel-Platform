@@ -24,7 +24,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from celery import shared_task
 from sqlalchemy import select
@@ -170,7 +170,17 @@ async def _resolve_contact(
     # Enmascarado, no el valor completo: display_name no esta cifrado y el CRM
     # lo busca con ILIKE (MEMORY.md, "el telefono queda en claro"). Solo dura
     # hasta que un agente le pone un nombre real al contacto.
-    contact = Contact(client_id=client_id, display_name=mask_identifier(identifier_value))
+    #
+    # Dos numeros que terminan igual darian el mismo texto y el agente no podria
+    # distinguir las dos conversaciones en la bandeja: se agrega un sufijo corto
+    # del id del contacto. El id se genera aqui y no en PostgreSQL para poder
+    # usarlo en el nombre sin un UPDATE extra (que ademas quedaria auditado).
+    contact_id = uuid4()
+    contact = Contact(
+        id=contact_id,
+        client_id=client_id,
+        display_name=f"{mask_identifier(identifier_value)} #{contact_id.hex[:4]}",
+    )
     session.add(contact)
     await session.flush()  # necesitamos contact.id para el identifier
 
