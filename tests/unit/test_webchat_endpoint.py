@@ -488,8 +488,30 @@ class TestLimitador:
 class TestCableado:
     """El router tiene que estar montado en la app real."""
 
-    def test_la_ruta_existe_en_create_app(self) -> None:
+    def test_la_ruta_esta_montada_en_create_app(self, entorno: None) -> None:
+        """Se comprueba conectandose, no leyendo `app.routes`.
+
+        Desde Starlette 1.6 `include_router()` ya no copia las rutas al router
+        de la app: las deja envueltas en un `_IncludedRouter` que se resuelve en
+        cada request, asi que recorrer `app.routes` no las ve (y el test pasaba
+        en local con Starlette 1.0 y fallaba en CI con la 1.6). Conectarse
+        prueba lo mismo y no depende de la version.
+
+        El cliente no se usa como context manager a proposito: asi no se ejecuta
+        el `lifespan`, que verifica la base de datos y Redis de verdad.
+        """
+        from starlette.websockets import WebSocketDisconnect
+
         from app.main import create_app
 
-        rutas = {getattr(ruta, "path", "") for ruta in create_app().routes}
-        assert "/api/v1/webchat/{channel_token}" in rutas
+        cliente = TestClient(create_app())
+
+        # Token de instalacion incorrecto: solo el handler de webchat cierra con
+        # 4001. Si la ruta no estuviera montada, el cierre no traeria ese codigo.
+        with (
+            pytest.raises(WebSocketDisconnect) as excinfo,
+            cliente.websocket_connect("/api/v1/webchat/token-que-no-es") as ws,
+        ):
+            ws.receive_json()
+
+        assert excinfo.value.code == webchat_module.CIERRE_TOKEN_INVALIDO
