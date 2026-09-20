@@ -22,6 +22,7 @@ TASK_MODULES = (
     "app.tasks.webhook_processor",
     "app.tasks.document_ingestion",
     "app.tasks.ai_processor",
+    "app.tasks.audio_transcription",
     "app.tasks.auto_close",
     "app.tasks.maintenance",
 )

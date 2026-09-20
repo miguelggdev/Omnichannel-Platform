@@ -467,7 +467,7 @@ Leyendo el log, no el checkmark. **Los 9 jobs en verde:**
 
 ### Pendiente — Dev B (matriz METHODOLOGY.md §Sprint 9)
 - [ ] `WebchatProvider` + `app/api/v1/webchat.py` (WebSocket) + `app/schemas/webchat.py`
-- [ ] Transcripción de audio con Whisper (`app/tasks/audio_transcription.py`)
+- [x] Transcripción de audio con Whisper (`app/tasks/audio_transcription.py`, `app/services/transcription.py`) — rama `feature/sprint-09-whisper`, ADR-056
 
 ### Lo que necesita saber Dev B (contratos que deja esta entrega)
 - **Audio de Telegram:** `NormalizedMessage.media_url` llega como `telegram-file:<file_id>` (no una URL). Para descargarlo: `TelegramProvider.file_id_de(media_url)` → `await TelegramProvider().get_file_url(file_id, {"bot_token": ...})`. **Esa URL lleva el token del bot: no la loguees ni la guardes.** El audio de WhatsApp (YCloud) sí trae URL directa.
@@ -495,7 +495,7 @@ Leyendo el log, no el checkmark. **Los 9 jobs en verde:**
 | 6 | LangGraph — Grafo de Agentes | ✅ Completado | Dev B (PR #13): 6 nodos, TokenBudgetGuard, `ai_processor`. Dev A (PR #14): `state.py`, `graph.py`, checkpointer con `AsyncPostgresSaver`, migración de tablas. 273 tests unitarios + 57 de integración, RLS/checkpointer verificados en CI real |
 | 7 | Agente de Agendamiento & CRM API | ✅ Completado | Dev B (PR #16): CRM API (contactos, conversaciones, etiquetas, notas), ciclo de vida, auto-cierre y endpoints de agent logs — 20 endpoints, 163 tests unitarios + 26 de integración. Dev A (PR #19): calendario, nodo de scheduling, `contact_unifier`, migraciones de `service_types`/`agent_action_log` y 8 bugs encontrados y corregidos en revisión posterior (BUG-017 a BUG-024) |
 | 8 | Observabilidad, Backup & Hardening | ✅ Completado | **Hito MVP.** Dev B ([PR #18](https://github.com/miguelggdev/Omnichannel-Platform/pull/18)): auditoría por trigger, RGPD, quick replies, backup/restore y el test e2e; BUG-025 cerrado con `auth_lookup_user()`. Dev A ([PR #22](https://github.com/miguelggdev/Omnichannel-Platform/pull/22)): OpenTelemetry, Loguru, métricas, 4 dashboards, 13 alertas y cifrado pgcrypto con índice ciego (teléfono enmascarado en `display_name`); BUG-026 y BUG-003 cerrados. El addendum de operaciones (4 features) sigue sin asignar en la matriz |
-| 9 | Canales Adicionales | 🔄 En progreso | Fase 2. **Dev A entregado** (rama `feature/sprint-09-telegram-email`): Telegram y Email sobre la ABC real, 160 tests unitarios y 12 de integración nuevos. **Falta Dev B:** Webchat (WebSocket) y Whisper. Sin resolver: unificación de contacto entre canales (criterio 5 del spec) |
+| 9 | Canales Adicionales | 🔄 En progreso | Fase 2. **Dev A entregado** (rama `feature/sprint-09-telegram-email`): Telegram y Email sobre la ABC real, 160 tests unitarios y 12 de integración nuevos. **Whisper entregado** (rama `feature/sprint-09-whisper`, ADR-056). **Falta Dev B:** Webchat (WebSocket). Sin resolver: unificación de contacto entre canales (criterio 5 del spec) |
 | 10 | Templates, Clonación & Sentimiento | ⬜ Pendiente | Fase 2 |
 | 11 | Webhooks Salientes & CSAT | ⬜ Pendiente | Fase 2 |
 | 12 | Agentes Financiero & Marketing | ⬜ Pendiente | Fase 2 |

@@ -502,6 +502,175 @@ class TestNoEncolaConversacionHumana:
         assert capturado["channel"] == "whatsapp"
 
 
+# ─── Audios: se transcriben antes de llegar a la IA ─────────────────────────
+
+
+class TestAudioEntrante:
+    """Un audio sin texto no le sirve al grafo: primero se transcribe.
+
+    La tarea de transcripcion es quien encola la IA cuando ya hay texto, asi que
+    aqui el mensaje de audio NO debe llegar a `_enqueue_ai_processing`.
+    """
+
+    async def _correr(
+        self, monkeypatch: pytest.MonkeyPatch, *, status: str = "bot_active", **campos: Any
+    ) -> tuple[dict[str, Any], dict[str, Any], FakeSession]:
+        client_id = uuid.uuid4()
+        monkeypatch.setattr(wp, "_resolve_client_id", lambda provider, channel: client_id)
+
+        conversacion = type(
+            "Conversation", (), {"id": uuid.uuid4(), "status": status, "last_message_at": None}
+        )()
+        session = FakeSession(results=[None, conversacion])
+
+        class FakeTenantSession:
+            async def __aenter__(self) -> FakeSession:
+                return session
+
+            async def __aexit__(self, *exc: Any) -> None:
+                return None
+
+        monkeypatch.setattr(wp, "tenant_session", lambda _client_id: FakeTenantSession())
+
+        async def sin_duplicado(*args: Any, **kwargs: Any) -> bool:
+            return False
+
+        async def persistido_ok(*args: Any, **kwargs: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(wp, "is_duplicate_persisted", sin_duplicado)
+        monkeypatch.setattr(wp, "persist_dedup", persistido_ok)
+
+        ia: dict[str, Any] = {}
+        transcripcion: dict[str, Any] = {}
+        monkeypatch.setattr(wp, "_enqueue_ai_processing", lambda **kw: ia.update(kw))
+        monkeypatch.setattr(wp, "_enqueue_transcription", lambda **kw: transcripcion.update(kw))
+
+        message_data = {
+            "external_message_id": "wa.audio.1",
+            "sender_identifier": "573001112233",
+            "channel": "whatsapp",
+            "media_type": "audio",
+            "media_url": "https://cdn.example.com/voz.ogg",
+            "timestamp": "2026-09-09T20:00:00+00:00",
+            "raw_payload": {},
+            **campos,
+        }
+        await wp._process_message("ycloud", "whatsapp", message_data)
+        return ia, transcripcion, session
+
+    async def test_un_audio_sin_texto_se_encola_para_transcribir_y_no_para_la_ia(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ia, transcripcion, _ = await self._correr(monkeypatch)
+
+        assert ia == {}
+        assert transcripcion["channel"] == "whatsapp"
+        assert transcripcion["message_data"]["media_url"] == "https://cdn.example.com/voz.ogg"
+
+    async def test_la_tarea_recibe_el_id_del_mensaje_persistido(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sin el id no hay donde guardar la transcripcion."""
+        _, transcripcion, session = await self._correr(monkeypatch)
+
+        mensajes = [o for o in session.added if o.__class__.__name__ == "Message"]
+        assert len(mensajes) == 1
+        assert transcripcion["message_id"] == mensajes[0].id
+
+    async def test_el_mensaje_de_audio_queda_guardado_con_su_media_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, _, session = await self._correr(monkeypatch)
+
+        mensaje = next(o for o in session.added if o.__class__.__name__ == "Message")
+        assert mensaje.message_type == "audio"
+        assert mensaje.media_url == "https://cdn.example.com/voz.ogg"
+
+    async def test_un_audio_con_texto_va_directo_a_la_ia(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Un pie de audio ya es texto: no hay nada que transcribir."""
+        ia, transcripcion, _ = await self._correr(monkeypatch, text="mira esto")
+
+        assert transcripcion == {}
+        assert ia["message_data"]["text"] == "mira esto"
+
+    async def test_una_imagen_no_se_transcribe(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ia, transcripcion, _ = await self._correr(monkeypatch, media_type="image")
+
+        assert transcripcion == {}
+        assert ia["channel"] == "whatsapp"
+
+    async def test_audio_sin_media_url_no_encola_nada(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ia, transcripcion, _ = await self._correr(monkeypatch, media_url=None)
+
+        assert ia == {}
+        assert transcripcion == {}
+
+    @pytest.mark.parametrize("status", ["human_active", "waiting_human"])
+    async def test_en_manos_de_un_humano_no_se_transcribe(
+        self, monkeypatch: pytest.MonkeyPatch, status: str
+    ) -> None:
+        """Ni se gasta Whisper ni se responde: lo escuchara la persona."""
+        ia, transcripcion, _ = await self._correr(monkeypatch, status=status)
+
+        assert ia == {}
+        assert transcripcion == {}
+
+
+class TestEncoladoDeTranscripcion:
+    """`_enqueue_transcription` serializa los ids y no propaga fallos del broker."""
+
+    def test_encola_con_ids_serializados(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.tasks import audio_transcription
+
+        capturado: dict[str, Any] = {}
+        monkeypatch.setattr(
+            audio_transcription.transcribe_audio_message,
+            "delay",
+            lambda **kw: capturado.update(kw),
+        )
+        ids = [uuid.uuid4() for _ in range(4)]
+
+        wp._enqueue_transcription(
+            client_id=ids[0],
+            conversation_id=ids[1],
+            contact_id=ids[2],
+            channel="telegram",
+            message_id=ids[3],
+            message_data={"media_url": "telegram-file:x"},
+        )
+
+        assert capturado == {
+            "client_id": str(ids[0]),
+            "conversation_id": str(ids[1]),
+            "contact_id": str(ids[2]),
+            "channel": "telegram",
+            "message_id": str(ids[3]),
+            "message_data": {"media_url": "telegram-file:x"},
+        }
+
+    def test_broker_caido_no_rompe_el_webhook(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.tasks import audio_transcription
+
+        def _sin_broker(**kwargs: Any) -> None:
+            raise ConnectionError("broker caido")
+
+        monkeypatch.setattr(audio_transcription.transcribe_audio_message, "delay", _sin_broker)
+
+        wp._enqueue_transcription(
+            client_id=uuid.uuid4(),
+            conversation_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
+            channel="whatsapp",
+            message_id=uuid.uuid4(),
+            message_data={},
+        )
+
+
 # ─── Tarea Celery: reintentos y DLQ ──────────────────────────────────────────
 
 

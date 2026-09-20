@@ -338,6 +338,20 @@
   - **`raw_payload` compacto** (`subject`, `message_id`, `in_reply_to`, `references`, `from`, `to`): acaba en `messages.metadata`, en la cola de Celery y en `audit_logs`; no el HTML ni el cuerpo.
 - **Consecuencia:** el secreto viaja en la URL de configuración del proveedor (no en los logs de acceso: va en la cabecera, no en el path). Adjuntos ignorados (son `UploadFile`, no serializables a Celery; guardarlos exige Storage y límites).
 
+### ADR-056: Los audios se transcriben en una tarea propia entre la persistencia y la IA, con la descarga tratada como entrada no confiable
+- **Fecha:** 2026-09-20
+- **Contexto:** el grafo solo lee `message["text"]`; un audio llegaba con `text=None` y el agente respondía sin haber escuchado nada. La URL del medio la entrega el proveedor (o quien falsifique un webhook): descargarla sin cuidado es un SSRF (`169.254.169.254`, red interna) y un vector de agotamiento de memoria/coste (audios enormes hacia Whisper, que se paga por minuto).
+- **Decisión:**
+  - **Tarea propia** `app.tasks.ai_transcribe_audio` (`app/tasks/audio_transcription.py`), enrutada a `ai_inference` por el prefijo `app.tasks.ai_`. `webhook_processor._process_message` la encola en vez de la IA cuando el mensaje es audio **sin texto** y con `media_url`; la tarea guarda el texto en `messages.content` (+ duración en `metadata.transcription`) y es ella quien encola `process_ai_response` con `message_data["text"]` puesto. No se transcribe en el webhook (<100 ms, regla 4) ni si un humano ya tiene la conversación (no se gasta Whisper, lo escuchará la persona).
+  - **Descarga defensiva** (`app/services/transcription.py`): solo `https`; todas las IPs a las que resuelve el host deben ser públicas (`ipaddress.is_global`); redirecciones seguidas a mano (máx. 3) y **revalidadas salto a salto**; tope `WHISPER_MAX_AUDIO_BYTES` (20 MB) contra `Content-Length` **y** mientras se lee el cuerpo (un servidor chunked no lo esquiva). Los mensajes de error nunca incluyen la URL (la de Telegram lleva el token del bot).
+  - **Telegram:** `media_url = telegram-file:<file_id>` se resuelve dentro de la tarea con `getFile` (`resolve_media_url`), no en el webhook (ADR-053).
+  - **Formato:** Whisper decide por la extensión del nombre; se infiere del `Content-Type` y, si no, de la ruta (Telegram sirve `octet-stream` con `.oga`). `audio/amr` u otros → error permanente.
+  - **Sin idioma forzado:** `WHISPER_LANGUAGE` vacío = autodetección (la plataforma atiende 6 idiomas).
+  - **Errores en dos clases:** `TranscriptionError` (transitorio: red, 5xx, 429, límite de tasa → reintenta 2 veces, 10 s) y `PermanentTranscriptionError` (demasiado grande, formato, sin voz, 4xx, credencial inválida → no reintenta). Ambos caminos terminan, agotados, en `_emergency_handoff` con motivo `transcription_failed`, **salvo** que un humano ya tenga la conversación: no se le pisa a `waiting_human`/`human_active`.
+  - **Idempotencia:** si un reintento encuentra `messages.content` ya escrito, no vuelve a llamar a Whisper.
+  - **Coste:** `record_tokens(..., operation="transcription", cost_usd=minutos * WHISPER_COST_PER_MINUTE_USD)`. No descuenta del presupuesto de tokens del tenant (Whisper no factura por tokens); queda solo como métrica.
+- **Consecuencia / límites conocidos:** la IP se valida al resolver y `httpx` resuelve de nuevo al conectar, así que un DNS-rebinding no queda cubierto (cerrarlo exige fijar la IP en el transporte). Solo se transcriben audios; el resto de medios (imagen, vídeo, documento) siguen sin pasar por ningún procesador.
+
 ---
 
 ## Bugs Conocidos y Pitfalls
