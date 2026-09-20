@@ -13,17 +13,17 @@ lo que queda escrito en la base con el contexto de tenant aplicado (SET LOCAL).
 """
 
 import uuid
-from collections.abc import AsyncGenerator
 from typing import Any
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import text
 
-from app.core.database import engine, tenant_session
+from app.core.database import tenant_session
 from app.tasks.webhook_processor import _process_message
 
-pytestmark = pytest.mark.db
+# `ia_encolada` no es autouse en el conftest (se aplicaria a toda la carpeta):
+# cada modulo que procesa webhooks la pide aqui.
+pytestmark = [pytest.mark.db, pytest.mark.usefixtures("ia_encolada")]
 
 
 # ─── Datos de entrada ────────────────────────────────────────────────────────
@@ -58,76 +58,7 @@ CASOS = [
 ]
 
 
-# ─── Fixtures ────────────────────────────────────────────────────────────────
-
-
-@pytest_asyncio.fixture
-async def webhook_tenant(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[uuid.UUID, None]:
-    """Crea un tenant commiteado y lo deja como DEFAULT_CLIENT_ID del worker.
-
-    El worker abre su propia conexion, asi que el cliente tiene que estar commiteado
-    y no puede vivir dentro de una transaccion que luego se revierte.
-    """
-    from app.core.config import get_settings
-
-    # app.core.database.engine es un singleton de modulo (una app real vive en
-    # un solo event loop). pytest-asyncio abre un loop nuevo por test por
-    # defecto, asi que cualquier conexion que el pool del engine haya abierto
-    # en el loop de un test anterior (ya cerrado) revienta con
-    # "attached to a different loop" al reusarse aqui. dispose() vacia el pool
-    # sin usar ninguna conexion existente; el proximo checkout crea una
-    # conexion nueva en el loop de ESTE test.
-    await engine.dispose()
-
-    client_id = uuid.uuid4()
-
-    # Con contexto de tenant: la politica RLS de `clients` exige
-    # `id = current_setting('app.current_client_id')::uuid` tambien en el WITH CHECK.
-    async with tenant_session(client_id) as session:
-        await session.execute(
-            text(
-                "INSERT INTO clients (id, name, slug, plan, is_active) "
-                "VALUES (:id, 'Tenant Webhook Flow', :slug, 'free', true)"
-            ),
-            {"id": str(client_id), "slug": f"webhook-flow-{client_id.hex[:8]}"},
-        )
-
-    monkeypatch.setattr(get_settings(), "DEFAULT_CLIENT_ID", str(client_id))
-
-    yield client_id
-
-    # Limpieza en orden inverso al de las FKs, tambien con contexto de tenant.
-    async with tenant_session(client_id) as session:
-        for tabla in (
-            "messages",
-            "conversations",
-            "contact_identifiers",
-            "contacts",
-            "webhook_dedup",
-        ):
-            await session.execute(
-                text(f"DELETE FROM {tabla} WHERE client_id = :cid"),  # noqa: S608
-                {"cid": str(client_id)},
-            )
-        await session.execute(text("DELETE FROM clients WHERE id = :cid"), {"cid": str(client_id)})
-
-
-@pytest.fixture(autouse=True)
-def ia_encolada(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Sustituye el `.delay()` del worker de IA: aqui se prueba la base, no el broker.
-
-    Desde Sprint 6 `_enqueue_ai_processing()` encola de verdad
-    (`app.tasks.ai_processor`). El job de integracion no levanta el broker de
-    Celery, asi que sin este doble cada test se colgaba reintentando conectarse
-    al result backend hasta agotar el limite. Lo que interesa verificar aqui es
-    que el mensaje llega a la cola con los ids serializados, no que Celery sepa
-    hablar con Redis.
-    """
-    from app.tasks.ai_processor import process_ai_response
-
-    encoladas: list[dict[str, Any]] = []
-    monkeypatch.setattr(process_ai_response, "delay", lambda **kw: encoladas.append(kw))
-    return encoladas
+# Las fixtures `webhook_tenant` e `ia_encolada` estan en `conftest.py`.
 
 
 async def _contar(client_id: uuid.UUID, tabla: str) -> int:
