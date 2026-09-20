@@ -305,7 +305,9 @@ class TestRespuestaEnElHilo:
                 return "<bot-1@empresa.com>"
 
         monkeypatch.setattr(
-            delivery_module, "get_channel_config", lambda canal: ("email", {"from_email": "a@b.c"})
+            delivery_module,
+            "get_channel_config",
+            lambda canal, client_id=None: ("email", {"from_email": "a@b.c"}),
         )
         monkeypatch.setattr(delivery_module, "get_messaging_provider", lambda n, c: ProviderFalso())
 

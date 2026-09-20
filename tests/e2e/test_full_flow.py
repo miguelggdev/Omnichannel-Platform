@@ -261,7 +261,7 @@ async def escenario(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[Escenario
     monkeypatch.setattr(
         delivery_module,
         "get_channel_config",
-        lambda channel: ("ycloud", {"api_key": "k", "phone_number_id": "1"}),
+        lambda channel, client_id=None: ("ycloud", {"api_key": "k", "phone_number_id": "1"}),
     )
     monkeypatch.setattr(
         delivery_module, "get_messaging_provider", lambda nombre, config: FakeProvider()
