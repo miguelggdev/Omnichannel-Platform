@@ -12,6 +12,7 @@ from app.services.messaging.base import MessagingProvider
 from app.services.messaging.email_provider import EmailProvider
 from app.services.messaging.meta import MetaProvider
 from app.services.messaging.telegram import TelegramProvider
+from app.services.messaging.webchat import WebchatProvider
 from app.services.messaging.ycloud import YCloudProvider
 
 _PROVIDERS: dict[str, type[MessagingProvider]] = {
@@ -19,7 +20,7 @@ _PROVIDERS: dict[str, type[MessagingProvider]] = {
     "meta": MetaProvider,  # Instagram DM + Facebook Messenger, diferenciados por config
     "telegram": TelegramProvider,  # Sprint 9
     "email": EmailProvider,  # Sprint 9
-    # Futuro (Sprint 9, Dev B): "webchat"
+    "webchat": WebchatProvider,  # Sprint 9 (WebSocket; no recibe webhooks HTTP)
 }
 
 
