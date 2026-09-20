@@ -305,6 +305,11 @@
          :clave, 'sha256'), 'hex');
      ```
   5. **Reversa**: `alembic downgrade 008_encrypt_contact_identifiers` (también necesita la clave) y volver a desplegar el código anterior, en el mismo orden parar/migrar/arrancar.
+  6. **Automatizado en `scripts/deploy_migration_009.sh`** (pasos 1, 2 y 4; el backup del paso 3 lo confirma un humano):
+     - Sin argumentos **solo comprueba** (entorno, clave ≥ 32 caracteres, revisión actual = 008) y no toca nada: conviene correrlo *antes* de la ventana.
+     - `--execute --backup-verificado` para API y workers, aplica `009`, corre `scripts/verify_migration_009.py` (0 filas desalineadas) y arranca. `--execute` se niega sin `--backup-verificado`.
+     - **Si la migración o la verificación fallan, los servicios se quedan parados** (arrancar la aplicación sobre hashes inconsistentes duplica un contacto por mensaje) y el script imprime la reversa. Si la base ya está en 009, solo verifica.
+     - Servicios y comando configurables (`SERVICIOS`, `COMPOSE`) si el despliegue no es el `docker-compose.yml` del repo. Los tests (`test_scripts_migracion_009.py`) usan `alembic`/`docker`/`python` falsos en el `PATH` y fijan ese orden y esas puertas; corren en Linux (CI).
 
 ### ADR-053: Telegram y email siguen el patrón real de canales (ABC de Sprint 4, credenciales por entorno), no el del spec
 - **Fecha:** 2026-09-20
