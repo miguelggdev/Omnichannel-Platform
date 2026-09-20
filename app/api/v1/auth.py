@@ -19,8 +19,11 @@ email exacto. Todo lo que viene después del login —incluida la escritura de
 con la RLS aplicándose con normalidad.
 """
 
+import asyncio
 import logging
+import secrets
 from datetime import datetime, timezone
+from functools import lru_cache
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -32,6 +35,7 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_jwt,
+    hash_password,
     verify_password,
 )
 from app.schemas.auth import LoginRequest, RefreshRequest, TokenResponse
@@ -47,6 +51,37 @@ _AUTH_LOOKUP = text(
 )
 
 _LAST_LOGIN = text("UPDATE users SET last_login_at = :ahora WHERE id = :user_id")
+
+
+@lru_cache(maxsize=1)
+def _hash_de_relleno() -> str:
+    """Hash bcrypt de un valor descartado, para igualar el tiempo del login.
+
+    Returns:
+        Un hash bcrypt con el mismo coste que los de los usuarios reales.
+    """
+    return hash_password(secrets.token_urlsafe(16))
+
+
+def _verificar_password(password: str, hash_guardado: str | None) -> bool:
+    """Verifica el password; sin usuario, gasta el mismo tiempo y devuelve False.
+
+    Si un email inexistente respondiera sin pasar por bcrypt (~100 ms) y uno
+    existente si, la diferencia de latencia permitiria enumerar los emails
+    registrados. Es sincrona a proposito: bcrypt es CPU y se ejecuta en un hilo
+    (`asyncio.to_thread`), no en el event loop (CLAUDE.md, regla 4).
+
+    Args:
+        password: Password recibido.
+        hash_guardado: Hash del usuario, o `None` si el email no existe.
+
+    Returns:
+        True solo si hay usuario y el password coincide.
+    """
+    if hash_guardado is None:
+        verify_password(password, _hash_de_relleno())
+        return False
+    return verify_password(password, hash_guardado)
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -73,14 +108,11 @@ async def login(credentials: LoginRequest) -> TokenResponse:
     async with AsyncSessionLocal() as session, session.begin():
         user = (await session.execute(_AUTH_LOOKUP, {"email": credentials.email})).one_or_none()
 
-    if user is None:
-        raise AppException(
-            status_code=401,
-            error_code=INVALID_TOKEN,
-            message="Credenciales inválidas",
-        )
-
-    if not verify_password(credentials.password, user.password_hash):
+    # bcrypt se ejecuta siempre, exista o no el usuario, y fuera del event loop.
+    password_ok = await asyncio.to_thread(
+        _verificar_password, credentials.password, None if user is None else user.password_hash
+    )
+    if user is None or not password_ok:
         raise AppException(
             status_code=401,
             error_code=INVALID_TOKEN,

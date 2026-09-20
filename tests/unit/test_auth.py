@@ -272,6 +272,60 @@ class TestLoginEndpoint:
         assert resp.status_code == 401
 
     @pytest.mark.asyncio
+    async def test_email_inexistente_tambien_pasa_por_bcrypt(self, client: AsyncClient) -> None:
+        """Sin usuario, el login gasta el mismo tiempo que con uno existente.
+
+        Si un email inexistente respondiera sin llamar a bcrypt (~100 ms) y uno
+        existente si, la diferencia de latencia permitiria enumerar los emails
+        registrados. Se verifica que `verify_password` se ejecuta igual.
+        """
+        llamadas: list[tuple[str, str]] = []
+
+        def _espia(plano: str, hash_: str) -> bool:
+            llamadas.append((plano, hash_))
+            return False
+
+        with _login_falso(None), patch("app.api.v1.auth.verify_password", _espia):
+            resp = await client.post(
+                "/api/v1/auth/login",
+                json={"email": "noexiste@test.com", "password": "Whatever12345"},
+            )
+
+        assert resp.status_code == 401
+        assert resp.json()["error_code"] == "INVALID_TOKEN"
+        assert len(llamadas) == 1
+        assert llamadas[0][0] == "Whatever12345"
+        assert llamadas[0][1].startswith("$2"), "debe verificarse contra un hash bcrypt real"
+
+    @pytest.mark.asyncio
+    async def test_bcrypt_corre_fuera_del_event_loop(self, client: AsyncClient) -> None:
+        """bcrypt es CPU (~100 ms): en el hilo del event loop congelaria la API.
+
+        CLAUDE.md, regla 4. Se compara el hilo donde corre `verify_password` con
+        el del event loop del test, que es el mismo que atiende la peticion.
+        """
+        import threading
+
+        hilos: list[int] = []
+
+        def _espia(plano: str, hash_: str) -> bool:
+            hilos.append(threading.get_ident())
+            return True
+
+        with (
+            _login_falso(_fila_auth(password="SecurePassword123")),
+            patch("app.api.v1.auth.verify_password", _espia),
+        ):
+            resp = await client.post(
+                "/api/v1/auth/login",
+                json={"email": "admin@tenant.com", "password": "SecurePassword123"},
+            )
+
+        assert resp.status_code == 200
+        assert hilos, "verify_password no se ejecuto"
+        assert threading.get_ident() not in hilos
+
+    @pytest.mark.asyncio
     async def test_login_usuario_desactivado(self, client: AsyncClient) -> None:
         """Un usuario dado de baja no entra, aunque el password sea correcto."""
         with _login_falso(_fila_auth(is_active=False)):
