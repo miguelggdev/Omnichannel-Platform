@@ -352,6 +352,23 @@
   - **Coste:** `record_tokens(..., operation="transcription", cost_usd=minutos * WHISPER_COST_PER_MINUTE_USD)`. No descuenta del presupuesto de tokens del tenant (Whisper no factura por tokens); queda solo como métrica.
 - **Consecuencia / límites conocidos:** la IP se valida al resolver y `httpx` resuelve de nuevo al conectar, así que un DNS-rebinding no queda cubierto (cerrarlo exige fijar la IP en el transporte). Solo se transcriben audios; el resto de medios (imagen, vídeo, documento) siguen sin pasar por ningún procesador.
 
+### ADR-057: Unificación automática de contactos solo por teléfono verificado por el canal y coincidencia inequívoca
+- **Fecha:** 2026-09-20
+- **Contexto:** la misma persona escribe por varios canales y el agente la trata como desconocidos distintos (criterio 5 del spec). Pero unir dos contactos que no son la misma persona es **peor** que no unirlos: mezcla conversaciones, notas y etiquetas de gente distinta, y si cruza tenants es una fuga de datos. Requisito del usuario: no unir automáticamente salvo coincidencia inequívoca, sin mezclar información entre usuarios ni entre tenants.
+- **Decisión:** `app/services/phone_unification.py`, invocado desde `webhook_processor._process_message` (en un **savepoint**: un fallo se registra y el mensaje sigue). Se une **solo si se cumplen todas**:
+  1. **Teléfono verificado por el propio canal.** WhatsApp: el remitente. Telegram: solo el contacto que el usuario comparte *de sí mismo* (`contact.user_id == from.id`, `user_id` entero —`True == 1` no cuenta—, sin reenvío); el provider lo entrega en `NormalizedMessage.verified_phone`. Instagram, Facebook y email **nunca** unen (aunque un payload trajera el campo); un id de Telegram con forma de teléfono tampoco.
+  2. **Mismo tenant.** Consultas con `client_id` explícito + RLS, y el índice ciego lleva el tenant en el HMAC (ADR-052): el mismo número en dos tenants da hashes distintos.
+  3. **Exactamente un otro contacto** conoce el teléfono. Con dos o más (p. ej. un duplicado previo `+57…`/`57…`) → `AMBIGUO`, no se une, revisión manual.
+  4. **Sin teléfonos contradictorios** en ninguno de los dos (otro número ⇒ no es seguro que sean la misma persona).
+  5. **Sin canales solapados** (dos cuentas de Telegram, etc.).
+  6. **Ninguno borrado por GDPR.**
+  Lo demás sigue siendo fusión manual (`ContactUnifier`, endpoint de merge).
+- **Registro del teléfono:** el verificado por un canal que no es WhatsApp se guarda como identificador de canal `verified_phone` (cifrado + índice ciego, como el resto; **no** es un canal de envío y `get_channel_config("verified_phone")` falla), para que un WhatsApp posterior encuentre al contacto de Telegram. Sin migración: `contact_identifiers.channel` es `String(50)` sin CHECK. Se evitó el nombre `phone` porque `ChannelEnum.phone` es un canal de mensajería (voz).
+- **Cuándo se evalúa:** WhatsApp solo al **crear** el contacto (una consulta por mensaje no aporta: si el teléfono se registra después por otro canal, ese canal hace la unión); Telegram en cada mensaje con `verified_phone`.
+- **Superviviente:** el contacto más antiguo (desempate por id, determinista). Deja `metadata.unifications` con el id absorbido y el motivo, sin datos personales.
+- **Concurrencia:** `pg_advisory_xact_lock` por (tenant, hash del teléfono) al empezar: dos tareas de la misma persona por dos canales no pueden fusionarse en sentidos opuestos y dejar un ciclo de `merged_into_id`.
+- **Consecuencia / límites:** un número de teléfono reasignado a otra persona sigue siendo "el mismo teléfono" (riesgo aceptado, inherente a identificar por número); los formatos no E.164 (sin código de país) no se unifican. El bot aún no ofrece un botón `request_contact` de Telegram para pedir el número: hoy la unión ocurre cuando el usuario lo comparte por su cuenta (siguiente paso natural). El texto del contacto compartido (con el número) sigue guardándose en `messages.content`/`metadata` sin cifrar (preexistente).
+
 ---
 
 ## Bugs Conocidos y Pitfalls
