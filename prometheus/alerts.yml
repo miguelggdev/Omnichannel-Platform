@@ -122,7 +122,7 @@ groups:
 
       - alert: TareasFallando
         expr: >-
-          sum by (task) (rate(celery_tasks_total{state="FAILURE"}[15m])) > 0.1
+          sum by (task) (rate(celery_tasks_total{state=~"FAILURE|DLQ"}[15m])) > 0.1
         for: 15m
         labels:
           severity: warning

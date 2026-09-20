@@ -217,7 +217,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (task) (rate(celery_tasks_total{state=\"FAILURE\"}[5m])) * 60",
+          "expr": "sum by (task) (rate(celery_tasks_total{state=~\"FAILURE|DLQ\"}[5m])) * 60",
           "refId": "A",
           "range": true,
           "legendFormat": "{{task}}"
