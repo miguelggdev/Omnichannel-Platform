@@ -14,6 +14,27 @@ from typing import Any
 from app.schemas.message import NormalizedMessage
 
 
+class IgnoredWebhookError(ValueError):
+    """El webhook es valido pero no se debe procesar.
+
+    Un mensaje de un grupo de Telegram, una autorespuesta, un rebote, un sticker.
+    No es un error del proveedor ni un payload roto: el endpoint responde 200
+    (para que el proveedor no reintente) y lo registra sin traceback, porque son
+    casos habituales. Es un `ValueError` para que quien ya atrapaba ese tipo siga
+    funcionando.
+    """
+
+
+class TemplateNotSupportedError(NotImplementedError):
+    """El canal no tiene el concepto de template preaprobado.
+
+    Solo WhatsApp (HSM) y Facebook (button template) lo tienen. Los demas
+    canales implementan `send_template()` para cumplir la ABC y lanzan esto, en
+    vez de fingir un envio: quien lo llame tiene que saber que el canal no lo
+    soporta.
+    """
+
+
 @dataclass
 class ChannelConstraints:
     """Restricciones del canal de mensajeria.
@@ -47,6 +68,9 @@ class MessageContent:
         media_type: Tipo de media (image, audio, video, document).
         buttons: Botones/quick replies, como lista de dicts con `title`/`id`.
         caption: Texto que acompana a un media_url.
+        metadata: Datos propios del canal que no son texto ni media. Hoy solo los
+            usa email, para responder dentro del mismo hilo (`subject`,
+            `in_reply_to`, `references`). Los demas canales lo ignoran.
     """
 
     text: str | None = None
@@ -54,6 +78,7 @@ class MessageContent:
     media_type: str | None = None
     buttons: list[dict[str, Any]] | None = None
     caption: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass

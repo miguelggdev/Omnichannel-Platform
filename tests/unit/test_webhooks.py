@@ -8,7 +8,7 @@ tests del POST reemplazan `_resolve_provider` en lugar de instanciar un provider
 """
 
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -213,7 +213,7 @@ class TestWebhookErrores:
         self, api_client: Any, patched_webhook: FakeTask
     ) -> None:
         """Un provider no registrado responde 400 (no 404 ni 500)."""
-        response = await api_client.post("/api/v1/webhooks/telegram/telegram", json={})
+        response = await api_client.post("/api/v1/webhooks/linkedin/linkedin", json={})
 
         assert response.status_code == 400
         assert response.json()["error_code"] == webhooks_module.UNSUPPORTED_PROVIDER
@@ -248,6 +248,297 @@ class TestWebhookErrores:
         assert response.status_code == 503
         assert response.json()["error_code"] == webhooks_module.QUEUE_UNAVAILABLE
         assert fake_redis.store == {}, "la marca debe liberarse o el mensaje se pierde 24h"
+
+
+# ─── POST: Telegram, con el provider real ────────────────────────────────────
+
+
+class TestWebhookTelegram:
+    """El recorrido completo del endpoint con `TelegramProvider` (sin sustituirlo)."""
+
+    URL = "/api/v1/webhooks/telegram/telegram"
+    SECRETO = "secreto-de-prueba_123"
+    UPDATE: ClassVar[dict[str, Any]] = {
+        "update_id": 4242,
+        "message": {
+            "message_id": 7,
+            "from": {"id": 789, "is_bot": False, "first_name": "Ada"},
+            "chat": {"id": 789, "type": "private"},
+            "date": 1_700_000_000,
+            "text": "Hola",
+        },
+    }
+
+    @pytest.fixture(autouse=True)
+    def _secreto(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Configura `TELEGRAM_WEBHOOK_SECRET` sin tocar el `.env`."""
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "TELEGRAM_WEBHOOK_SECRET", self.SECRETO)
+
+    async def test_update_valido_se_encola(
+        self, api_client: Any, patched_webhook: FakeTask
+    ) -> None:
+        """Con el secret_token correcto, el mensaje llega a Celery ya normalizado."""
+        response = await api_client.post(
+            self.URL,
+            json=self.UPDATE,
+            headers={"X-Telegram-Bot-Api-Secret-Token": self.SECRETO},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "queued"}
+        (llamada,) = patched_webhook.calls
+        assert llamada["provider"] == "telegram"
+        mensaje = llamada["normalized_message"]
+        assert mensaje["channel"] == "telegram"
+        assert mensaje["sender_identifier"] == "789"
+        assert mensaje["sender_name"] == "Ada"
+        assert mensaje["external_message_id"] == "4242"
+        assert mensaje["text"] == "Hola"
+
+    @pytest.mark.parametrize("cabecera", [None, "", "otro-secreto"])
+    async def test_sin_secret_token_correcto_es_401(
+        self, api_client: Any, patched_webhook: FakeTask, cabecera: str | None
+    ) -> None:
+        """Sin el secret_token cualquiera podria inyectar mensajes al bot."""
+        headers = {} if cabecera is None else {"X-Telegram-Bot-Api-Secret-Token": cabecera}
+
+        response = await api_client.post(self.URL, json=self.UPDATE, headers=headers)
+
+        assert response.status_code == 401
+        assert response.json()["error_code"] == webhooks_module.INVALID_SIGNATURE
+        assert patched_webhook.calls == []
+
+    async def test_secreto_sin_configurar_rechaza_todo(
+        self, api_client: Any, patched_webhook: FakeTask, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Con `TELEGRAM_WEBHOOK_SECRET` vacio, el endpoint no queda abierto."""
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "TELEGRAM_WEBHOOK_SECRET", "")
+
+        response = await api_client.post(
+            self.URL, json=self.UPDATE, headers={"X-Telegram-Bot-Api-Secret-Token": ""}
+        )
+
+        assert response.status_code == 401
+        assert patched_webhook.calls == []
+
+    async def test_update_de_grupo_responde_200_y_no_se_encola(
+        self, api_client: Any, patched_webhook: FakeTask
+    ) -> None:
+        """Telegram reintenta lo que no recibe con 200: un grupo no debe provocar reintentos."""
+        update = {
+            **self.UPDATE,
+            "message": {**self.UPDATE["message"], "chat": {"id": -1, "type": "group"}},
+        }
+
+        response = await api_client.post(
+            self.URL, json=update, headers={"X-Telegram-Bot-Api-Secret-Token": self.SECRETO}
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "ignored"}
+        assert patched_webhook.calls == []
+
+    async def test_el_mismo_update_dos_veces_se_encola_una_sola(
+        self, api_client: Any, patched_webhook: FakeTask
+    ) -> None:
+        """Telegram reenvia un update si tarda en recibir el 200."""
+        headers = {"X-Telegram-Bot-Api-Secret-Token": self.SECRETO}
+
+        await api_client.post(self.URL, json=self.UPDATE, headers=headers)
+        segunda = await api_client.post(self.URL, json=self.UPDATE, headers=headers)
+
+        assert segunda.json() == {"status": "duplicate"}
+        assert len(patched_webhook.calls) == 1
+
+
+# ─── POST: Email (Inbound Parse), con el provider real ───────────────────────
+
+
+def _basic(secreto: str) -> dict[str, str]:
+    """Cabecera `Authorization: Basic` para `usuario:password`."""
+    import base64
+
+    return {"Authorization": "Basic " + base64.b64encode(secreto.encode()).decode()}
+
+
+class TestWebhookEmail:
+    """El Inbound Parse llega como formulario, no como JSON, y no va firmado."""
+
+    URL = "/api/v1/webhooks/email/email"
+    SECRETO = "hook:una-password-larga-123"
+    CAMPOS: ClassVar[dict[str, str]] = {
+        "from": "Juan Perez <juan@example.com>",
+        "to": "soporte@empresa.com",
+        "subject": "Consulta de precios",
+        "text": "Hola, quiero saber el precio del plan Pro.",
+        "headers": "Message-ID: <abc123@mail.example.com>\nDate: Mon, 14 Nov 2023 22:13:20 +0000\n",
+    }
+
+    @pytest.fixture(autouse=True)
+    def _ajustes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Configura secreto y direccion propia sin tocar el `.env`."""
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "EMAIL_INBOUND_WEBHOOK_SECRET", self.SECRETO)
+        monkeypatch.setattr(get_settings(), "EMAIL_FROM_ADDRESS", "soporte@empresa.com")
+
+    async def test_formulario_urlencoded_se_encola(
+        self, api_client: Any, patched_webhook: FakeTask
+    ) -> None:
+        """Con las credenciales de la URL, el email llega a Celery ya normalizado."""
+        response = await api_client.post(self.URL, data=self.CAMPOS, headers=_basic(self.SECRETO))
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "queued"}
+        (llamada,) = patched_webhook.calls
+        assert llamada["provider"] == "email"
+        mensaje = llamada["normalized_message"]
+        assert mensaje["channel"] == "email"
+        assert mensaje["sender_identifier"] == "juan@example.com"
+        assert mensaje["sender_name"] == "Juan Perez"
+        assert mensaje["external_message_id"] == "<abc123@mail.example.com>"
+        assert mensaje["text"].startswith("Asunto: Consulta de precios")
+
+    async def test_multipart_con_adjunto_no_rompe_la_serializacion(
+        self, api_client: Any, patched_webhook: FakeTask
+    ) -> None:
+        """SendGrid manda `multipart/form-data` y los adjuntos son archivos.
+
+        Un `UploadFile` en el payload no se serializa a Celery: solo se conservan
+        los campos de texto.
+        """
+        import json
+
+        campos = {clave: (None, valor) for clave, valor in self.CAMPOS.items()}
+        campos["attachment1"] = ("factura.pdf", b"%PDF-1.4 contenido", "application/pdf")
+
+        response = await api_client.post(self.URL, files=campos, headers=_basic(self.SECRETO))
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "queued"}
+        (llamada,) = patched_webhook.calls
+        json.dumps(llamada["normalized_message"])  # revienta si quedo un UploadFile
+        assert "factura" not in json.dumps(llamada["normalized_message"])
+
+    async def test_el_provider_recibe_solo_campos_de_texto(
+        self, api_client: Any, monkeypatch: pytest.MonkeyPatch, patched_webhook: FakeTask
+    ) -> None:
+        """Los adjuntos (`UploadFile`) no llegan a `parse_webhook`.
+
+        Cualquier provider que guarde `raw_payload` tal cual lo mandaria a
+        Celery, que no sabe serializarlos. `EmailProvider` los ignora por su
+        cuenta, asi que hace falta mirar lo que el endpoint le entrega.
+        """
+        recibido: list[dict[str, Any]] = []
+
+        class EspiaProvider(FakeProvider):
+            async def parse_webhook(self, raw_payload: dict[str, Any]) -> FakeNormalized:
+                recibido.append(raw_payload)
+                return self.normalized
+
+        _use_provider(monkeypatch, EspiaProvider())
+        campos = {clave: (None, valor) for clave, valor in self.CAMPOS.items()}
+        campos["attachment1"] = ("factura.pdf", b"%PDF-1.4 contenido", "application/pdf")
+
+        response = await api_client.post(self.URL, files=campos, headers=_basic(self.SECRETO))
+
+        assert response.status_code == 200
+        assert set(recibido[0]) == set(self.CAMPOS)
+        assert all(isinstance(valor, str) for valor in recibido[0].values())
+
+    @pytest.mark.parametrize("cabeceras", [{}, _basic("hook:otra-password"), _basic(":")])
+    async def test_sin_credenciales_correctas_es_401(
+        self, api_client: Any, patched_webhook: FakeTask, cabeceras: dict[str, str]
+    ) -> None:
+        """El Inbound Parse no va firmado: sin Basic auth cualquiera inyectaria emails."""
+        response = await api_client.post(self.URL, data=self.CAMPOS, headers=cabeceras)
+
+        assert response.status_code == 401
+        assert response.json()["error_code"] == webhooks_module.INVALID_SIGNATURE
+        assert patched_webhook.calls == []
+
+    async def test_secreto_sin_configurar_rechaza_todo(
+        self, api_client: Any, patched_webhook: FakeTask, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Con `EMAIL_INBOUND_WEBHOOK_SECRET` vacio, el endpoint no queda abierto."""
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "EMAIL_INBOUND_WEBHOOK_SECRET", "")
+
+        response = await api_client.post(self.URL, data=self.CAMPOS, headers=_basic(":"))
+
+        assert response.status_code == 401
+        assert patched_webhook.calls == []
+
+    async def test_una_autorespuesta_responde_200_y_no_se_encola(
+        self, api_client: Any, patched_webhook: FakeTask
+    ) -> None:
+        """Contestar a un autorespondedor es un bucle infinito."""
+        campos = {
+            **self.CAMPOS,
+            "headers": self.CAMPOS["headers"] + "Auto-Submitted: auto-replied\n",
+        }
+
+        response = await api_client.post(self.URL, data=campos, headers=_basic(self.SECRETO))
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "ignored"}
+        assert patched_webhook.calls == []
+
+    async def test_el_mismo_email_dos_veces_se_encola_una_sola(
+        self, api_client: Any, patched_webhook: FakeTask
+    ) -> None:
+        """SendGrid y Mailgun reentregan si tardan en recibir el 200."""
+        cabeceras = _basic(self.SECRETO)
+
+        await api_client.post(self.URL, data=self.CAMPOS, headers=cabeceras)
+        segunda = await api_client.post(self.URL, data=self.CAMPOS, headers=cabeceras)
+
+        assert segunda.json() == {"status": "duplicate"}
+        assert len(patched_webhook.calls) == 1
+
+    async def test_un_cuerpo_que_declara_mas_del_tope_es_413_sin_leerlo(
+        self, api_client: Any, patched_webhook: FakeTask
+    ) -> None:
+        """El endpoint lee el cuerpo entero *antes* de autenticar.
+
+        Sin tope, cualquiera podria hacerlo cargar cientos de MB en memoria.
+        """
+        cabeceras = {
+            **_basic(self.SECRETO),
+            "content-length": str(webhooks_module.MAX_WEBHOOK_BODY_BYTES + 1),
+        }
+
+        response = await api_client.post(self.URL, data=self.CAMPOS, headers=cabeceras)
+
+        assert response.status_code == 413
+        assert response.json()["error_code"] == webhooks_module.PAYLOAD_TOO_LARGE
+        assert patched_webhook.calls == []
+
+    async def test_json_sigue_funcionando_para_los_demas_proveedores(
+        self, api_client: Any, monkeypatch: pytest.MonkeyPatch, patched_webhook: FakeTask
+    ) -> None:
+        """La lectura por tipo de contenido no cambia lo que ya funcionaba."""
+        _use_provider(monkeypatch, FakeProvider())
+
+        response = await api_client.post(WEBHOOK_URL, json={"object": "instagram"})
+
+        assert response.json() == {"status": "queued"}
+
+    async def test_un_json_que_no_es_un_objeto_es_parse_error(
+        self, api_client: Any, monkeypatch: pytest.MonkeyPatch, patched_webhook: FakeTask
+    ) -> None:
+        """Una lista o un numero no son un payload: 200 sin reintento, no un 500."""
+        _use_provider(monkeypatch, FakeProvider())
+
+        response = await api_client.post(WEBHOOK_URL, json=[1, 2, 3])
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "parse_error"}
 
 
 # ─── GET: verificacion de la URL del webhook ─────────────────────────────────

@@ -129,6 +129,7 @@ async def _resolve_contact(
     client_id: UUID,
     channel: str,
     identifier_value: str,
+    sender_name: str | None = None,
 ) -> Contact:
     """Busca el contacto por (canal, identifier) o lo crea.
 
@@ -140,6 +141,9 @@ async def _resolve_contact(
         client_id: Tenant propietario.
         channel: Canal del identificador.
         identifier_value: Telefono, PSID o username segun el canal.
+        sender_name: Nombre que el remitente publica en su perfil (Telegram, la
+            cabecera `From` de un email), si el canal lo trae. Solo se usa al
+            **crear** el contacto, como `display_name`.
 
     Returns:
         Contacto existente o recien creado.
@@ -175,11 +179,16 @@ async def _resolve_contact(
     # distinguir las dos conversaciones en la bandeja: se agrega un sufijo corto
     # del id del contacto. El id se genera aqui y no en PostgreSQL para poder
     # usarlo en el nombre sin un UPDATE extra (que ademas quedaria auditado).
+    #
+    # Si el canal trae el nombre publico del remitente se usa ese: un email o un
+    # id de Telegram enmascarados no le dicen nada al agente. Es el nombre que la
+    # propia persona eligio mostrar, no el identificador.
     contact_id = uuid4()
+    nombre = (sender_name or "").strip()[:200]
     contact = Contact(
         id=contact_id,
         client_id=client_id,
-        display_name=f"{mask_identifier(identifier_value)} #{contact_id.hex[:4]}",
+        display_name=nombre or f"{mask_identifier(identifier_value)} #{contact_id.hex[:4]}",
     )
     session.add(contact)
     await session.flush()  # necesitamos contact.id para el identifier
@@ -294,7 +303,9 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
             logger.info("Mensaje ya procesado (webhook_dedup): %s", external_id)
             return
 
-        contact = await _resolve_contact(session, client_id, message_channel, sender_identifier)
+        contact = await _resolve_contact(
+            session, client_id, message_channel, sender_identifier, normalized.sender_name
+        )
         conversation = await _resolve_conversation(session, client_id, contact.id, message_channel)
 
         session.add(

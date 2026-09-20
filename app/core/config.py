@@ -77,6 +77,32 @@ class Settings(BaseSettings):
     META_WEBHOOK_VERIFY_TOKEN: str = ""
     META_GRAPH_API_VERSION: str = "v19.0"
 
+    # Telegram como canal de clientes (Bot API) — Sprint 9. Es un bot distinto
+    # del de super admin (Sprint 8). Como YCloud/Meta, las credenciales son
+    # globales hasta que exista la tabla `channel_configs` (Fase 2).
+    TELEGRAM_CHANNEL_BOT_TOKEN: str = ""
+    # `secret_token` que se registra en `setWebhook`; Telegram lo devuelve en el
+    # header `X-Telegram-Bot-Api-Secret-Token` de cada update.
+    TELEGRAM_WEBHOOK_SECRET: str = ""
+    TELEGRAM_API_BASE_URL: str = "https://api.telegram.org"
+
+    # Email como canal de clientes — Sprint 9. Salida por SMTP; entrada por el
+    # Inbound Parse de SendGrid o Mailgun (POST /api/v1/webhooks/email/email).
+    # Globales, como el resto de canales, hasta que exista `channel_configs`.
+    EMAIL_SMTP_HOST: str = ""
+    # 587 = STARTTLS, 465 = TLS implicito (el modo se deduce del puerto).
+    EMAIL_SMTP_PORT: int = 587
+    EMAIL_SMTP_USER: str = ""
+    EMAIL_SMTP_PASSWORD: str = ""
+    # Direccion desde la que responde el bot; tambien sirve para no procesar los
+    # mensajes que salgan de ella (un bucle contra si mismo).
+    EMAIL_FROM_ADDRESS: str = ""
+    EMAIL_FROM_NAME: str = "Soporte"
+    # "usuario:password" que se pone en la URL del Inbound Parse
+    # (https://usuario:password@host/...): ni SendGrid ni Mailgun firman ese
+    # webhook, pero los dos envian la cabecera Authorization: Basic.
+    EMAIL_INBOUND_WEBHOOK_SECRET: str = ""
+
     # Google Calendar (Sprint 7) — un service account global (no OAuth2 por
     # tenant): cada tenant comparte su calendario con el email del service
     # account y guarda su calendar_id en agent_configs.config.scheduling.

@@ -34,6 +34,7 @@ Decisiones que se apartan del spec (§1):
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from opentelemetry import trace
@@ -126,6 +127,60 @@ def _ensure_provider() -> TracerProvider:
     return provider
 
 
+# El token de un bot de Telegram va en el path (`/bot<id>:<token>/metodo`): la Bot
+# API no ofrece otra forma de autenticarse.
+_TOKEN_TELEGRAM_EN_PATH = re.compile(r"(/bot)\d+:[A-Za-z0-9_-]+")
+# Credenciales que algunos proveedores piden como query param (Meta Graph API:
+# `access_token`).
+_PARAM_SENSIBLE = re.compile(
+    r"([?&](?:access_token|token|api_key|key|secret|client_secret)=)[^&#]*", re.IGNORECASE
+)
+
+
+def redactar_url(url: str) -> str:
+    """Quita de una URL las credenciales que viajan en el path o en la query.
+
+    La instrumentacion de httpx guarda la URL completa en `http.url` y
+    `url.full` de cada span, y los spans acaban en Jaeger. Sin esto, el token
+    del bot de Telegram (path) y el `access_token` de Meta (query) quedarian en
+    la traza de cada mensaje enviado.
+
+    Args:
+        url: URL de la peticion saliente.
+
+    Returns:
+        La misma URL con esas credenciales reemplazadas por `***`.
+    """
+    return _PARAM_SENSIBLE.sub(r"\g<1>***", _TOKEN_TELEGRAM_EN_PATH.sub(r"\g<1>***", url))
+
+
+def _redactar_span_httpx(span: Any, request: Any) -> None:
+    """`request_hook` de httpx: sobreescribe en el span la URL ya redactada.
+
+    Args:
+        span: Span de la peticion saliente.
+        request: `RequestInfo` (method, url, headers, stream, extensions) o
+            `httpx.Request`, segun la version del instrumentador.
+    """
+    if not span.is_recording():
+        return
+    url = str(request.url if hasattr(request, "url") else request[1])
+    limpia = redactar_url(url)
+    if limpia != url:
+        span.set_attribute("http.url", limpia)
+        span.set_attribute("url.full", limpia)
+
+
+async def _redactar_span_httpx_async(span: Any, request: Any) -> None:
+    """Version async de `_redactar_span_httpx`, para `httpx.AsyncClient`.
+
+    Args:
+        span: Span de la peticion saliente.
+        request: Peticion, como en la version sincrona.
+    """
+    _redactar_span_httpx(span, request)
+
+
 def _instrumentadores_opcionales() -> list[tuple[str, Any]]:
     """Instrumentaciones que dependen de paquetes opcionales.
 
@@ -189,8 +244,14 @@ def setup_telemetry(
     for nombre, instrumentador in _instrumentadores_opcionales():
         if nombre in _instrumented:
             continue
+        opciones: dict[str, Any] = {}
+        if nombre == "httpx":
+            opciones = {
+                "request_hook": _redactar_span_httpx,
+                "async_request_hook": _redactar_span_httpx_async,
+            }
         try:
-            instrumentador().instrument(tracer_provider=provider)
+            instrumentador().instrument(tracer_provider=provider, **opciones)
         except Exception as exc:  # pragma: no cover — depende del entorno
             logger.warning("No se pudo instrumentar %s: %s", nombre, exc)
         else:

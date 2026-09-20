@@ -29,6 +29,7 @@ from starlette.concurrency import run_in_threadpool
 from app.core.config import get_settings
 from app.core.exceptions import AppException
 from app.services.dedup import mark_if_new, release_mark
+from app.services.messaging.base import IgnoredWebhookError
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +40,22 @@ INVALID_SIGNATURE = "INVALID_WEBHOOK_SIGNATURE"
 UNSUPPORTED_PROVIDER = "UNSUPPORTED_PROVIDER"
 VERIFICATION_FAILED = "WEBHOOK_VERIFICATION_FAILED"
 QUEUE_UNAVAILABLE = "QUEUE_UNAVAILABLE"
+PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
+
+# Tope del cuerpo de un webhook. El endpoint lee el cuerpo entero *antes* de
+# autenticar (el HMAC lo necesita), asi que sin tope cualquiera puede hacerlo
+# cargar cientos de MB en memoria. Los de YCloud, Meta y Telegram son de pocos
+# KB; el Inbound Parse de email puede traer adjuntos (SendGrid admite 30 MB).
+MAX_WEBHOOK_BODY_BYTES = 32 * 1024 * 1024
 
 # Header que transporta la firma HMAC-SHA256 de cada proveedor.
 SIGNATURE_HEADERS: dict[str, str] = {
     "meta": "x-hub-signature-256",
     "ycloud": "X-Ycloud-Signature",
+    # No es una firma: Telegram devuelve tal cual el `secret_token` de setWebhook.
+    "telegram": "X-Telegram-Bot-Api-Secret-Token",
+    # Basic auth puesta en la URL del Inbound Parse (no va firmado).
+    "email": "Authorization",
 }
 
 
@@ -95,7 +107,38 @@ def _webhook_secret(provider: str) -> str:
     settings = get_settings()
     if provider == "meta":
         return settings.META_APP_SECRET
+    if provider == "telegram":
+        return settings.TELEGRAM_WEBHOOK_SECRET
+    if provider == "email":
+        return settings.EMAIL_INBOUND_WEBHOOK_SECRET
     return settings.YCLOUD_WEBHOOK_SECRET
+
+
+async def _leer_payload(request: Request, raw_body: bytes) -> dict[str, Any]:
+    """Deserializa el cuerpo segun su tipo de contenido.
+
+    YCloud, Meta y Telegram mandan JSON; el Inbound Parse de email (SendGrid,
+    Mailgun) manda un formulario `multipart/form-data`. Solo se conservan los
+    campos de texto: los adjuntos son `UploadFile`, que no se serializan a Celery.
+
+    Args:
+        request: Peticion (el cuerpo ya esta cacheado en `raw_body`).
+        raw_body: Cuerpo crudo.
+
+    Returns:
+        Los campos como diccionario.
+
+    Raises:
+        ValueError: Si un cuerpo JSON no es un objeto valido.
+    """
+    tipo = request.headers.get("content-type", "").lower()
+    if tipo.startswith(("multipart/form-data", "application/x-www-form-urlencoded")):
+        formulario = await request.form()
+        return {clave: valor for clave, valor in formulario.items() if isinstance(valor, str)}
+    datos = json.loads(raw_body)
+    if not isinstance(datos, dict):
+        raise ValueError("El cuerpo del webhook no es un objeto JSON")
+    return datos
 
 
 @router.post("/{provider}/{channel}")
@@ -117,6 +160,14 @@ async def receive_webhook(provider: str, channel: str, request: Request) -> JSON
         AppException: 400 provider desconocido, 401 firma invalida,
             503 si no se pudo encolar (para que el proveedor reintente).
     """
+    declarado = request.headers.get("content-length", "")
+    if declarado.isdigit() and int(declarado) > MAX_WEBHOOK_BODY_BYTES:
+        raise AppException(
+            status_code=413,
+            error_code=PAYLOAD_TOO_LARGE,
+            message="El cuerpo del webhook supera el tamano maximo",
+        )
+
     raw_body = await request.body()
 
     messaging_provider = _resolve_provider(provider, {"channel": channel})
@@ -137,8 +188,13 @@ async def receive_webhook(provider: str, channel: str, request: Request) -> JSON
     # Un payload que no se puede parsear devuelve 200: si respondieramos 4xx/5xx el
     # proveedor reintentaria indefinidamente un mensaje que nunca va a poder procesarse.
     try:
-        payload = json.loads(raw_body)
+        payload = await _leer_payload(request, raw_body)
         normalized = await messaging_provider.parse_webhook(payload)
+    except IgnoredWebhookError as exc:
+        # Descarte deliberado (grupo, otro bot, autorespuesta...): habitual y sin
+        # traceback. 200 para que el proveedor no reintente.
+        logger.info("Webhook ignorado provider=%s channel=%s: %s", provider, channel, exc)
+        return JSONResponse(status_code=200, content={"status": "ignored"})
     except Exception:
         logger.exception("Error parseando webhook provider=%s channel=%s", provider, channel)
         return JSONResponse(status_code=200, content={"status": "parse_error"})

@@ -54,6 +54,8 @@ CHANNEL_PROVIDERS: dict[str, str] = {
     "whatsapp": "ycloud",
     "instagram": "meta",
     "facebook": "meta",
+    "telegram": "telegram",
+    "email": "email",
 }
 
 
@@ -230,7 +232,7 @@ def get_channel_config(channel: str) -> tuple[str, dict[str, Any]]:
     """Resuelve el proveedor y las credenciales de un canal.
 
     Args:
-        channel: Canal de la conversacion (whatsapp, instagram, facebook).
+        channel: Canal de la conversacion (whatsapp, instagram, facebook, telegram).
 
     Returns:
         Tupla `(provider_name, channel_config)` lista para la factory de
@@ -252,13 +254,27 @@ def get_channel_config(channel: str) -> tuple[str, dict[str, Any]]:
             "api_key": settings.YCLOUD_API_KEY,
             "phone_number_id": settings.YCLOUD_PHONE_NUMBER_ID,
         }
+    elif provider_name == "telegram":
+        config = {"bot_token": settings.TELEGRAM_CHANNEL_BOT_TOKEN}
+    elif provider_name == "email":
+        config = {
+            "smtp_host": settings.EMAIL_SMTP_HOST,
+            "smtp_port": settings.EMAIL_SMTP_PORT,
+            "smtp_user": settings.EMAIL_SMTP_USER,
+            "smtp_password": settings.EMAIL_SMTP_PASSWORD,
+            "from_email": settings.EMAIL_FROM_ADDRESS,
+            "from_name": settings.EMAIL_FROM_NAME,
+        }
     else:
         config = {
             "page_access_token": settings.META_PAGE_ACCESS_TOKEN,
             "channel": channel,
         }
 
-    faltantes = [clave for clave, valor in config.items() if not valor]
+    # En email, usuario y password son opcionales (un relay interno puede no
+    # pedirlos): solo el servidor y la direccion de origen son imprescindibles.
+    obligatorias = ("smtp_host", "from_email") if provider_name == "email" else tuple(config)
+    faltantes = [clave for clave in obligatorias if not config[clave]]
     if faltantes:
         raise ChannelNotConfiguredError(
             f"Faltan credenciales del canal {channel!r} ({provider_name}): {faltantes}"

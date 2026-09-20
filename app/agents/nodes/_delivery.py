@@ -15,6 +15,7 @@ historial no.
 
 import logging
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -28,6 +29,55 @@ from app.services.messaging.base import MessageContent
 from app.services.messaging.factory import get_messaging_provider
 
 logger = logging.getLogger(__name__)
+
+
+async def _contexto_de_respuesta(
+    client_id: UUID, conversation_id: UUID, channel: str
+) -> dict[str, Any] | None:
+    """Datos del canal que hacen falta para responder en el mismo hilo.
+
+    Hoy solo email: un correo sin `In-Reply-To`/`References` correctos abre un
+    hilo nuevo en el cliente de correo del usuario (spec Sprint 9, notas
+    tecnicas). Se toman del ultimo mensaje **entrante** de la conversacion — el
+    que el cliente acaba de mandar — y no del asunto, que uniria conversaciones
+    ajenas con el mismo "Re: consulta".
+
+    Args:
+        client_id: Tenant propietario.
+        conversation_id: Conversacion a la que se responde.
+        channel: Canal por el que se responde.
+
+    Returns:
+        `subject`, `in_reply_to` y `references`, o `None` si el canal no lo usa
+        o no hay un mensaje entrante del que colgarse.
+    """
+    if channel != "email":
+        return None
+
+    async with tenant_session(client_id) as session:
+        metadata = (
+            await session.execute(
+                select(Message.metadata_)
+                .where(
+                    Message.client_id == client_id,
+                    Message.conversation_id == conversation_id,
+                    Message.direction == "inbound",
+                )
+                .order_by(Message.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    if not metadata or not metadata.get("message_id"):
+        return None
+    referencias = " ".join(
+        parte for parte in (metadata.get("references"), metadata["message_id"]) if parte
+    )
+    return {
+        "subject": metadata.get("subject"),
+        "in_reply_to": metadata["message_id"],
+        "references": referencias,
+    }
 
 
 async def deliver_message(
@@ -58,9 +108,11 @@ async def deliver_message(
     provider_name, channel_config = get_channel_config(channel)
     provider = get_messaging_provider(provider_name, {"channel": channel})
 
+    contexto = await _contexto_de_respuesta(client_id, conversation_id, channel)
+
     external_id = await provider.send_message(
         to=identifier,
-        content=MessageContent(text=text),
+        content=MessageContent(text=text, metadata=contexto),
         channel_config=channel_config,
     )
 
