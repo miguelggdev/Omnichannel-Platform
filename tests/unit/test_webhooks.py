@@ -715,3 +715,29 @@ class TestResolucionDeTenant:
 
         with pytest.raises(ClientResolutionError):
             _resolve_client_id("meta", "instagram")
+
+
+class TestWebchatNoEsUnWebhook:
+    """El Webchat entra por su WebSocket; el endpoint HTTP generico no puede aceptarlo.
+
+    La factory registra `webchat`, asi que `POST /webhooks/webchat/webchat` resuelve el
+    provider. Si su `validate_signature` devolviera `True` (como proponia la spec),
+    cualquiera podria inyectar mensajes como cualquier visitante por HTTP.
+    """
+
+    @pytest.mark.parametrize(
+        "cabeceras",
+        [{}, {"X-Ycloud-Signature": "cualquiera"}, {"Authorization": "Basic Zm9vOmJhcg=="}],
+    )
+    async def test_ningun_post_es_aceptado(
+        self, api_client: Any, patched_webhook: FakeTask, cabeceras: dict[str, str]
+    ) -> None:
+        cuerpo = {"visitor_id": "a" * 32, "message_id": "m1", "text": "hola"}
+
+        response = await api_client.post(
+            "/api/v1/webhooks/webchat/webchat", json=cuerpo, headers=cabeceras
+        )
+
+        assert response.status_code == 401
+        assert response.json()["error_code"] == webhooks_module.INVALID_SIGNATURE
+        assert patched_webhook.calls == []
