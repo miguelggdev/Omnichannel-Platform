@@ -279,7 +279,7 @@ class TestDelivery:
         monkeypatch.setattr(
             delivery_module,
             "get_channel_config",
-            lambda channel: ("ycloud", {"api_key": "k", "phone_number_id": "1"}),
+            lambda channel, client_id=None: ("ycloud", {"api_key": "k", "phone_number_id": "1"}),
         )
         monkeypatch.setattr(
             delivery_module, "get_messaging_provider", lambda nombre, config: FakeProvider()
@@ -330,7 +330,9 @@ class TestDelivery:
 
         monkeypatch.setattr(delivery_module, "get_contact_identifier", _identifier)
         monkeypatch.setattr(
-            delivery_module, "get_channel_config", lambda channel: (canal, {"from_email": "a@b.c"})
+            delivery_module,
+            "get_channel_config",
+            lambda channel, client_id=None: (canal, {"from_email": "a@b.c"}),
         )
         monkeypatch.setattr(
             delivery_module, "get_messaging_provider", lambda nombre, config: FakeProvider()
