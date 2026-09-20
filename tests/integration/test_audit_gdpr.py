@@ -120,8 +120,9 @@ async def _sembrar(slug: str) -> Escenario:
         )
         await session.execute(
             text(
-                "INSERT INTO conversations (id, client_id, contact_id, channel, status) "
-                "VALUES (:id, :cid, :contact, 'whatsapp', 'bot_active')"
+                "INSERT INTO conversations (id, client_id, contact_id, channel, status, "
+                "subject) VALUES (:id, :cid, :contact, 'whatsapp', 'bot_active', "
+                "'Cita de Grace Hopper')"
             ),
             {
                 "id": str(ids["conversation_id"]),
@@ -536,6 +537,32 @@ class TestRgpd:
                 assert fila.old_values["content"] == "[CONTENIDO ELIMINADO POR SOLICITUD RGPD]"
             if fila.new_values is not None:
                 assert fila.new_values["content"] == "[CONTENIDO ELIMINADO POR SOLICITUD RGPD]"
+
+    async def test_el_asunto_de_la_conversacion_se_anonimiza(self, escenario: Escenario) -> None:
+        """`subject` es texto libre de un agente y el export RGPD ya lo entrega."""
+        async with _cliente(escenario) as client:
+            await client.delete(f"{ADMIN}/{escenario.contact_id}/gdpr-delete")  # type: ignore[attr-defined]
+
+        async with tenant_session(escenario.client_id) as session:  # type: ignore[attr-defined]
+            asunto = await session.scalar(
+                text("SELECT subject FROM conversations WHERE id = :id"),
+                {"id": str(escenario.conversation_id)},  # type: ignore[attr-defined]
+            )
+
+        assert asunto == "[ELIMINADO]"
+
+    async def test_la_auditoria_no_conserva_el_asunto_real(self, escenario: Escenario) -> None:
+        """El trigger de `conversations` guarda la fila completa: tambien se redacta."""
+        async with _cliente(escenario) as client:
+            await client.delete(f"{ADMIN}/{escenario.contact_id}/gdpr-delete")  # type: ignore[attr-defined]
+
+        filas = await _auditoria(escenario, "conversations", escenario.conversation_id)  # type: ignore[attr-defined]
+
+        assert len(filas) >= 2, "debe haber el INSERT original y el UPDATE del asunto"
+        for fila in filas:
+            for valores in (fila.old_values, fila.new_values):
+                if valores is not None:
+                    assert "Grace" not in str(valores.get("subject"))
 
     async def test_la_auditoria_del_mensaje_saliente_no_se_toca(self, escenario: Escenario) -> None:
         """La redaccion solo alcanza a los mensajes que de verdad se anonimizaron.

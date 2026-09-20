@@ -71,8 +71,9 @@ def _configurar_worker(**_: Any) -> None:
 
 @worker_process_init.connect
 def _instrumentar_proceso(**_: Any) -> None:
-    """Instrumenta OpenTelemetry en cada proceso hijo del pool prefork."""
-    from app.core.telemetry import setup_celery_telemetry
+    """Configura logging y OpenTelemetry (Celery, SQL, Redis, httpx) en cada hijo prefork."""
+    from app.core.database import engine
+    from app.core.telemetry import setup_celery_telemetry, setup_telemetry
 
     # force=True: `_configurado` ya es True en el hijo porque el fork copia la
     # memoria del maestro, donde `worker_init` ya llamo a `setup_logging()`. Sin
@@ -80,6 +81,12 @@ def _instrumentar_proceso(**_: Any) -> None:
     # `enqueue=True` cuyo hilo de fondo NO sobrevive al fork — los logs de cada
     # worker quedarian encolados sin nadie que los escriba.
     setup_logging(force=True)
+    # Ademas de Celery: las queries (engine de SQLAlchemy), Redis y las llamadas
+    # salientes (httpx: YCloud, OpenAI) ocurren casi todas en el worker. Sin esto
+    # solo la API generaba esos spans y la traza de un mensaje se cortaba en
+    # cuanto la tarea empezaba a trabajar. Es idempotente y va post-fork por lo
+    # mismo que la de Celery: el exportador usa hilos que un fork no hereda.
+    setup_telemetry(engine=engine)
     setup_celery_telemetry()
 
 

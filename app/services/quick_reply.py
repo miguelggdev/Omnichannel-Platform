@@ -12,11 +12,17 @@ que nadie se entere.
 
 import re
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # `{{ nombre }}`, con o sin espacios alrededor del nombre.
 VARIABLE_PATTERN = re.compile(r"\{\{\s*(\w+)\s*\}\}")
+
+
+# Igual que `DEFAULT_TIMEZONE` de `app/services/calendar.py`, que no se importa
+# aqui para no acoplar las respuestas rapidas a las librerias de Google.
+TIMEZONE_POR_DEFECTO = "America/Bogota"
 
 
 def _contact_name(contexto: dict[str, Any]) -> str:
@@ -83,16 +89,25 @@ def _ticket_id(contexto: dict[str, Any]) -> str:
     return str(contexto["conversation"].id)[:8]
 
 
-def _date(_: dict[str, Any]) -> str:
-    """Fecha de hoy en formato dia/mes/ano.
+def _date(contexto: dict[str, Any]) -> str:
+    """Fecha de hoy en formato dia/mes/ano, en la zona horaria del tenant.
+
+    En UTC, un tenant en Bogota (UTC-5) veria "manana" desde las 19:00 hasta la
+    medianoche, y el agente mandaria al cliente una fecha equivocada. La zona
+    sale de `agent_configs.config.scheduling.timezone` (la misma que usa el
+    agendamiento); sin ella, o si no es valida, se usa la de por defecto.
 
     Args:
-        _: Contexto, sin usar.
+        contexto: Puede traer `timezone` (nombre IANA del tenant).
 
     Returns:
-        La fecha actual en UTC.
+        La fecha actual en la zona horaria del tenant.
     """
-    return datetime.now(timezone.utc).strftime("%d/%m/%Y")
+    try:
+        zona = ZoneInfo(contexto.get("timezone") or TIMEZONE_POR_DEFECTO)
+    except (ZoneInfoNotFoundError, ValueError):
+        zona = ZoneInfo(TIMEZONE_POR_DEFECTO)
+    return datetime.now(zona).strftime("%d/%m/%Y")
 
 
 VARIABLE_RESOLVERS: dict[str, Callable[[dict[str, Any]], str]] = {

@@ -21,7 +21,9 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "8080:8080"  # Dashboard (solo desarrollo)
+      # Dashboard con `api.insecure: true` (sin autenticacion): solo localhost del
+      # host. El healthcheck y el scrape de Prometheus usan la red interna.
+      - "127.0.0.1:8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
@@ -119,7 +121,10 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      # Solo localhost del host: la API y los workers llegan por la red
+      # `backend`. Con requirepass, pero un Redis abierto a internet es un
+      # blanco de fuerza bruta y de explotacion de CVEs del propio Redis.
+      - "127.0.0.1:6379:6379"
     networks:
       - backend
     healthcheck:

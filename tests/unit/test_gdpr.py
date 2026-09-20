@@ -265,6 +265,44 @@ class TestAnonimizacion:
         assert any("table_name = 'contacts'" in s for s in sql_redaccion)
         assert any("table_name = 'messages'" in s for s in sql_redaccion)
 
+    async def test_anonimiza_el_asunto_de_las_conversaciones_y_redacta_su_rastro(
+        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`subject` es texto libre de un agente y el export RGPD ya lo entrega.
+
+        La supresion tiene que alcanzarlo, y tambien a su fila en `audit_logs`
+        (el trigger de `conversations` guarda `to_jsonb(OLD)` completo).
+        """
+        contacto = FakeContact()
+        conv = FakeConversation(contact_id=contacto.id)
+        session = _usa_sesion(
+            monkeypatch,
+            CrmSession(resultados=[contacto, [], [conv.id], [], []]),
+        )
+
+        response = await authenticated_client.delete(f"{URL}/{contacto.id}/gdpr-delete")
+
+        assert response.status_code == 200
+        sentencias = [str(s) for s in session.executed]
+        update_asunto = next(s for s in sentencias if s.startswith("UPDATE conversations"))
+        assert "conversations.subject IS NOT NULL" in update_asunto
+        assert any(
+            "UPDATE audit_logs" in s and "table_name = 'conversations'" in s for s in sentencias
+        )
+
+    async def test_sin_conversaciones_no_toca_conversations(
+        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sin conversaciones no hay UPDATE de asunto ni redaccion de su rastro."""
+        contacto = FakeContact()
+        session = _usa_sesion(monkeypatch, CrmSession(resultados=[contacto, [], [], []]))
+
+        await authenticated_client.delete(f"{URL}/{contacto.id}/gdpr-delete")
+
+        sentencias = [str(s) for s in session.executed]
+        assert not any("UPDATE conversations" in s for s in sentencias)
+        assert not any("table_name = 'conversations'" in s for s in sentencias)
+
     async def test_sin_mensajes_no_ejecuta_la_redaccion_de_mensajes(
         self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:

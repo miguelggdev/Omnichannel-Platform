@@ -6,11 +6,17 @@ La base se sustituye por `CrmSession`: corren sin `--run-db`.
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.api.v1 import quick_replies as quick_replies_module
-from app.services.quick_reply import VARIABLE_RESOLVERS, resolve_quick_reply
+from app.services import quick_reply as quick_reply_module
+from app.services.quick_reply import (
+    TIMEZONE_POR_DEFECTO,
+    VARIABLE_RESOLVERS,
+    resolve_quick_reply,
+)
 from tests.unit.agent_doubles import fake_tenant_session
 from tests.unit.crm_doubles import AHORA, CrmSession, FakeContact, FakeConversation, FakeUser
 
@@ -82,10 +88,48 @@ class TestResolucionDeVariables:
         assert texto == f"Ticket {str(conv.id)[:8]}"
 
     def test_la_fecha_es_la_de_hoy(self) -> None:
-        """`{{date}}` no necesita contexto."""
+        """`{{date}}` no necesita contexto: sin zona usa la de por defecto."""
         texto, sin_resolver = resolve_quick_reply("Hoy es {{date}}", {})
 
-        assert texto == f"Hoy es {datetime.now(timezone.utc).strftime('%d/%m/%Y')}"
+        hoy = datetime.now(ZoneInfo(TIMEZONE_POR_DEFECTO)).strftime("%d/%m/%Y")
+        assert texto == f"Hoy es {hoy}"
+        assert sin_resolver == []
+
+    @staticmethod
+    def _congelar(monkeypatch: pytest.MonkeyPatch, instante_utc: datetime) -> None:
+        """Fija `datetime.now()` del modulo a un instante UTC concreto."""
+
+        class _Reloj(datetime):
+            @classmethod
+            def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
+                return instante_utc.astimezone(tz) if tz else instante_utc
+
+        monkeypatch.setattr(quick_reply_module, "datetime", _Reloj)
+
+    def test_la_fecha_es_la_del_tenant_no_la_de_utc(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A las 03:30 UTC del 19, en Bogota (UTC-5) todavia es el 18.
+
+        En UTC, un tenant en Bogota vería "mañana" de 19:00 a medianoche, y el
+        agente mandaria al cliente una fecha equivocada.
+        """
+        self._congelar(monkeypatch, datetime(2026, 9, 19, 3, 30, tzinfo=timezone.utc))
+
+        bogota, _ = resolve_quick_reply("{{date}}", {"timezone": "America/Bogota"})
+        tokio, _ = resolve_quick_reply("{{date}}", {"timezone": "Asia/Tokyo"})
+
+        assert bogota == "18/09/2026"
+        assert tokio == "19/09/2026"
+
+    @pytest.mark.parametrize("zona", ["No/Existe", "", None])
+    def test_una_zona_invalida_o_ausente_cae_a_la_de_por_defecto(
+        self, monkeypatch: pytest.MonkeyPatch, zona: Any
+    ) -> None:
+        """Una zona mal escrita en la config no debe tumbar el render."""
+        self._congelar(monkeypatch, datetime(2026, 9, 19, 3, 30, tzinfo=timezone.utc))
+
+        texto, sin_resolver = resolve_quick_reply("{{date}}", {"timezone": zona})
+
+        assert texto == "18/09/2026"  # Bogota, la de por defecto
         assert sin_resolver == []
 
     def test_una_variable_desconocida_queda_intacta_y_se_reporta(self) -> None:
@@ -376,6 +420,45 @@ class TestRender:
         cuerpo = response.json()
         assert cuerpo["content"] == f"Hola Ada, ticket {str(conv.id)[:8]}"
         assert cuerpo["unresolved"] == []
+
+    async def test_pasa_la_zona_horaria_del_tenant_al_resolver(
+        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch, tenant_a_id: uuid.UUID
+    ) -> None:
+        """`{{date}}` sale en la zona de `agent_configs.config.scheduling.timezone`."""
+        qr = FakeQuickReply(content="{{date}}")
+        conv = FakeConversation(client_id=tenant_a_id)
+        config = type("Cfg", (), {"config": {"scheduling": {"timezone": "Asia/Tokyo"}}})()
+        _usa_sesion(monkeypatch, CrmSession(resultados=[qr, conv, None, None, config]))
+        contextos: list[dict[str, Any]] = []
+        original = quick_replies_module.resolve_quick_reply
+
+        def _espia(contenido: str, contexto: dict[str, Any]) -> Any:
+            contextos.append(dict(contexto))
+            return original(contenido, contexto)
+
+        monkeypatch.setattr(quick_replies_module, "resolve_quick_reply", _espia)
+
+        response = await authenticated_client.post(
+            f"{URL}/{qr.id}/render", json={"conversation_id": str(conv.id)}
+        )
+
+        assert response.status_code == 200
+        assert contextos[0]["timezone"] == "Asia/Tokyo"
+
+    async def test_sin_config_de_agente_no_pasa_zona(
+        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch, tenant_a_id: uuid.UUID
+    ) -> None:
+        """Un tenant sin `agent_config` usa la zona de por defecto, sin error."""
+        qr = FakeQuickReply(content="{{date}}")
+        conv = FakeConversation(client_id=tenant_a_id)
+        _usa_sesion(monkeypatch, CrmSession(resultados=[qr, conv, None, None, None]))
+
+        response = await authenticated_client.post(
+            f"{URL}/{qr.id}/render", json={"conversation_id": str(conv.id)}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["unresolved"] == []
 
     async def test_reporta_lo_que_no_pudo_resolver(
         self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch

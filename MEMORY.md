@@ -293,6 +293,19 @@
 - **Riesgo que se controla con una prueba:** la expresión SQL de la migración y `blind_index()` tienen que dar lo mismo, o la aplicación deja de encontrar las filas migradas y cada mensaje entrante crea un contacto nuevo. `tests/integration/test_encryption.py::TestParidadConLaMigracion` evalúa la expresión de la migración contra Postgres real y la compara con la función de Python.
 - **Consecuencia:** la migración toma bloqueos de fila sobre toda la tabla mientras dura; en una tabla grande, ventana de bajo tráfico. Necesita `ENCRYPTION_KEY` y la clave correcta (con otra, `pgp_sym_decrypt` falla y la transacción se revierte entera).
 
+- **Runbook de despliegue de la migración 009** (la parte operativa que el código no puede hacer por sí solo):
+  1. **Orden: parar, migrar, arrancar.** No se pueden solapar código nuevo y viejo con la migración. El código nuevo busca por `HMAC(clave, "{client_id}:{valor}")`; con los hashes viejos aún en la tabla no encuentra a nadie y **cada mensaje entrante crea un contacto duplicado**. El código viejo, si sigue corriendo después de migrar, escribe hashes con la fórmula global y deja filas inconsistentes. Por eso hace falta la ventana: detener API y workers (al menos `webhooks` y `ai_inference`), correr `alembic upgrade head`, arrancar la versión nueva. Los proveedores reintentan los webhooks que reciban un error mientras tanto, pero un servicio caído no es un 200: conviene avisar a los tenants o hacerlo en el valle de tráfico.
+  2. **`ENCRYPTION_KEY`**: la **misma** que cifró la columna en la 008, en el entorno que ejecuta Alembic (`DATABASE_URL_DIRECT`, el rol dueño del schema con `BYPASSRLS`). Con otra, `pgp_sym_decrypt` falla y la transacción se revierte entera (no queda nada a medias). Si falta, la migración aborta antes de ejecutar nada (`tests/unit/test_migraciones_cifrado.py`).
+  3. **Antes**: backup fresco y `scripts/restore_test.sh` sobre él. El UPDATE toma bloqueos de fila sobre toda la tabla hasta el commit.
+  4. **Verificación después** (0 filas = correcto; sustituir `:clave` por la clave). Si devuelve algo, no arrancar la aplicación:
+     ```sql
+     SELECT count(*) FROM contact_identifiers
+     WHERE identifier_hash <> encode(hmac(
+         client_id::text || ':' || lower(trim(pgp_sym_decrypt(identifier_value, :clave))),
+         :clave, 'sha256'), 'hex');
+     ```
+  5. **Reversa**: `alembic downgrade 008_encrypt_contact_identifiers` (también necesita la clave) y volver a desplegar el código anterior, en el mismo orden parar/migrar/arrancar.
+
 ---
 
 ## Bugs Conocidos y Pitfalls
@@ -555,14 +568,31 @@ Cuatro agentes en paralelo (RLS/multi-tenancy, async/concurrencia, seguridad, l�
 ### BUG-033: Jaeger, Prometheus y Grafana publicados en `0.0.0.0`
 - **Descripción:** `"16686:16686"` y `"9090:9090"` publican en todas las interfaces del host aunque el comentario dijera "solo localhost". Jaeger y Prometheus no autentican y las series llevan `client_id`.
 - **Estado:** CERRADO. `127.0.0.1:puerto:puerto` en los tres, con test (`tests/unit/test_docker_compose.py`).
-- **Pendiente, no tocado (fuera de lo pedido):** `redis` (6379) y el dashboard de Traefik (8080) también se publican en todas las interfaces desde Sprint 2.
+- **Ampliado después:** `redis` (6379) y el dashboard de Traefik (8080, `api.insecure: true`) también se publicaban en todas las interfaces desde Sprint 2; cerrados. El test ya no nombra servicios: cualquier puerto fuera de 80/443 de Traefik tiene que ir a `127.0.0.1`.
 
 ### BUG-034: Dos contactos con los mismos últimos 4 dígitos se veían iguales en la bandeja
 - **Descripción:** `mask_identifier()` deja solo los últimos 4 caracteres; dos teléfonos de la misma longitud que terminen igual daban el mismo `display_name` provisional.
 - **Estado:** CERRADO. `_resolve_contact()` agrega un sufijo corto del id del contacto (`********4567 #a1b2`); el id se genera en cliente (`uuid4`) para no necesitar un UPDATE extra (que además quedaría auditado).
 
-### Hallazgos menores de esa revisión, sin corregir
-`users.email` sin cifrar aunque el docstring del modelo dice lo contrario; timing side-channel en `/auth/login` para enumerar emails (no se llama a `verify_password` si el email no existe); `Conversation.subject` (texto libre) no se anonimiza en RGPD; `_date()` de las respuestas rápidas fija a UTC; el índice de `identifier_hash` no es compuesto con `client_id` (nota de rendimiento); `deploy.replicas: 2` se ignora fuera de Swarm y el comentario de `metrics.py` asume 4 procesos; los workers de Celery no instrumentan el engine de SQLAlchemy (solo la API genera spans SQL).
+### BUG-035: El login permitía enumerar emails por tiempo y corría bcrypt en el event loop
+- **Descripción:** con un email inexistente `POST /auth/login` respondía 401 sin llamar a bcrypt (~100 ms); con uno existente sí. La diferencia de latencia permitía enumerar los emails registrados. Además `verify_password` (bcrypt, CPU) corría síncrono dentro del endpoint async: cada login congelaba el event loop ~100 ms (CLAUDE.md, regla 4). Lo segundo no lo había señalado ningún agente; salió al arreglar lo primero.
+- **Estado:** CERRADO. Se verifica siempre contra un hash bcrypt (el del usuario, o uno de relleno del mismo coste si no existe) y por `asyncio.to_thread`. Tests: el email inexistente también pasa por bcrypt, y bcrypt corre fuera del hilo del event loop.
+
+### BUG-036: El asunto de la conversación no se anonimizaba en RGPD
+- **Descripción:** `Conversation.subject` es texto libre que escribe un agente; el export RGPD ya lo entregaba como dato del contacto, pero `gdpr_delete_contact()` no lo tocaba, ni su fila en `audit_logs` (el trigger de `conversations` guarda la fila completa).
+- **Estado:** CERRADO. Se reemplaza por `[ELIMINADO]` donde no era NULL y se redacta su rastro de auditoría en la misma transacción. Tests unitarios y de integración.
+
+### BUG-037: `{{date}}` de las respuestas rápidas salía siempre en UTC
+- **Descripción:** un tenant en Bogotá (UTC-5) veía "mañana" de 19:00 a medianoche y el agente mandaba al cliente final una fecha equivocada.
+- **Estado:** CERRADO. Usa `agent_configs.config.scheduling.timezone` (la misma que el agendamiento), con `America/Bogota` por defecto; una zona inválida no tumba el render. Tests con reloj congelado.
+
+### BUG-038: Los workers de Celery solo instrumentaban Celery
+- **Descripción:** `worker_process_init` llamaba solo a `setup_celery_telemetry()`. Queries, Redis y llamadas salientes (YCloud, OpenAI) ocurren casi todas en el worker y no generaban spans: la traza de un mensaje se cortaba en cuanto la tarea empezaba a trabajar, contra lo que decía la descripción del PR #22.
+- **Estado:** CERRADO. El hijo prefork llama `setup_telemetry(engine=engine)` (SQLAlchemy, Redis, httpx) antes que la de Celery, post-fork.
+
+### Hallazgos menores de esa revisión que NO se corrigieron, y por qué
+- **`users.email` sin cifrar** (CLAUDE.md, regla 3 pide cifrar emails): se corrigió el docstring, que decía "cifrado", pero cifrarlo es una **decisión pendiente**, no un arreglo: `auth_lookup_user()` lo compara por igualdad exacta, así que exige un índice ciego por tenant como el de ADR-052, cambiar esa función `SECURITY DEFINER` y una migración de datos sobre la tabla de login. Riesgo de romper el acceso de todos los usuarios si se hace mal.
+- **Índice de `identifier_hash` no compuesto con `client_id`:** no hace falta. El `UNIQUE (client_id, channel, identifier_hash)` ya cubre las búsquedas por ese prefijo; el índice de una columna es redundante pero inocuo, y quitarlo es una migración sin beneficio funcional.
 
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.
