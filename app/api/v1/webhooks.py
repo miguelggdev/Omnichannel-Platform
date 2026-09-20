@@ -44,6 +44,8 @@ QUEUE_UNAVAILABLE = "QUEUE_UNAVAILABLE"
 SIGNATURE_HEADERS: dict[str, str] = {
     "meta": "x-hub-signature-256",
     "ycloud": "X-Ycloud-Signature",
+    # No es una firma: Telegram devuelve tal cual el `secret_token` de setWebhook.
+    "telegram": "X-Telegram-Bot-Api-Secret-Token",
 }
 
 
@@ -95,6 +97,8 @@ def _webhook_secret(provider: str) -> str:
     settings = get_settings()
     if provider == "meta":
         return settings.META_APP_SECRET
+    if provider == "telegram":
+        return settings.TELEGRAM_WEBHOOK_SECRET
     return settings.YCLOUD_WEBHOOK_SECRET
 
 

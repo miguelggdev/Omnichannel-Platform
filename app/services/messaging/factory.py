@@ -10,12 +10,14 @@ from typing import Any, cast
 
 from app.services.messaging.base import MessagingProvider
 from app.services.messaging.meta import MetaProvider
+from app.services.messaging.telegram import TelegramProvider
 from app.services.messaging.ycloud import YCloudProvider
 
 _PROVIDERS: dict[str, type[MessagingProvider]] = {
     "ycloud": YCloudProvider,
     "meta": MetaProvider,  # Instagram DM + Facebook Messenger, diferenciados por config
-    # Futuros proveedores (Fase 2): "telegram": TelegramProvider, ...
+    "telegram": TelegramProvider,  # Sprint 9
+    # Futuros (Sprint 9): "email", "webchat"
 }
 
 

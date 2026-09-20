@@ -54,6 +54,7 @@ CHANNEL_PROVIDERS: dict[str, str] = {
     "whatsapp": "ycloud",
     "instagram": "meta",
     "facebook": "meta",
+    "telegram": "telegram",
 }
 
 
@@ -230,7 +231,7 @@ def get_channel_config(channel: str) -> tuple[str, dict[str, Any]]:
     """Resuelve el proveedor y las credenciales de un canal.
 
     Args:
-        channel: Canal de la conversacion (whatsapp, instagram, facebook).
+        channel: Canal de la conversacion (whatsapp, instagram, facebook, telegram).
 
     Returns:
         Tupla `(provider_name, channel_config)` lista para la factory de
@@ -252,6 +253,8 @@ def get_channel_config(channel: str) -> tuple[str, dict[str, Any]]:
             "api_key": settings.YCLOUD_API_KEY,
             "phone_number_id": settings.YCLOUD_PHONE_NUMBER_ID,
         }
+    elif provider_name == "telegram":
+        config = {"bot_token": settings.TELEGRAM_CHANNEL_BOT_TOKEN}
     else:
         config = {
             "page_access_token": settings.META_PAGE_ACCESS_TOKEN,

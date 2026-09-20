@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     META_WEBHOOK_VERIFY_TOKEN: str = ""
     META_GRAPH_API_VERSION: str = "v19.0"
 
+    # Telegram como canal de clientes (Bot API) — Sprint 9. Es un bot distinto
+    # del de super admin (Sprint 8). Como YCloud/Meta, las credenciales son
+    # globales hasta que exista la tabla `channel_configs` (Fase 2).
+    TELEGRAM_CHANNEL_BOT_TOKEN: str = ""
+    # `secret_token` que se registra en `setWebhook`; Telegram lo devuelve en el
+    # header `X-Telegram-Bot-Api-Secret-Token` de cada update.
+    TELEGRAM_WEBHOOK_SECRET: str = ""
+    TELEGRAM_API_BASE_URL: str = "https://api.telegram.org"
+
     # Google Calendar (Sprint 7) — un service account global (no OAuth2 por
     # tenant): cada tenant comparte su calendario con el email del service
     # account y guarda su calendar_id en agent_configs.config.scheduling.

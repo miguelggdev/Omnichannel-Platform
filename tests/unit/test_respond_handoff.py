@@ -312,6 +312,7 @@ class TestChannelConfig:
             "YCLOUD_API_KEY": "api-key",
             "YCLOUD_PHONE_NUMBER_ID": "573009999999",
             "META_PAGE_ACCESS_TOKEN": "page-token",
+            "TELEGRAM_CHANNEL_BOT_TOKEN": "123456:bot-token",
         }
         base.update(valores)
         monkeypatch.setattr(tenant_module, "get_settings", lambda: SimpleNamespace(**base))
@@ -339,7 +340,23 @@ class TestChannelConfig:
         """Un canal sin proveedor registrado falla con un mensaje claro."""
         self._settings(monkeypatch)
 
-        with pytest.raises(ChannelNotConfiguredError, match="telegram"):
+        with pytest.raises(ChannelNotConfiguredError, match="linkedin"):
+            tenant_module.get_channel_config("linkedin")
+
+    def test_telegram_sale_por_su_propio_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Telegram resuelve al bot del canal de clientes, con su token."""
+        self._settings(monkeypatch)
+
+        provider, config = tenant_module.get_channel_config("telegram")
+
+        assert provider == "telegram"
+        assert config == {"bot_token": "123456:bot-token"}
+
+    def test_telegram_sin_token_no_intenta_enviar(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Sin `TELEGRAM_CHANNEL_BOT_TOKEN` falla antes de llamar a la API."""
+        self._settings(monkeypatch, TELEGRAM_CHANNEL_BOT_TOKEN="")
+
+        with pytest.raises(ChannelNotConfiguredError, match="bot_token"):
             tenant_module.get_channel_config("telegram")
 
     def test_credenciales_faltantes(self, monkeypatch: pytest.MonkeyPatch) -> None:

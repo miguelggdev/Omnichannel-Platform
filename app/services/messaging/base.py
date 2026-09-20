@@ -14,6 +14,16 @@ from typing import Any
 from app.schemas.message import NormalizedMessage
 
 
+class TemplateNotSupportedError(NotImplementedError):
+    """El canal no tiene el concepto de template preaprobado.
+
+    Solo WhatsApp (HSM) y Facebook (button template) lo tienen. Los demas
+    canales implementan `send_template()` para cumplir la ABC y lanzan esto, en
+    vez de fingir un envio: quien lo llame tiene que saber que el canal no lo
+    soporta.
+    """
+
+
 @dataclass
 class ChannelConstraints:
     """Restricciones del canal de mensajeria.

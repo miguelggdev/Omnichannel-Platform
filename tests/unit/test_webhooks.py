@@ -8,7 +8,7 @@ tests del POST reemplazan `_resolve_provider` en lugar de instanciar un provider
 """
 
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -213,7 +213,7 @@ class TestWebhookErrores:
         self, api_client: Any, patched_webhook: FakeTask
     ) -> None:
         """Un provider no registrado responde 400 (no 404 ni 500)."""
-        response = await api_client.post("/api/v1/webhooks/telegram/telegram", json={})
+        response = await api_client.post("/api/v1/webhooks/linkedin/linkedin", json={})
 
         assert response.status_code == 400
         assert response.json()["error_code"] == webhooks_module.UNSUPPORTED_PROVIDER
@@ -248,6 +248,111 @@ class TestWebhookErrores:
         assert response.status_code == 503
         assert response.json()["error_code"] == webhooks_module.QUEUE_UNAVAILABLE
         assert fake_redis.store == {}, "la marca debe liberarse o el mensaje se pierde 24h"
+
+
+# ─── POST: Telegram, con el provider real ────────────────────────────────────
+
+
+class TestWebhookTelegram:
+    """El recorrido completo del endpoint con `TelegramProvider` (sin sustituirlo)."""
+
+    URL = "/api/v1/webhooks/telegram/telegram"
+    SECRETO = "secreto-de-prueba_123"
+    UPDATE: ClassVar[dict[str, Any]] = {
+        "update_id": 4242,
+        "message": {
+            "message_id": 7,
+            "from": {"id": 789, "is_bot": False, "first_name": "Ada"},
+            "chat": {"id": 789, "type": "private"},
+            "date": 1_700_000_000,
+            "text": "Hola",
+        },
+    }
+
+    @pytest.fixture(autouse=True)
+    def _secreto(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Configura `TELEGRAM_WEBHOOK_SECRET` sin tocar el `.env`."""
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "TELEGRAM_WEBHOOK_SECRET", self.SECRETO)
+
+    async def test_update_valido_se_encola(
+        self, api_client: Any, patched_webhook: FakeTask
+    ) -> None:
+        """Con el secret_token correcto, el mensaje llega a Celery ya normalizado."""
+        response = await api_client.post(
+            self.URL,
+            json=self.UPDATE,
+            headers={"X-Telegram-Bot-Api-Secret-Token": self.SECRETO},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "queued"}
+        (llamada,) = patched_webhook.calls
+        assert llamada["provider"] == "telegram"
+        mensaje = llamada["normalized_message"]
+        assert mensaje["channel"] == "telegram"
+        assert mensaje["sender_identifier"] == "789"
+        assert mensaje["sender_name"] == "Ada"
+        assert mensaje["external_message_id"] == "4242"
+        assert mensaje["text"] == "Hola"
+
+    @pytest.mark.parametrize("cabecera", [None, "", "otro-secreto"])
+    async def test_sin_secret_token_correcto_es_401(
+        self, api_client: Any, patched_webhook: FakeTask, cabecera: str | None
+    ) -> None:
+        """Sin el secret_token cualquiera podria inyectar mensajes al bot."""
+        headers = {} if cabecera is None else {"X-Telegram-Bot-Api-Secret-Token": cabecera}
+
+        response = await api_client.post(self.URL, json=self.UPDATE, headers=headers)
+
+        assert response.status_code == 401
+        assert response.json()["error_code"] == webhooks_module.INVALID_SIGNATURE
+        assert patched_webhook.calls == []
+
+    async def test_secreto_sin_configurar_rechaza_todo(
+        self, api_client: Any, patched_webhook: FakeTask, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Con `TELEGRAM_WEBHOOK_SECRET` vacio, el endpoint no queda abierto."""
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "TELEGRAM_WEBHOOK_SECRET", "")
+
+        response = await api_client.post(
+            self.URL, json=self.UPDATE, headers={"X-Telegram-Bot-Api-Secret-Token": ""}
+        )
+
+        assert response.status_code == 401
+        assert patched_webhook.calls == []
+
+    async def test_update_de_grupo_responde_200_y_no_se_encola(
+        self, api_client: Any, patched_webhook: FakeTask
+    ) -> None:
+        """Telegram reintenta lo que no recibe con 200: un grupo no debe provocar reintentos."""
+        update = {
+            **self.UPDATE,
+            "message": {**self.UPDATE["message"], "chat": {"id": -1, "type": "group"}},
+        }
+
+        response = await api_client.post(
+            self.URL, json=update, headers={"X-Telegram-Bot-Api-Secret-Token": self.SECRETO}
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "parse_error"}
+        assert patched_webhook.calls == []
+
+    async def test_el_mismo_update_dos_veces_se_encola_una_sola(
+        self, api_client: Any, patched_webhook: FakeTask
+    ) -> None:
+        """Telegram reenvia un update si tarda en recibir el 200."""
+        headers = {"X-Telegram-Bot-Api-Secret-Token": self.SECRETO}
+
+        await api_client.post(self.URL, json=self.UPDATE, headers=headers)
+        segunda = await api_client.post(self.URL, json=self.UPDATE, headers=headers)
+
+        assert segunda.json() == {"status": "duplicate"}
+        assert len(patched_webhook.calls) == 1
 
 
 # ─── GET: verificacion de la URL del webhook ─────────────────────────────────

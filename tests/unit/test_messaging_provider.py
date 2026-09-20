@@ -69,8 +69,16 @@ class TestFactory:
 
     def test_provider_desconocido_lanza_value_error(self) -> None:
         """El endpoint traduce este ValueError a un 400; si cambia el tipo, se rompe."""
-        with pytest.raises(ValueError, match="telegram"):
-            factory.get_messaging_provider("telegram")
+        with pytest.raises(ValueError, match="linkedin"):
+            factory.get_messaging_provider("linkedin")
+
+    def test_resuelve_telegram(self) -> None:
+        """El segmento `telegram` de la URL devuelve el provider del bot."""
+        telegram = pytest.importorskip("app.services.messaging.telegram")
+
+        provider = factory.get_messaging_provider("telegram")
+
+        assert isinstance(provider, telegram.TelegramProvider)
 
     def test_acepta_la_llamada_que_hace_el_endpoint(self) -> None:
         """`_resolve_provider()` llama con (nombre, config) posicionales.
