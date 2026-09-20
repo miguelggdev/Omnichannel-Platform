@@ -112,6 +112,44 @@ class TestLoggingEstructurado:
         setup_logging(force=True)
         assert any(isinstance(h, InterceptHandler) for h in logging.root.handlers)
 
+    def test_el_sink_escribe_desde_un_hilo_de_fondo(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`enqueue=True`: un stdout lento no debe bloquear el event loop de la API.
+
+        Sin la cola, cada `logger.*()` escribe a stdout en el hilo llamante, que
+        en la API es el unico del event loop del proceso (CLAUDE.md, regla 4).
+        """
+        opciones: list[dict[str, Any]] = []
+        original = logger.add
+
+        def _espia(*args: Any, **kwargs: Any) -> int:
+            opciones.append(kwargs)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(logger, "add", _espia)
+
+        setup_logging(force=True)
+
+        assert opciones, "setup_logging() no registro ningun sink"
+        assert all(o.get("enqueue") is True for o in opciones)
+
+    def test_el_hijo_prefork_de_celery_reconfigura_el_logging(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """El fork copia `_configurado=True`, pero no el hilo del sink `enqueue`.
+
+        Si `_instrumentar_proceso` llamara `setup_logging()` sin `force`, seria un
+        no-op y los logs de cada worker quedarian encolados sin quien los escriba.
+        """
+        from app.tasks import observability as obs_module
+
+        llamadas: list[bool] = []
+        monkeypatch.setattr(obs_module, "setup_logging", lambda force=False: llamadas.append(force))
+        monkeypatch.setattr(telemetry_module, "setup_celery_telemetry", lambda: None)
+
+        obs_module._instrumentar_proceso()
+
+        assert llamadas == [True]
+
     def test_el_json_lleva_los_tres_campos_de_contexto(self) -> None:
         """`trace_id`, `client_id` y `user_id` en toda línea, aunque estén vacíos."""
         capturado: list[str] = []

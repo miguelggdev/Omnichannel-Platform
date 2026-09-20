@@ -74,7 +74,12 @@ def _instrumentar_proceso(**_: Any) -> None:
     """Instrumenta OpenTelemetry en cada proceso hijo del pool prefork."""
     from app.core.telemetry import setup_celery_telemetry
 
-    setup_logging()
+    # force=True: `_configurado` ya es True en el hijo porque el fork copia la
+    # memoria del maestro, donde `worker_init` ya llamo a `setup_logging()`. Sin
+    # forzar, esta llamada seria un no-op y el hijo heredaria un sink
+    # `enqueue=True` cuyo hilo de fondo NO sobrevive al fork — los logs de cada
+    # worker quedarian encolados sin nadie que los escriba.
+    setup_logging(force=True)
     setup_celery_telemetry()
 
 
