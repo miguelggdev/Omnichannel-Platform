@@ -302,6 +302,127 @@ class TestDelivery:
         assert mensajes[0].external_message_id == "wamid.1"
         assert conversacion.last_message_at is not None
 
+    def _preparar_envio(
+        self, monkeypatch: pytest.MonkeyPatch, sesion: FakeSession, canal: str
+    ) -> list[Any]:
+        """Deja `deliver_message` listo con proveedor e identificador falsos.
+
+        Args:
+            monkeypatch: Fixture de pytest.
+            sesion: Sesion falsa que ceden todos los `tenant_session()`.
+            canal: Canal por el que se va a responder.
+
+        Returns:
+            La lista donde el proveedor falso deja el `MessageContent` recibido.
+        """
+        parchear_tenant_session(monkeypatch, delivery_module, sesion)
+        recibidos: list[Any] = []
+
+        class FakeProvider:
+            async def send_message(
+                self, to: str, content: Any, channel_config: dict[str, Any]
+            ) -> str:
+                recibidos.append(content)
+                return "<respuesta@empresa.com>"
+
+        async def _identifier(client_id: Any, contact_id: Any, channel: str) -> str:
+            return "juan@example.com"
+
+        monkeypatch.setattr(delivery_module, "get_contact_identifier", _identifier)
+        monkeypatch.setattr(
+            delivery_module, "get_channel_config", lambda channel: (canal, {"from_email": "a@b.c"})
+        )
+        monkeypatch.setattr(
+            delivery_module, "get_messaging_provider", lambda nombre, config: FakeProvider()
+        )
+        return recibidos
+
+    async def test_email_responde_en_el_hilo_del_ultimo_mensaje_entrante(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sin `In-Reply-To`/`References` el cliente de correo abre un hilo nuevo.
+
+        Se toman del ultimo mensaje **entrante** de la conversacion, no del asunto:
+        buscar por asunto une conversaciones ajenas con el mismo "Re: consulta".
+        """
+        entrante = {
+            "subject": "Consulta de precios",
+            "message_id": "<abc123@mail.example.com>",
+            "references": "<raiz@empresa.com>",
+        }
+        sesion = FakeSession(resultados=[entrante, FakeConversation()])
+        recibidos = self._preparar_envio(monkeypatch, sesion, "email")
+
+        await delivery_module.deliver_message(
+            client_id=uuid.uuid4(),
+            conversation_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
+            channel="email",
+            text="Claro, cuesta 20 USD.",
+        )
+
+        assert recibidos[0].metadata == {
+            "subject": "Consulta de precios",
+            "in_reply_to": "<abc123@mail.example.com>",
+            "references": "<raiz@empresa.com> <abc123@mail.example.com>",
+        }
+
+    async def test_el_message_id_propio_queda_como_id_externo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cuando el cliente responda, su `In-Reply-To` apunta a este Message-ID."""
+        sesion = FakeSession(
+            resultados=[{"subject": "x", "message_id": "<a@b.c>"}, FakeConversation()]
+        )
+        self._preparar_envio(monkeypatch, sesion, "email")
+
+        externo = await delivery_module.deliver_message(
+            client_id=uuid.uuid4(),
+            conversation_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
+            channel="email",
+            text="Hola",
+        )
+
+        assert externo == "<respuesta@empresa.com>"
+        assert sesion.agregados_de(Message)[0].external_message_id == "<respuesta@empresa.com>"
+
+    async def test_email_sin_mensaje_entrante_previo_no_lleva_hilo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Un primer email saliente no responde a nada: sin metadata, no inventa cabeceras."""
+        sesion = FakeSession(resultados=[None, FakeConversation()])
+        recibidos = self._preparar_envio(monkeypatch, sesion, "email")
+
+        await delivery_module.deliver_message(
+            client_id=uuid.uuid4(),
+            conversation_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
+            channel="email",
+            text="Hola",
+        )
+
+        assert recibidos[0].metadata is None
+
+    async def test_los_demas_canales_no_consultan_el_hilo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """WhatsApp y Telegram no usan `metadata`: ni siquiera se hace la consulta."""
+        sesion = FakeSession(resultados=[FakeConversation()])
+        recibidos = self._preparar_envio(monkeypatch, sesion, "telegram")
+
+        await delivery_module.deliver_message(
+            client_id=uuid.uuid4(),
+            conversation_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
+            channel="telegram",
+            text="Hola",
+        )
+
+        assert recibidos[0].metadata is None
+        sentencias = [str(s) for s in sesion.executed]
+        assert not any("messages.metadata" in s for s in sentencias)
+
 
 class TestChannelConfig:
     """Resolucion de canal a proveedor y credenciales."""
@@ -313,6 +434,12 @@ class TestChannelConfig:
             "YCLOUD_PHONE_NUMBER_ID": "573009999999",
             "META_PAGE_ACCESS_TOKEN": "page-token",
             "TELEGRAM_CHANNEL_BOT_TOKEN": "123456:bot-token",
+            "EMAIL_SMTP_HOST": "smtp.empresa.com",
+            "EMAIL_SMTP_PORT": 587,
+            "EMAIL_SMTP_USER": "apikey",
+            "EMAIL_SMTP_PASSWORD": "s3cret",
+            "EMAIL_FROM_ADDRESS": "soporte@empresa.com",
+            "EMAIL_FROM_NAME": "Soporte",
         }
         base.update(valores)
         monkeypatch.setattr(tenant_module, "get_settings", lambda: SimpleNamespace(**base))
@@ -351,6 +478,38 @@ class TestChannelConfig:
 
         assert provider == "telegram"
         assert config == {"bot_token": "123456:bot-token"}
+
+    def test_email_sale_por_smtp(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """El email resuelve a su provider, con las credenciales SMTP."""
+        self._settings(monkeypatch)
+
+        provider, config = tenant_module.get_channel_config("email")
+
+        assert provider == "email"
+        assert config["smtp_host"] == "smtp.empresa.com"
+        assert config["from_email"] == "soporte@empresa.com"
+        assert config["smtp_port"] == 587
+
+    def test_email_sin_usuario_ni_password_es_valido(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Un relay interno puede no pedir autenticacion: solo host y origen son obligatorios."""
+        self._settings(monkeypatch, EMAIL_SMTP_USER="", EMAIL_SMTP_PASSWORD="")
+
+        _, config = tenant_module.get_channel_config("email")
+
+        assert config["smtp_user"] == ""
+
+    @pytest.mark.parametrize(
+        ("ajuste", "faltante"),
+        [("EMAIL_SMTP_HOST", "smtp_host"), ("EMAIL_FROM_ADDRESS", "from_email")],
+    )
+    def test_email_sin_host_o_sin_origen_no_intenta_enviar(
+        self, monkeypatch: pytest.MonkeyPatch, ajuste: str, faltante: str
+    ) -> None:
+        """Sin servidor o sin direccion de origen no hay como enviar."""
+        self._settings(monkeypatch, **{ajuste: ""})
+
+        with pytest.raises(ChannelNotConfiguredError, match=faltante):
+            tenant_module.get_channel_config("email")
 
     def test_telegram_sin_token_no_intenta_enviar(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Sin `TELEGRAM_CHANNEL_BOT_TOKEN` falla antes de llamar a la API."""

@@ -9,6 +9,7 @@ Contrato: `specs/sprint-04-webhooks.md` §5.
 from typing import Any, cast
 
 from app.services.messaging.base import MessagingProvider
+from app.services.messaging.email_provider import EmailProvider
 from app.services.messaging.meta import MetaProvider
 from app.services.messaging.telegram import TelegramProvider
 from app.services.messaging.ycloud import YCloudProvider
@@ -17,7 +18,8 @@ _PROVIDERS: dict[str, type[MessagingProvider]] = {
     "ycloud": YCloudProvider,
     "meta": MetaProvider,  # Instagram DM + Facebook Messenger, diferenciados por config
     "telegram": TelegramProvider,  # Sprint 9
-    # Futuros (Sprint 9): "email", "webchat"
+    "email": EmailProvider,  # Sprint 9
+    # Futuro (Sprint 9, Dev B): "webchat"
 }
 
 

@@ -72,6 +72,14 @@ class TestFactory:
         with pytest.raises(ValueError, match="linkedin"):
             factory.get_messaging_provider("linkedin")
 
+    def test_resuelve_email(self) -> None:
+        """El segmento `email` de la URL devuelve el provider de correo."""
+        email_provider = pytest.importorskip("app.services.messaging.email_provider")
+
+        provider = factory.get_messaging_provider("email")
+
+        assert isinstance(provider, email_provider.EmailProvider)
+
     def test_resuelve_telegram(self) -> None:
         """El segmento `telegram` de la URL devuelve el provider del bot."""
         telegram = pytest.importorskip("app.services.messaging.telegram")
