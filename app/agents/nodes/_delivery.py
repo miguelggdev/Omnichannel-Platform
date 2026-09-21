@@ -86,6 +86,7 @@ async def deliver_message(
     contact_id: UUID,
     channel: str,
     text: str,
+    metadata: dict[str, Any] | None = None,
 ) -> str | None:
     """Envia un texto al contacto y lo registra como mensaje saliente.
 
@@ -95,6 +96,9 @@ async def deliver_message(
         contact_id: Contacto destinatario.
         channel: Canal por el que responder.
         text: Cuerpo del mensaje.
+        metadata: Datos propios del canal para este envio (por ejemplo, el teclado
+            `request_contact` de Telegram). Se suman al contexto de hilo de email,
+            y el llamador manda si coinciden.
 
     Returns:
         Id externo que devolvio el proveedor, o None si no devolvio ninguno.
@@ -109,6 +113,8 @@ async def deliver_message(
     provider = get_messaging_provider(provider_name, {"channel": channel})
 
     contexto = await _contexto_de_respuesta(client_id, conversation_id, channel)
+    if metadata:
+        contexto = {**(contexto or {}), **metadata}
 
     external_id = await provider.send_message(
         to=identifier,

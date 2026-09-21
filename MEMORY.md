@@ -369,6 +369,18 @@
 - **Concurrencia:** `pg_advisory_xact_lock` por (tenant, hash del teléfono) al empezar: dos tareas de la misma persona por dos canales no pueden fusionarse en sentidos opuestos y dejar un ciclo de `merged_into_id`.
 - **Consecuencia / límites:** un número de teléfono reasignado a otra persona sigue siendo "el mismo teléfono" (riesgo aceptado, inherente a identificar por número); los formatos no E.164 (sin código de país) no se unifican. El bot aún no ofrece un botón `request_contact` de Telegram para pedir el número: hoy la unión ocurre cuando el usuario lo comparte por su cuenta (siguiente paso natural). El texto del contacto compartido (con el número) sigue guardándose en `messages.content`/`metadata` sin cifrar (preexistente).
 
+### ADR-058: El teléfono se pide en Telegram solo a petición del usuario (`/vincular`), con un flujo fijo que no pasa por la IA
+- **Fecha:** 2026-09-20
+- **Contexto:** ADR-057 unifica contactos por teléfono verificado, pero Telegram solo entrega el número si el propio usuario lo comparte con un botón `request_contact`. Faltaba el flujo que lo ofrece.
+- **Decisión:**
+  - **Trigger:** el usuario escribe `/vincular` (o `/link`, con o sin `@NombreDelBot`). El bot **no** lo pide por iniciativa propia en el primer mensaje: pedir un dato personal sin que nadie lo haya pedido es intrusivo y no tiene base de consentimiento. Un mensaje que solo *contiene* la palabra "vincular" sigue a la IA.
+  - **Flujo fijo, fuera de la IA** (`app/services/contact_request.py`): un LLM no decide cuándo pedir un dato personal ni redacta el agradecimiento. `webhook_processor` responde con una tarea propia (`app.tasks.notification_send_channel_reply`, cola `notifications`, 3 reintentos, sin escalado a humano si se agotan: nadie espera una contestación) y no encola la IA.
+  - **Teclado:** `MessageContent.metadata` acepta `request_contact` (etiqueta del botón → `ReplyKeyboardMarkup` con `one_time_keyboard`) y `remove_keyboard`. `deliver_message` gana un parámetro `metadata` que se suma al contexto de hilo de email (manda el llamador).
+  - **Agradecimiento neutro:** al llegar el número (`verified_phone`) se agradece y se retira el teclado, **haya o no unificación**. Decir "te reconocí en WhatsApp" confirmaría que ese número ya pertenece a otro contacto. Sin `verified_phone` (tarjeta ajena o reenviada) el mensaje sigue a la IA como antes.
+  - **El número no queda en claro:** con un contacto propio verificado, `messages.content` guarda "Compartio su numero de telefono" y `raw_payload` (→ `messages.metadata`) lleva el número enmascarado. El número completo solo vive cifrado como identificador `verified_phone` y, de paso, en `verified_phone` durante el tránsito por la cola de Celery.
+  - No se responde si un humano tiene la conversación (`waiting_human`/`human_active`), igual que la IA.
+- **Consecuencia:** los textos están en español (como `HANDOFF_MESSAGES`); la traducción por tenant llega con el i18n del backend. El comando no está registrado en el menú de BotFather (`setMyCommands`): es un paso manual de configuración del bot.
+
 ---
 
 ## Bugs Conocidos y Pitfalls

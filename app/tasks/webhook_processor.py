@@ -39,6 +39,7 @@ from app.models.contact_identifier import ContactIdentifier
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.schemas.message import MessageTypeEnum, NormalizedMessage
+from app.services.contact_request import respuesta_del_flujo_de_telefono
 from app.services.dedup import get_redis, is_duplicate_persisted, persist_dedup
 from app.services.phone_unification import telefono_verificado, unificar_por_telefono
 
@@ -434,6 +435,19 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
             )
         return
 
+    # Pedir o agradecer el telefono es un flujo determinista: no pasa por la IA.
+    respuesta = respuesta_del_flujo_de_telefono(normalized)
+    if respuesta is not None:
+        _enqueue_channel_reply(
+            client_id=client_id,
+            conversation_id=conversation.id,
+            contact_id=contact.id,
+            channel=message_channel,
+            text=respuesta.text,
+            metadata=respuesta.metadata,
+        )
+        return
+
     # Fuera de la transaccion: la IA no debe encolarse si el commit fallo.
     _enqueue_ai_processing(
         client_id=client_id,
@@ -481,6 +495,46 @@ def _enqueue_transcription(
         logger.critical(
             "No se pudo encolar la transcripcion; el audio quedo guardado y sin "
             "respuesta automatica: conversation_id=%s",
+            conversation_id,
+            exc_info=True,
+        )
+
+
+def _enqueue_channel_reply(
+    client_id: UUID,
+    conversation_id: UUID,
+    contact_id: UUID,
+    channel: str,
+    text: str,
+    metadata: dict[str, Any] | None,
+) -> None:
+    """Encola una respuesta fija del sistema (no generada por la IA).
+
+    Misma politica de fallos que `_enqueue_ai_processing`: el mensaje entrante ya
+    esta commiteado, asi que un broker caido se registra y no se propaga.
+
+    Args:
+        client_id: Tenant propietario.
+        conversation_id: Conversacion a la que se responde.
+        contact_id: Contacto destinatario.
+        channel: Canal de origen.
+        text: Texto de la respuesta.
+        metadata: Datos propios del canal para el envio (teclado de Telegram).
+    """
+    try:
+        from app.tasks.channel_replies import send_channel_reply
+
+        send_channel_reply.delay(
+            client_id=str(client_id),
+            conversation_id=str(conversation_id),
+            contact_id=str(contact_id),
+            channel=channel,
+            text=text,
+            metadata=metadata,
+        )
+    except Exception:
+        logger.critical(
+            "No se pudo encolar la respuesta del sistema: conversation_id=%s",
             conversation_id,
             exc_info=True,
         )

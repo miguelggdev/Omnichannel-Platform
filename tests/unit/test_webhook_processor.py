@@ -811,6 +811,153 @@ class TestUnificacionDeContactos:
         assert resultado is contacto
 
 
+# ─── Flujo de vinculo de telefono (Telegram) ────────────────────────────────
+
+
+class TestFlujoDeTelefono:
+    """Pedir y agradecer el telefono no pasa por la IA."""
+
+    async def _correr(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        status: str = "bot_active",
+        **campos: Any,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        client_id = uuid.uuid4()
+        monkeypatch.setattr(wp, "_resolve_client_id", lambda provider, channel: client_id)
+
+        conversacion = type(
+            "Conversation", (), {"id": uuid.uuid4(), "status": status, "last_message_at": None}
+        )()
+        session = FakeSession(results=[None, conversacion])
+
+        class FakeTenantSession:
+            async def __aenter__(self) -> FakeSession:
+                return session
+
+            async def __aexit__(self, *exc: Any) -> None:
+                return None
+
+        monkeypatch.setattr(wp, "tenant_session", lambda _client_id: FakeTenantSession())
+
+        async def sin_duplicado(*args: Any, **kwargs: Any) -> bool:
+            return False
+
+        async def persistido_ok(*args: Any, **kwargs: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(wp, "is_duplicate_persisted", sin_duplicado)
+        monkeypatch.setattr(wp, "persist_dedup", persistido_ok)
+
+        ia: dict[str, Any] = {}
+        respuesta: dict[str, Any] = {}
+        monkeypatch.setattr(wp, "_enqueue_ai_processing", lambda **kw: ia.update(kw))
+        monkeypatch.setattr(wp, "_enqueue_channel_reply", lambda **kw: respuesta.update(kw))
+
+        message_data = {
+            "external_message_id": "tg.1",
+            "sender_identifier": "789",
+            "channel": "telegram",
+            "text": "hola",
+            "timestamp": "2026-09-09T20:00:00+00:00",
+            "raw_payload": {},
+            **campos,
+        }
+        await wp._process_message("telegram", "telegram", message_data)
+        return ia, respuesta
+
+    @pytest.mark.parametrize("comando", ["/vincular", "/link", "/vincular@MiBot"])
+    async def test_el_comando_ofrece_el_boton_y_no_llega_a_la_ia(
+        self, monkeypatch: pytest.MonkeyPatch, comando: str
+    ) -> None:
+        ia, respuesta = await self._correr(monkeypatch, text=comando)
+
+        assert ia == {}
+        assert respuesta["channel"] == "telegram"
+        assert respuesta["metadata"] == {"request_contact": "📱 Compartir mi numero"}
+
+    async def test_al_compartir_el_numero_se_agradece_y_no_llega_a_la_ia(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ia, respuesta = await self._correr(
+            monkeypatch, text="Compartio su numero de telefono", verified_phone="+573001234567"
+        )
+
+        assert ia == {}
+        assert respuesta["metadata"] == {"remove_keyboard": True}
+
+    async def test_un_mensaje_normal_sigue_a_la_ia(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ia, respuesta = await self._correr(monkeypatch, text="quiero una cita")
+
+        assert respuesta == {}
+        assert ia["channel"] == "telegram"
+
+    async def test_un_contacto_ajeno_sigue_a_la_ia(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Sin `verified_phone` no se agradece nada."""
+        ia, respuesta = await self._correr(monkeypatch, text="Contacto compartido: Grace +5730")
+
+        assert respuesta == {}
+        assert ia["channel"] == "telegram"
+
+    @pytest.mark.parametrize("status", ["human_active", "waiting_human"])
+    async def test_en_manos_de_un_humano_el_bot_no_responde(
+        self, monkeypatch: pytest.MonkeyPatch, status: str
+    ) -> None:
+        ia, respuesta = await self._correr(monkeypatch, status=status, text="/vincular")
+
+        assert ia == {}
+        assert respuesta == {}
+
+
+class TestEncoladoDeRespuestaFija:
+    """`_enqueue_channel_reply` serializa los ids y no propaga fallos del broker."""
+
+    def test_encola_con_ids_serializados(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.tasks import channel_replies
+
+        capturado: dict[str, Any] = {}
+        monkeypatch.setattr(
+            channel_replies.send_channel_reply, "delay", lambda **kw: capturado.update(kw)
+        )
+        ids = [uuid.uuid4() for _ in range(3)]
+
+        wp._enqueue_channel_reply(
+            client_id=ids[0],
+            conversation_id=ids[1],
+            contact_id=ids[2],
+            channel="telegram",
+            text="hola",
+            metadata={"remove_keyboard": True},
+        )
+
+        assert capturado == {
+            "client_id": str(ids[0]),
+            "conversation_id": str(ids[1]),
+            "contact_id": str(ids[2]),
+            "channel": "telegram",
+            "text": "hola",
+            "metadata": {"remove_keyboard": True},
+        }
+
+    def test_broker_caido_no_rompe_el_webhook(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.tasks import channel_replies
+
+        def _sin_broker(**kwargs: Any) -> None:
+            raise ConnectionError("broker caido")
+
+        monkeypatch.setattr(channel_replies.send_channel_reply, "delay", _sin_broker)
+
+        wp._enqueue_channel_reply(
+            client_id=uuid.uuid4(),
+            conversation_id=uuid.uuid4(),
+            contact_id=uuid.uuid4(),
+            channel="telegram",
+            text="hola",
+            metadata=None,
+        )
+
+
 # ─── Tarea Celery: reintentos y DLQ ──────────────────────────────────────────
 
 

@@ -231,6 +231,31 @@ class TestParseWebhook:
 
         assert normalizado.verified_phone is None
 
+    async def test_el_telefono_propio_no_queda_en_claro_en_el_texto_ni_en_el_payload(
+        self, provider: TelegramProvider
+    ) -> None:
+        """Se conserva cifrado como identificador; repetirlo en `messages` lo dejaria legible."""
+        update = _update(
+            contact={"phone_number": "+573001234567", "first_name": "Ada", "user_id": 789}
+        )
+
+        normalizado = await provider.parse_webhook(update)
+
+        assert normalizado.text == "Compartio su numero de telefono"
+        assert "3001234567" not in str(normalizado.raw_payload)
+        assert normalizado.raw_payload["message"]["contact"]["phone_number"].endswith("4567")
+        # El original no se muta.
+        assert update["message"]["contact"]["phone_number"] == "+573001234567"
+
+    async def test_un_contacto_ajeno_conserva_su_texto_original(
+        self, provider: TelegramProvider
+    ) -> None:
+        normalizado = await provider.parse_webhook(
+            _update(contact={"phone_number": "+573001234567", "first_name": "Grace", "user_id": 5})
+        )
+
+        assert normalizado.text == "Contacto compartido: Grace +573001234567"
+
     async def test_toque_de_boton(self, provider: TelegramProvider) -> None:
         """Un `callback_query` llega como texto y como `interactive_response`."""
         update = {
@@ -483,6 +508,80 @@ class TestSendMessage:
         assert [r.rsplit("/", 1)[1] for r, _ in api.peticiones] == ["sendPhoto", "sendMessage"]
         assert "caption" not in api.peticiones[0][1]
         assert api.peticiones[1][1]["text"] == pie
+
+
+class TestTecladoDeRespuesta:
+    """El boton `request_contact` y el retiro del teclado."""
+
+    async def test_request_contact_envia_un_teclado_que_pide_el_numero(
+        self, provider: TelegramProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = _instalar(monkeypatch, _Api())
+
+        await provider.send_message(
+            "789",
+            MessageContent(text="Comparte tu numero", metadata={"request_contact": "Compartir"}),
+            CONFIG,
+        )
+
+        metodo, cuerpo = api.peticiones[-1]
+        assert metodo.endswith("/sendMessage")
+        assert cuerpo["reply_markup"] == {
+            "keyboard": [[{"text": "Compartir", "request_contact": True}]],
+            "resize_keyboard": True,
+            "one_time_keyboard": True,
+        }
+
+    async def test_remove_keyboard_retira_el_teclado(
+        self, provider: TelegramProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = _instalar(monkeypatch, _Api())
+
+        await provider.send_message(
+            "789", MessageContent(text="Gracias", metadata={"remove_keyboard": True}), CONFIG
+        )
+
+        assert api.peticiones[-1][1]["reply_markup"] == {"remove_keyboard": True}
+
+    async def test_request_contact_gana_sobre_los_botones_inline(
+        self, provider: TelegramProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Un mensaje solo puede llevar un `reply_markup`."""
+        api = _instalar(monkeypatch, _Api())
+
+        await provider.send_message(
+            "789",
+            MessageContent(
+                text="x",
+                buttons=[{"title": "Si", "id": "si"}],
+                metadata={"request_contact": "Compartir"},
+            ),
+            CONFIG,
+        )
+
+        assert "keyboard" in api.peticiones[-1][1]["reply_markup"]
+        assert "inline_keyboard" not in api.peticiones[-1][1]["reply_markup"]
+
+    async def test_sin_metadata_no_hay_teclado(
+        self, provider: TelegramProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = _instalar(monkeypatch, _Api())
+
+        await provider.send_message("789", MessageContent(text="hola", metadata={}), CONFIG)
+
+        assert "reply_markup" not in api.peticiones[-1][1]
+
+    async def test_metadata_de_otro_canal_no_activa_teclados(
+        self, provider: TelegramProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """El hilo de email (`subject`, `in_reply_to`) no debe generar nada aqui."""
+        api = _instalar(monkeypatch, _Api())
+
+        await provider.send_message(
+            "789", MessageContent(text="hola", metadata={"subject": "Re: x"}), CONFIG
+        )
+
+        assert "reply_markup" not in api.peticiones[-1][1]
 
 
 class TestErrores:
