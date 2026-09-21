@@ -50,33 +50,49 @@ services:
       replicas: 2
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - JWT_SECRET=${JWT_SECRET}
-      - JWT_ALGORITHM=${JWT_ALGORITHM}
-      - JWT_EXPIRATION_MINUTES=${JWT_EXPIRATION_MINUTES}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - JWT_EXPIRATION_MINUTES=${JWT_EXPIRATION_MINUTES:-30}
+      - JWT_REFRESH_EXPIRATION_DAYS=${JWT_REFRESH_EXPIRATION_DAYS:-7}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_DEFAULT_MODEL=${OPENAI_DEFAULT_MODEL}
-      - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL}
-      - OPENAI_FALLBACK_MODEL=${OPENAI_FALLBACK_MODEL}
+      - OPENAI_CHAT_MODEL=${OPENAI_CHAT_MODEL:-gpt-4o}
+      - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      - OPENAI_FALLBACK_MODEL=${OPENAI_FALLBACK_MODEL:-gpt-4o-mini}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - YCLOUD_API_KEY=${YCLOUD_API_KEY}
       - YCLOUD_WEBHOOK_SECRET=${YCLOUD_WEBHOOK_SECRET}
-      - YCLOUD_BASE_URL=${YCLOUD_BASE_URL}
+      - YCLOUD_BASE_URL=${YCLOUD_BASE_URL:-https://api.ycloud.com/v2}
       - META_APP_SECRET=${META_APP_SECRET}
       - META_PAGE_ACCESS_TOKEN=${META_PAGE_ACCESS_TOKEN}
       - META_WEBHOOK_VERIFY_TOKEN=${META_WEBHOOK_VERIFY_TOKEN}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY}
       - SUPABASE_SECRET_KEY=${SUPABASE_SECRET_KEY}
+      - SUPABASE_STORAGE_BUCKET=${SUPABASE_STORAGE_BUCKET:-documents}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
-      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME}
-      - APP_ENV=${APP_ENV}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - LOG_FORMAT=${LOG_FORMAT}
-      - CORS_ORIGINS=${CORS_ORIGINS}
+      - OTEL_SERVICE_NAME=${OTEL_SERVICE_NAME:-omnichannel-api}
+      - APP_ENV=${APP_ENV:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-console}
+      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000"]}
+      - DEFAULT_CLIENT_ID=${DEFAULT_CLIENT_ID}
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET}
+      - EMAIL_INBOUND_WEBHOOK_SECRET=${EMAIL_INBOUND_WEBHOOK_SECRET}
+      # Webchat (WebSocket): vacio = desactivado.
+      - WEBCHAT_CHANNEL_TOKEN=${WEBCHAT_CHANNEL_TOKEN}
+      - WEBCHAT_ALLOWED_ORIGINS=${WEBCHAT_ALLOWED_ORIGINS:-[]}
+      - WEBCHAT_SESSION_TTL_DAYS=${WEBCHAT_SESSION_TTL_DAYS:-30}
+      - WEBCHAT_MAX_MESSAGES_PER_MINUTE=${WEBCHAT_MAX_MESSAGES_PER_MINUTE:-20}
+      - WEBCHAT_MAX_MESSAGE_CHARS=${WEBCHAT_MAX_MESSAGE_CHARS:-4000}
+      - WEBCHAT_MAX_FRAME_BYTES=${WEBCHAT_MAX_FRAME_BYTES:-16384}
+      - WEBCHAT_MAX_CONNECTIONS_PER_VISITOR=${WEBCHAT_MAX_CONNECTIONS_PER_VISITOR:-5}
+      - WEBCHAT_HELLO_TIMEOUT_SECONDS=${WEBCHAT_HELLO_TIMEOUT_SECONDS:-10}
+      - WEBCHAT_IDLE_TIMEOUT_SECONDS=${WEBCHAT_IDLE_TIMEOUT_SECONDS:-120}
+      - WEBCHAT_REPLAY_LIMIT=${WEBCHAT_REPLAY_LIMIT:-50}
       - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
     tmpfs:
@@ -151,7 +167,7 @@ services:
       -n webhooks@%h
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -159,8 +175,8 @@ services:
       - META_APP_SECRET=${META_APP_SECRET}
       - META_PAGE_ACCESS_TOKEN=${META_PAGE_ACCESS_TOKEN}
       - DEFAULT_CLIENT_ID=${DEFAULT_CLIENT_ID}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - LOG_FORMAT=${LOG_FORMAT}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-console}
       - JWT_SECRET=${JWT_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
@@ -202,19 +218,36 @@ services:
       -n ai@%h
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_DEFAULT_MODEL=${OPENAI_DEFAULT_MODEL}
-      - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL}
-      - OPENAI_FALLBACK_MODEL=${OPENAI_FALLBACK_MODEL}
+      - OPENAI_CHAT_MODEL=${OPENAI_CHAT_MODEL:-gpt-4o}
+      - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      - OPENAI_FALLBACK_MODEL=${OPENAI_FALLBACK_MODEL:-gpt-4o-mini}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # Agente de agendamiento (Sprint 7): Google Calendar.
+      - GOOGLE_CALENDAR_CREDENTIALS_JSON=${GOOGLE_CALENDAR_CREDENTIALS_JSON}
+      - GOOGLE_CALENDAR_ID=${GOOGLE_CALENDAR_ID:-primary}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - LOG_FORMAT=${LOG_FORMAT}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-console}
       - JWT_SECRET=${JWT_SECRET}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - DEFAULT_CLIENT_ID=${DEFAULT_CLIENT_ID}
+      - YCLOUD_API_KEY=${YCLOUD_API_KEY}
+      - YCLOUD_PHONE_NUMBER_ID=${YCLOUD_PHONE_NUMBER_ID}
+      - YCLOUD_BASE_URL=${YCLOUD_BASE_URL:-https://api.ycloud.com/v2}
+      - META_PAGE_ACCESS_TOKEN=${META_PAGE_ACCESS_TOKEN}
+      - META_GRAPH_API_VERSION=${META_GRAPH_API_VERSION:-v19.0}
+      - TELEGRAM_CHANNEL_BOT_TOKEN=${TELEGRAM_CHANNEL_BOT_TOKEN}
+      - TELEGRAM_API_BASE_URL=${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
+      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST}
+      - EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT:-587}
+      - EMAIL_SMTP_USER=${EMAIL_SMTP_USER}
+      - EMAIL_SMTP_PASSWORD=${EMAIL_SMTP_PASSWORD}
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-Soporte}
       - OTEL_SERVICE_NAME=omnichannel-worker-ai
       - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
@@ -253,14 +286,18 @@ services:
       -n documents@%h
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL}
+      - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      # `document_pipeline` descarga el archivo subido desde Supabase Storage.
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SECRET_KEY=${SUPABASE_SECRET_KEY}
+      - SUPABASE_STORAGE_BUCKET=${SUPABASE_STORAGE_BUCKET:-documents}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - LOG_FORMAT=${LOG_FORMAT}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-console}
       - JWT_SECRET=${JWT_SECRET}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_SERVICE_NAME=omnichannel-worker-documents
@@ -301,16 +338,28 @@ services:
       -n notifications@%h
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
       - YCLOUD_API_KEY=${YCLOUD_API_KEY}
       - META_PAGE_ACCESS_TOKEN=${META_PAGE_ACCESS_TOKEN}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - LOG_FORMAT=${LOG_FORMAT}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-console}
       - JWT_SECRET=${JWT_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - DEFAULT_CLIENT_ID=${DEFAULT_CLIENT_ID}
+      - YCLOUD_PHONE_NUMBER_ID=${YCLOUD_PHONE_NUMBER_ID}
+      - YCLOUD_BASE_URL=${YCLOUD_BASE_URL:-https://api.ycloud.com/v2}
+      - META_GRAPH_API_VERSION=${META_GRAPH_API_VERSION:-v19.0}
+      - TELEGRAM_CHANNEL_BOT_TOKEN=${TELEGRAM_CHANNEL_BOT_TOKEN}
+      - TELEGRAM_API_BASE_URL=${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
+      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST}
+      - EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT:-587}
+      - EMAIL_SMTP_USER=${EMAIL_SMTP_USER}
+      - EMAIL_SMTP_PASSWORD=${EMAIL_SMTP_PASSWORD}
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-Soporte}
       - OTEL_SERVICE_NAME=omnichannel-worker-notifications
       - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
@@ -349,15 +398,16 @@ services:
       -n bulk@%h
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - LOG_FORMAT=${LOG_FORMAT}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-console}
       - JWT_SECRET=${JWT_SECRET}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - DEFAULT_CLIENT_ID=${DEFAULT_CLIENT_ID}
       - OTEL_SERVICE_NAME=omnichannel-worker-bulk
       - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
@@ -397,7 +447,7 @@ services:
       -n lead-enrichment@%h
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -408,8 +458,8 @@ services:
       - BLAND_AI_API_KEY=${BLAND_AI_API_KEY}
       - BLAND_AI_PHONE_NUMBER=${BLAND_AI_PHONE_NUMBER}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      - LOG_LEVEL=${LOG_LEVEL}
-      - LOG_FORMAT=${LOG_FORMAT}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-console}
       - JWT_SECRET=${JWT_SECRET}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - OTEL_SERVICE_NAME=omnichannel-worker-lead-enrichment
@@ -433,6 +483,77 @@ services:
       start_period: 40s
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # 9b. CELERY-MEDIA — Worker para transcripcion de audio (Whisper)
+  #     Concurrencia: 2 (descarga + llamada a la API de OpenAI, hasta 100 s por tarea)
+  #     ADR-060: cola propia para que una nota de voz larga no bloquee las respuestas
+  #     del LLM (`ai_inference` corre con concurrency 2).
+  #     Necesita las credenciales de los canales: si no se puede transcribir, la tarea
+  #     escala a un humano y eso ENVIA un mensaje al contacto.
+  # ─────────────────────────────────────────────────────────────────────────────
+  celery-media:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    command: >
+      celery -A app.tasks.celery_config worker
+      -Q media
+      -c ${CELERY_MEDIA_CONCURRENCY:-2}
+      --loglevel=${LOG_LEVEL:-info}
+      -n media@%h
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - WHISPER_MODEL=${WHISPER_MODEL:-whisper-1}
+      - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-}
+      - WHISPER_MAX_AUDIO_BYTES=${WHISPER_MAX_AUDIO_BYTES:-20971520}
+      - WHISPER_COST_PER_MINUTE_USD=${WHISPER_COST_PER_MINUTE_USD:-0.006}
+      - WHISPER_TIMEOUT_SECONDS=${WHISPER_TIMEOUT_SECONDS:-60}
+      - MEDIA_DOWNLOAD_TIMEOUT_SECONDS=${MEDIA_DOWNLOAD_TIMEOUT_SECONDS:-30}
+      - DEFAULT_CLIENT_ID=${DEFAULT_CLIENT_ID}
+      - YCLOUD_API_KEY=${YCLOUD_API_KEY}
+      - YCLOUD_PHONE_NUMBER_ID=${YCLOUD_PHONE_NUMBER_ID}
+      - YCLOUD_BASE_URL=${YCLOUD_BASE_URL:-https://api.ycloud.com/v2}
+      - META_PAGE_ACCESS_TOKEN=${META_PAGE_ACCESS_TOKEN}
+      - META_GRAPH_API_VERSION=${META_GRAPH_API_VERSION:-v19.0}
+      - TELEGRAM_CHANNEL_BOT_TOKEN=${TELEGRAM_CHANNEL_BOT_TOKEN}
+      - TELEGRAM_API_BASE_URL=${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
+      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST}
+      - EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT:-587}
+      - EMAIL_SMTP_USER=${EMAIL_SMTP_USER}
+      - EMAIL_SMTP_PASSWORD=${EMAIL_SMTP_PASSWORD}
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-Soporte}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-console}
+      - JWT_SECRET=${JWT_SECRET}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_SERVICE_NAME=omnichannel-worker-media
+      - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+    tmpfs:
+      # Metricas multiproceso de prometheus_client: en RAM y vacio en
+      # cada arranque, que es lo que exige el modo multiproceso (si
+      # arrastra ficheros de procesos muertos, los suma al scrape).
+      - /tmp/prometheus
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_config inspect ping -d media@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # 10. CELERY-BEAT — Scheduler para tareas periodicas
   # ─────────────────────────────────────────────────────────────────────────────
   celery-beat:
@@ -447,10 +568,10 @@ services:
       --schedule=/tmp/celerybeat-schedule
     environment:
       - DATABASE_URL=${DATABASE_URL}
-      - REDIS_URL=${REDIS_URL}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
-      - LOG_LEVEL=${LOG_LEVEL}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - JWT_SECRET=${JWT_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
@@ -511,7 +632,7 @@ services:
     environment:
       REDIS_ADDR: redis://redis:6379
       REDIS_EXPORTER_CHECK_KEYS: >-
-        0=webhooks,0=ai_inference,0=documents,0=notifications,0=bulk,0=lead_enrichment
+        0=webhooks,0=ai_inference,0=documents,0=notifications,0=bulk,0=lead_enrichment,0=media
     networks:
       - backend
     depends_on:
