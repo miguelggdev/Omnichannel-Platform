@@ -56,6 +56,7 @@ CHANNEL_PROVIDERS: dict[str, str] = {
     "facebook": "meta",
     "telegram": "telegram",
     "email": "email",
+    "webchat": "webchat",
 }
 
 
@@ -256,6 +257,10 @@ def get_channel_config(channel: str) -> tuple[str, dict[str, Any]]:
         }
     elif provider_name == "telegram":
         config = {"bot_token": settings.TELEGRAM_CHANNEL_BOT_TOKEN}
+    elif provider_name == "webchat":
+        # Sin credenciales: el tenant forma parte del nombre del canal de Redis
+        # por el que se entrega (`DEFAULT_CLIENT_ID`, ADR-030).
+        config = {"client_id": settings.DEFAULT_CLIENT_ID}
     elif provider_name == "email":
         config = {
             "smtp_host": settings.EMAIL_SMTP_HOST,

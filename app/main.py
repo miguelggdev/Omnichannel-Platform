@@ -25,6 +25,7 @@ from app.api.v1.notes import router as notes_router
 from app.api.v1.quick_replies import router as quick_replies_router
 from app.api.v1.tags import contact_tags_router
 from app.api.v1.tags import router as tags_router
+from app.api.v1.webchat import router as webchat_router
 from app.api.v1.webhooks import router as webhooks_router
 from app.core.config import get_settings
 from app.core.database import dispose_db, engine, init_db
@@ -146,6 +147,7 @@ def create_app() -> FastAPI:
     # Los webhooks NO pasan por TenantContextMiddleware: se autentican por firma
     # HMAC. El prefijo debe coincidir con WEBHOOK_PATHS_PREFIX del middleware.
     app.include_router(webhooks_router, prefix="/api/v1/webhooks", tags=["webhooks"])
+    app.include_router(webchat_router, prefix="/api/v1/webchat", tags=["webchat"])
     app.include_router(documents_router, prefix="/api/v1/documents", tags=["documents"])
     app.include_router(contacts_router, prefix="/api/v1/contacts", tags=["contacts"])
     # Notas y etiquetas de un contacto cuelgan del propio contacto:

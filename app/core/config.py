@@ -86,6 +86,23 @@ class Settings(BaseSettings):
     TELEGRAM_WEBHOOK_SECRET: str = ""
     TELEGRAM_API_BASE_URL: str = "https://api.telegram.org"
 
+    # Webchat (WebSocket) — Sprint 9. `WEBCHAT_CHANNEL_TOKEN` identifica el canal
+    # en la URL del widget (`/api/v1/webchat/{token}`); NO es un secreto (va en el
+    # JS de la pagina del cliente) y vacio deja el webchat desactivado. Lo que
+    # protege el canal es el Origin, el limite de mensajes y la sesion firmada.
+    WEBCHAT_CHANNEL_TOKEN: str = ""
+    # Origenes desde los que se acepta el widget; vacio = los de `CORS_ORIGINS`.
+    WEBCHAT_ALLOWED_ORIGINS: list[str] = []
+    WEBCHAT_SESSION_TTL_DAYS: int = 30
+    WEBCHAT_MAX_MESSAGE_CHARS: int = 4000
+    WEBCHAT_MAX_FRAME_BYTES: int = 16 * 1024
+    WEBCHAT_MAX_MESSAGES_PER_MINUTE: int = 20
+    WEBCHAT_MAX_CONNECTIONS_PER_VISITOR: int = 5
+    WEBCHAT_HELLO_TIMEOUT_SECONDS: float = 10.0
+    # Sin ningun frame (el widget manda `ping` cada ~25 s) se cierra la conexion.
+    WEBCHAT_IDLE_TIMEOUT_SECONDS: float = 120.0
+    WEBCHAT_REPLAY_LIMIT: int = 50
+
     # Email como canal de clientes — Sprint 9. Salida por SMTP; entrada por el
     # Inbound Parse de SendGrid o Mailgun (POST /api/v1/webhooks/email/email).
     # Globales, como el resto de canales, hasta que exista `channel_configs`.

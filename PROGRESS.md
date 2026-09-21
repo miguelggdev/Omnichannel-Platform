@@ -466,7 +466,7 @@ Leyendo el log, no el checkmark. **Los 9 jobs en verde:**
 - [x] ADR-053, ADR-054, ADR-055, BUG-039 y BUG-040 registrados en MEMORY.md
 
 ### Pendiente — Dev B (matriz METHODOLOGY.md §Sprint 9)
-- [ ] `WebchatProvider` + `app/api/v1/webchat.py` (WebSocket) + `app/schemas/webchat.py`
+- [x] `WebchatProvider` + `app/api/v1/webchat.py` (WebSocket) + `app/schemas/webchat.py` — rama `feature/sprint-09-webchat`, ADR-059. Falta el widget JS y el media.
 - [x] Transcripción de audio con Whisper (`app/tasks/audio_transcription.py`, `app/services/transcription.py`) — rama `feature/sprint-09-whisper`, ADR-056
 
 ### Lo que necesita saber Dev B (contratos que deja esta entrega)

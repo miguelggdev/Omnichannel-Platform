@@ -25,6 +25,7 @@ from sqlalchemy import text
 from app.agents.nodes import _delivery as delivery_module
 from app.core.config import get_settings
 from app.core.database import tenant_session
+from app.core.encryption import blind_index
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.message import Message
@@ -722,3 +723,244 @@ class TestFlujoDeTelefonoTelegram:
         )
         assert TELEFONO not in filas[0].content
         assert TELEFONO not in filas[0].crudo
+
+
+VISITANTE = "a1" * 16
+
+
+def _webchat(visitor: str, external: str, texto: str = "hola", **extra: Any) -> dict[str, Any]:
+    """Mensaje de Webchat ya normalizado, como lo deja el endpoint del WebSocket."""
+    return _normalized(
+        "webchat",
+        visitor,
+        f"{visitor}:{external}",
+        texto,
+        raw_payload={"visitor_id": visitor, "message_id": external},
+        **extra,
+    )
+
+
+async def _guardar_salientes(
+    client_id: uuid.UUID, visitor: str, textos: list[str], *, desde: int = 0
+) -> list[str]:
+    """Guarda mensajes salientes de la conversacion de Webchat del visitante.
+
+    Args:
+        client_id: Tenant.
+        visitor: Visitante (su conversacion debe existir).
+        textos: Contenidos, en orden cronologico.
+        desde: Segundo (de un dia fijo) del primer mensaje, para ordenar entre llamadas.
+
+    Returns:
+        Los `message_id` (`external_message_id`) asignados.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    (fila,) = await _filas(
+        client_id,
+        "SELECT cv.id FROM conversations cv "
+        "JOIN contact_identifiers ci ON ci.contact_id = cv.contact_id "
+        "WHERE cv.client_id = :cid AND cv.channel = 'webchat' AND ci.channel = 'webchat' "
+        "AND ci.identifier_hash = :h",
+        h=blind_index(visitor, client_id),
+    )
+    base = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
+    ids: list[str] = []
+    async with tenant_session(client_id) as session:
+        for i, texto in enumerate(textos):
+            externo = f"out-{visitor[:4]}-{desde + i}"
+            ids.append(externo)
+            session.add(
+                Message(
+                    client_id=client_id,
+                    conversation_id=fila.id,
+                    direction="outbound",
+                    message_type="text",
+                    content=texto,
+                    external_message_id=externo,
+                    sender_type="bot",
+                    created_at=base + timedelta(seconds=desde + i),
+                )
+            )
+    return ids
+
+
+class TestWebchat:
+    """Un visitante de Webchat recorre el mismo camino que cualquier otro canal."""
+
+    async def test_el_primer_mensaje_crea_contacto_identificador_y_conversacion(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        await _process_message(
+            "webchat", "webchat", _webchat(VISITANTE, "m1", sender_name="Ada Visitante")
+        )
+
+        fila = await _una_fila(
+            webhook_tenant,
+            "SELECT c.display_name, cv.channel, m.content, m.direction "
+            "FROM contacts c JOIN conversations cv ON cv.contact_id = c.id "
+            "JOIN messages m ON m.conversation_id = cv.id WHERE c.client_id = :cid",
+        )
+        assert fila.display_name == "Ada Visitante"
+        assert fila.channel == "webchat"
+        assert (fila.content, fila.direction) == ("hola", "inbound")
+
+    async def test_el_visitor_id_queda_cifrado_y_el_visitante_se_reencuentra(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        await _process_message("webchat", "webchat", _webchat(VISITANTE, "m1"))
+        await _process_message("webchat", "webchat", _webchat(VISITANTE, "m2", "otra vez"))
+
+        assert len(await _activos(webhook_tenant)) == 1
+        assert await _contar(webhook_tenant, "conversations") == 1
+        (fila,) = await _filas(
+            webhook_tenant,
+            "SELECT identifier_value FROM contact_identifiers WHERE client_id = :cid",
+        )
+        assert VISITANTE.encode() not in bytes(fila.identifier_value)
+
+    async def test_dos_visitantes_son_dos_contactos(self, webhook_tenant: uuid.UUID) -> None:
+        await _process_message("webchat", "webchat", _webchat("1" * 32, "m1"))
+        await _process_message("webchat", "webchat", _webchat("2" * 32, "m1"))
+
+        assert len(await _activos(webhook_tenant)) == 2
+
+    async def test_un_visitante_no_se_une_a_otro_canal_aunque_el_id_se_parezca(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        await _whatsapp("w1", TELEFONO)
+        await _process_message("webchat", "webchat", _webchat(TELEFONO, "m1"))
+
+        assert len(await _activos(webhook_tenant)) == 2
+
+
+class TestWebchatRecuperacion:
+    """Lo que un visitante se perdio mientras estuvo desconectado."""
+
+    async def _preparar(self, tenant: uuid.UUID, textos: list[str]) -> list[str]:
+        await _process_message("webchat", "webchat", _webchat(VISITANTE, "m1"))
+        return await _guardar_salientes(tenant, VISITANTE, textos)
+
+    async def test_un_visitante_nuevo_recibe_lo_ultimo_en_orden(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        from app.services.webchat_history import mensajes_perdidos
+
+        ids = await self._preparar(webhook_tenant, ["uno", "dos", "tres"])
+
+        frames = await mensajes_perdidos(webhook_tenant, VISITANTE, None, 50)
+
+        assert [f["text"] for f in frames] == ["uno", "dos", "tres"]
+        assert [f["message_id"] for f in frames] == ids
+        assert all(f["type"] == "message" and f["timestamp"] for f in frames)
+
+    async def test_con_el_ultimo_visto_solo_llega_lo_posterior(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        from app.services.webchat_history import mensajes_perdidos
+
+        ids = await self._preparar(webhook_tenant, ["uno", "dos", "tres", "cuatro"])
+
+        frames = await mensajes_perdidos(webhook_tenant, VISITANTE, ids[1], 50)
+
+        assert [f["text"] for f in frames] == ["tres", "cuatro"]
+
+    async def test_un_last_message_id_desconocido_cae_en_los_ultimos(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        from app.services.webchat_history import mensajes_perdidos
+
+        await self._preparar(webhook_tenant, ["uno", "dos"])
+
+        frames = await mensajes_perdidos(webhook_tenant, VISITANTE, "no-existe", 50)
+
+        assert [f["text"] for f in frames] == ["uno", "dos"]
+
+    async def test_el_limite_devuelve_los_ultimos_y_en_orden(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        from app.services.webchat_history import mensajes_perdidos
+
+        await self._preparar(webhook_tenant, ["uno", "dos", "tres", "cuatro"])
+
+        frames = await mensajes_perdidos(webhook_tenant, VISITANTE, None, 2)
+
+        assert [f["text"] for f in frames] == ["tres", "cuatro"]
+
+    async def test_no_incluye_los_mensajes_del_propio_visitante(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        from app.services.webchat_history import mensajes_perdidos
+
+        await self._preparar(webhook_tenant, ["respuesta"])
+
+        frames = await mensajes_perdidos(webhook_tenant, VISITANTE, None, 50)
+
+        assert [f["text"] for f in frames] == ["respuesta"]
+
+    async def test_un_visitante_sin_historial_recibe_una_lista_vacia(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        from app.services.webchat_history import mensajes_perdidos
+
+        assert await mensajes_perdidos(webhook_tenant, "9" * 32, None, 50) == []
+
+    async def test_no_se_ve_la_conversacion_de_otro_visitante(
+        self, webhook_tenant: uuid.UUID
+    ) -> None:
+        """Ni con su `visitor_id` ni con el `last_message_id` de un mensaje ajeno."""
+        from app.services.webchat_history import mensajes_perdidos
+
+        ids = await self._preparar(webhook_tenant, ["secreto de A"])
+        await _process_message("webchat", "webchat", _webchat("b" * 32, "m1"))
+
+        # B no tiene salientes; con el id de un mensaje de A no obtiene nada de A.
+        frames = await mensajes_perdidos(webhook_tenant, "b" * 32, ids[0], 50)
+
+        assert frames == []
+
+    async def test_otro_tenant_no_encuentra_al_visitante(
+        self, webhook_tenant: uuid.UUID, otro_tenant: uuid.UUID
+    ) -> None:
+        from app.services.webchat_history import mensajes_perdidos
+
+        await self._preparar(webhook_tenant, ["secreto"])
+
+        assert await mensajes_perdidos(otro_tenant, VISITANTE, None, 50) == []
+
+    async def test_lo_entregado_en_vivo_y_lo_recuperado_comparten_message_id(
+        self, webhook_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Es lo que permite al cliente deduplicar lo que le llega por las dos vias."""
+        import json
+
+        from app.services.messaging import webchat as wc
+        from app.services.webchat_history import mensajes_perdidos
+
+        publicados: list[tuple[str, str]] = []
+
+        class RedisFalso:
+            async def publish(self, canal: str, mensaje: str) -> int:
+                publicados.append((canal, mensaje))
+                return 0
+
+        monkeypatch.setattr(wc, "get_redis", lambda: RedisFalso())
+        await _process_message("webchat", "webchat", _webchat(VISITANTE, "m1"))
+        (fila,) = await _filas(
+            webhook_tenant, "SELECT id, contact_id FROM conversations WHERE client_id = :cid"
+        )
+
+        await delivery_module.deliver_message(
+            client_id=webhook_tenant,
+            conversation_id=uuid.UUID(str(fila.id)),
+            contact_id=uuid.UUID(str(fila.contact_id)),
+            channel="webchat",
+            text="Hola, ¿en que te ayudo?",
+        )
+
+        (canal, cuerpo) = publicados[0]
+        en_vivo = json.loads(cuerpo)
+        assert canal.startswith(f"webchat:out:{webhook_tenant}:")
+        assert canal.endswith(VISITANTE)
+        recuperado = await mensajes_perdidos(webhook_tenant, VISITANTE, None, 50)
+        assert [f["message_id"] for f in recuperado] == [en_vivo["message_id"]]
