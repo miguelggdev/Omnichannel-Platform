@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 import yaml
+from pydantic_core import PydanticUndefined
 
 from app.core.config import Settings
 from app.tasks import audio_transcription
@@ -26,7 +27,9 @@ ENV_CANALES = frozenset(
         "DEFAULT_CLIENT_ID",
         "YCLOUD_API_KEY",
         "YCLOUD_PHONE_NUMBER_ID",
+        "YCLOUD_BASE_URL",
         "META_PAGE_ACCESS_TOKEN",
+        "META_GRAPH_API_VERSION",
         "TELEGRAM_CHANNEL_BOT_TOKEN",
         "TELEGRAM_API_BASE_URL",
         "EMAIL_SMTP_HOST",
@@ -182,10 +185,16 @@ class TestCredencialesDeCanales:
 
 
 class TestDefaultsDeVariablesNoTexto:
-    """`${X}` sin definir llega como cadena vacia: un `int`, un `float` o una lista de
+    """Vale para TODAS las variables de `Settings` que el compose pasa, no solo las nuevas.
+
+    `${X}` sin definir llega como cadena vacia: un `int`, un `float` o una lista de
     `Settings` con "" revientan al arrancar (o pierden su valor por defecto)."""
 
-    GESTIONADAS = ENV_CANALES | ENV_WHISPER | ENV_API_CANALES | {"CELERY_MEDIA_CONCURRENCY"}
+    @staticmethod
+    def _tiene_default(nombre: str) -> bool:
+        """Los campos obligatorios (`DATABASE_URL`, `JWT_SECRET`) no tienen default."""
+        campo = Settings.model_fields.get(nombre)
+        return campo is not None and campo.default is not PydanticUndefined
 
     @staticmethod
     def _no_texto(nombre: str) -> bool:
@@ -200,7 +209,9 @@ class TestDefaultsDeVariablesNoTexto:
     ) -> None:
         for nombre_servicio, servicio in servicios.items():
             for nombre, valor in _env(servicio).items():
-                if nombre in self.GESTIONADAS and self._no_texto(nombre):
+                if not valor.startswith("${"):
+                    continue  # valor fijo: no depende del entorno
+                if self._no_texto(nombre) and self._tiene_default(nombre):
                     assert ":-" in valor, (
                         f"{nombre_servicio}: {nombre}={valor} llega vacia si no se define"
                     )
@@ -211,11 +222,87 @@ class TestDefaultsDeVariablesNoTexto:
         """`${WHISPER_MODEL}` sin definir pisaria el `whisper-1` de `Settings` con ''."""
         for nombre_servicio, servicio in servicios.items():
             for nombre, valor in _env(servicio).items():
+                if not valor.startswith("${"):
+                    continue  # valor fijo: no depende del entorno
                 campo = Settings.model_fields.get(nombre)
-                if nombre not in self.GESTIONADAS or campo is None or self._no_texto(nombre):
+                if campo is None or self._no_texto(nombre) or not self._tiene_default(nombre):
                     continue
                 if isinstance(campo.default, str) and campo.default:
                     assert ":-" in valor, (
                         f"{nombre_servicio}: {nombre}={valor} pisa el default "
                         f"{campo.default!r} con una cadena vacia"
                     )
+
+
+#: Variables que el compose pasa a un servicio y que `Settings` no lee, a proposito:
+#: las leen otras piezas (Celery, OpenTelemetry, el modo multiproceso de Prometheus) o
+#: los proveedores de enriquecimiento, que no pasan por `Settings`.
+NO_SETTINGS_PERMITIDAS = frozenset(
+    {
+        "CELERY_BROKER_URL",
+        "CELERY_RESULT_BACKEND",
+        "OTEL_SERVICE_NAME",
+        "PROMETHEUS_MULTIPROC_DIR",
+        "BLAND_AI_API_KEY",
+        "BLAND_AI_PHONE_NUMBER",
+        "CLEARBIT_API_KEY",
+        "HUNTER_API_KEY",
+        "VAPI_API_KEY",
+        "VAPI_PHONE_NUMBER",
+    }
+)
+
+#: Lo que necesita cada servicio ademas de lo comun, segun el codigo que ejecuta.
+REQUERIDAS_POR_SERVICIO: dict[str, frozenset[str]] = {
+    # `auto_close` resuelve el tenant con DEFAULT_CLIENT_ID.
+    "celery-bulk": frozenset({"DEFAULT_CLIENT_ID"}),
+    # `document_pipeline` descarga el archivo subido desde Supabase Storage.
+    "celery-documents": frozenset(
+        {"SUPABASE_URL", "SUPABASE_SECRET_KEY", "SUPABASE_STORAGE_BUCKET", "OPENAI_EMBEDDING_MODEL"}
+    ),
+    # El agente de agendamiento usa Google Calendar; el modelo de chat lo lee `_tenant`.
+    "celery-ai": frozenset(
+        {"GOOGLE_CALENDAR_CREDENTIALS_JSON", "GOOGLE_CALENDAR_ID", "OPENAI_CHAT_MODEL"}
+    ),
+    "api": frozenset({"SUPABASE_STORAGE_BUCKET", "JWT_REFRESH_EXPIRATION_DAYS"}),
+}
+
+
+class TestOtrosWorkers:
+    """Lo que el codigo de cada servicio lee de `Settings` y el compose debe pasarle."""
+
+    @pytest.mark.parametrize("nombre", sorted(REQUERIDAS_POR_SERVICIO))
+    def test_el_servicio_declara_lo_que_su_codigo_lee(
+        self, servicios: dict[str, dict[str, Any]], nombre: str
+    ) -> None:
+        faltan = REQUERIDAS_POR_SERVICIO[nombre] - _env(servicios[nombre]).keys()
+
+        assert not faltan, f"{nombre} no declara {sorted(faltan)}"
+
+    def test_la_api_expone_todos_los_limites_del_webchat(
+        self, servicios: dict[str, dict[str, Any]]
+    ) -> None:
+        """Si se agrega un limite `WEBCHAT_*` a `Settings`, el compose debe poder cambiarlo."""
+        del_settings = {n for n in Settings.model_fields if n.startswith("WEBCHAT_")}
+
+        assert del_settings <= _env(servicios["api"]).keys()
+
+    def test_el_modelo_de_chat_usa_el_nombre_que_lee_settings(
+        self, servicios: dict[str, dict[str, Any]]
+    ) -> None:
+        """El compose pasaba `OPENAI_DEFAULT_MODEL`, que `Settings` ignora: el modelo por
+        defecto no se podia cambiar desde el entorno."""
+        for nombre, servicio in servicios.items():
+            assert "OPENAI_DEFAULT_MODEL" not in _env(servicio), nombre
+
+    def test_ninguna_variable_del_compose_es_ignorada_por_settings(
+        self, servicios: dict[str, dict[str, Any]]
+    ) -> None:
+        """Una variable mal escrita en el compose no falla: simplemente no hace nada."""
+        for nombre, servicio in servicios.items():
+            if nombre != "api" and not nombre.startswith("celery-"):
+                continue
+            for variable in _env(servicio):
+                assert variable in Settings.model_fields or variable in NO_SETTINGS_PERMITIDAS, (
+                    f"{nombre}: {variable} no es un campo de Settings"
+                )
