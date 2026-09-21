@@ -32,7 +32,7 @@ set -euo pipefail
 
 REVISION_ANTERIOR="008_encrypt_contact_identifiers"
 REVISION_OBJETIVO="009_blind_index_per_tenant"
-SERVICIOS="${SERVICIOS:-api celery-webhooks celery-ai celery-documents celery-notifications celery-bulk celery-lead-enrichment celery-beat}"
+SERVICIOS="${SERVICIOS:-api celery-webhooks celery-ai celery-media celery-documents celery-notifications celery-bulk celery-lead-enrichment celery-beat}"
 COMPOSE="${COMPOSE:-docker compose}"
 
 EJECUTAR=0

@@ -1,8 +1,11 @@
 """Worker de Celery que transcribe los audios entrantes antes de pasarlos a la IA.
 
-Cola: `ai_inference` (el nombre empieza por `app.tasks.ai_`, asi que el
-`task_routes` de `celery_config.py` la enruta sola). Se ejecuta entre la
-persistencia del mensaje (`webhook_processor`) y el grafo (`ai_processor`):
+Cola: `media` (el nombre empieza por `app.tasks.media_`, asi que el
+`task_routes` de `celery_config.py` la enruta sola; worker `celery-media`).
+Va aparte de `ai_inference` porque una transcripcion puede tardar hasta 100 s
+y esa cola corre con concurrency 2: dos notas de voz largas bloquearian las
+respuestas del LLM de todos los tenants. Se ejecuta entre la persistencia del
+mensaje (`webhook_processor`) y el grafo (`ai_processor`):
 
 1. Resuelve la URL del medio (en Telegram hay que pedirle a `getFile` una URL de
    descarga; la de WhatsApp/Instagram/Facebook ya viene en el mensaje).
@@ -244,11 +247,11 @@ async def _escalar_si_corresponde(
 
 
 @shared_task(
-    name="app.tasks.ai_transcribe_audio",
+    name="app.tasks.media_transcribe_audio",
     bind=True,
     max_retries=2,
     acks_late=True,
-    queue="ai_inference",
+    queue="media",
     time_limit=120,
     soft_time_limit=100,
 )
