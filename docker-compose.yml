@@ -77,6 +77,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL}
       - LOG_FORMAT=${LOG_FORMAT}
       - CORS_ORIGINS=${CORS_ORIGINS}
+      - DEFAULT_CLIENT_ID=${DEFAULT_CLIENT_ID}
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET}
+      - EMAIL_INBOUND_WEBHOOK_SECRET=${EMAIL_INBOUND_WEBHOOK_SECRET}
+      # Webchat (WebSocket): vacio = desactivado.
+      - WEBCHAT_CHANNEL_TOKEN=${WEBCHAT_CHANNEL_TOKEN}
+      - WEBCHAT_ALLOWED_ORIGINS=${WEBCHAT_ALLOWED_ORIGINS:-[]}
+      - WEBCHAT_SESSION_TTL_DAYS=${WEBCHAT_SESSION_TTL_DAYS:-30}
+      - WEBCHAT_MAX_MESSAGES_PER_MINUTE=${WEBCHAT_MAX_MESSAGES_PER_MINUTE:-20}
       - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
     tmpfs:
@@ -215,6 +223,18 @@ services:
       - LOG_FORMAT=${LOG_FORMAT}
       - JWT_SECRET=${JWT_SECRET}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - DEFAULT_CLIENT_ID=${DEFAULT_CLIENT_ID}
+      - YCLOUD_API_KEY=${YCLOUD_API_KEY}
+      - YCLOUD_PHONE_NUMBER_ID=${YCLOUD_PHONE_NUMBER_ID}
+      - META_PAGE_ACCESS_TOKEN=${META_PAGE_ACCESS_TOKEN}
+      - TELEGRAM_CHANNEL_BOT_TOKEN=${TELEGRAM_CHANNEL_BOT_TOKEN}
+      - TELEGRAM_API_BASE_URL=${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
+      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST}
+      - EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT:-587}
+      - EMAIL_SMTP_USER=${EMAIL_SMTP_USER}
+      - EMAIL_SMTP_PASSWORD=${EMAIL_SMTP_PASSWORD}
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-Soporte}
       - OTEL_SERVICE_NAME=omnichannel-worker-ai
       - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
@@ -311,6 +331,16 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - DEFAULT_CLIENT_ID=${DEFAULT_CLIENT_ID}
+      - YCLOUD_PHONE_NUMBER_ID=${YCLOUD_PHONE_NUMBER_ID}
+      - TELEGRAM_CHANNEL_BOT_TOKEN=${TELEGRAM_CHANNEL_BOT_TOKEN}
+      - TELEGRAM_API_BASE_URL=${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
+      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST}
+      - EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT:-587}
+      - EMAIL_SMTP_USER=${EMAIL_SMTP_USER}
+      - EMAIL_SMTP_PASSWORD=${EMAIL_SMTP_PASSWORD}
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-Soporte}
       - OTEL_SERVICE_NAME=omnichannel-worker-notifications
       - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
@@ -433,6 +463,76 @@ services:
       start_period: 40s
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # 9b. CELERY-MEDIA — Worker para transcripcion de audio (Whisper)
+  #     Concurrencia: 2 (descarga + llamada a la API de OpenAI, hasta 100 s por tarea)
+  #     ADR-060: cola propia para que una nota de voz larga no bloquee las respuestas
+  #     del LLM (`ai_inference` corre con concurrency 2).
+  #     Necesita las credenciales de los canales: si no se puede transcribir, la tarea
+  #     escala a un humano y eso ENVIA un mensaje al contacto.
+  # ─────────────────────────────────────────────────────────────────────────────
+  celery-media:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    restart: unless-stopped
+    command: >
+      celery -A app.tasks.celery_config worker
+      -Q media
+      -c ${CELERY_MEDIA_CONCURRENCY:-2}
+      --loglevel=${LOG_LEVEL:-info}
+      -n media@%h
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_DEFAULT_MODEL=${OPENAI_DEFAULT_MODEL}
+      - WHISPER_MODEL=${WHISPER_MODEL:-whisper-1}
+      - WHISPER_LANGUAGE=${WHISPER_LANGUAGE:-}
+      - WHISPER_MAX_AUDIO_BYTES=${WHISPER_MAX_AUDIO_BYTES:-20971520}
+      - WHISPER_COST_PER_MINUTE_USD=${WHISPER_COST_PER_MINUTE_USD:-0.006}
+      - WHISPER_TIMEOUT_SECONDS=${WHISPER_TIMEOUT_SECONDS:-60}
+      - MEDIA_DOWNLOAD_TIMEOUT_SECONDS=${MEDIA_DOWNLOAD_TIMEOUT_SECONDS:-30}
+      - DEFAULT_CLIENT_ID=${DEFAULT_CLIENT_ID}
+      - YCLOUD_API_KEY=${YCLOUD_API_KEY}
+      - YCLOUD_PHONE_NUMBER_ID=${YCLOUD_PHONE_NUMBER_ID}
+      - META_PAGE_ACCESS_TOKEN=${META_PAGE_ACCESS_TOKEN}
+      - TELEGRAM_CHANNEL_BOT_TOKEN=${TELEGRAM_CHANNEL_BOT_TOKEN}
+      - TELEGRAM_API_BASE_URL=${TELEGRAM_API_BASE_URL:-https://api.telegram.org}
+      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST}
+      - EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT:-587}
+      - EMAIL_SMTP_USER=${EMAIL_SMTP_USER}
+      - EMAIL_SMTP_PASSWORD=${EMAIL_SMTP_PASSWORD}
+      - EMAIL_FROM_ADDRESS=${EMAIL_FROM_ADDRESS}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-Soporte}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - LOG_LEVEL=${LOG_LEVEL}
+      - LOG_FORMAT=${LOG_FORMAT}
+      - JWT_SECRET=${JWT_SECRET}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_SERVICE_NAME=omnichannel-worker-media
+      - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+    tmpfs:
+      # Metricas multiproceso de prometheus_client: en RAM y vacio en
+      # cada arranque, que es lo que exige el modo multiproceso (si
+      # arrastra ficheros de procesos muertos, los suma al scrape).
+      - /tmp/prometheus
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_config inspect ping -d media@$$HOSTNAME"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 40s
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # 10. CELERY-BEAT — Scheduler para tareas periodicas
   # ─────────────────────────────────────────────────────────────────────────────
   celery-beat:
@@ -511,7 +611,7 @@ services:
     environment:
       REDIS_ADDR: redis://redis:6379
       REDIS_EXPORTER_CHECK_KEYS: >-
-        0=webhooks,0=ai_inference,0=documents,0=notifications,0=bulk,0=lead_enrichment
+        0=webhooks,0=ai_inference,0=documents,0=notifications,0=bulk,0=lead_enrichment,0=media
     networks:
       - backend
     depends_on:

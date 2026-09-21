@@ -1,0 +1,221 @@
+"""Coherencia entre las colas de Celery y los servicios de `docker-compose.yml`.
+
+El compose lista las variables de entorno de cada servicio una por una: una variable
+que el codigo lee de `Settings` y que el servicio no declara llega vacia, y el fallo
+solo aparece en produccion (un canal "sin credenciales", un webhook que siempre da 401).
+Estos tests fijan lo que ya rompio o puede romper en silencio.
+"""
+
+import re
+import typing
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+
+from app.core.config import Settings
+from app.tasks import audio_transcription
+from app.tasks.celery_config import celery_app
+
+RAIZ = Path(__file__).resolve().parents[2]
+
+#: Todo lo que necesita un worker para ENVIAR por los canales (`deliver_message`).
+ENV_CANALES = frozenset(
+    {
+        "DEFAULT_CLIENT_ID",
+        "YCLOUD_API_KEY",
+        "YCLOUD_PHONE_NUMBER_ID",
+        "META_PAGE_ACCESS_TOKEN",
+        "TELEGRAM_CHANNEL_BOT_TOKEN",
+        "TELEGRAM_API_BASE_URL",
+        "EMAIL_SMTP_HOST",
+        "EMAIL_SMTP_PORT",
+        "EMAIL_SMTP_USER",
+        "EMAIL_SMTP_PASSWORD",
+        "EMAIL_FROM_ADDRESS",
+        "EMAIL_FROM_NAME",
+    }
+)
+
+ENV_WHISPER = frozenset(
+    {
+        "OPENAI_API_KEY",
+        "WHISPER_MODEL",
+        "WHISPER_LANGUAGE",
+        "WHISPER_MAX_AUDIO_BYTES",
+        "WHISPER_COST_PER_MINUTE_USD",
+        "WHISPER_TIMEOUT_SECONDS",
+        "MEDIA_DOWNLOAD_TIMEOUT_SECONDS",
+    }
+)
+
+ENV_API_CANALES = frozenset(
+    {
+        "DEFAULT_CLIENT_ID",
+        "TELEGRAM_WEBHOOK_SECRET",
+        "EMAIL_INBOUND_WEBHOOK_SECRET",
+        "WEBCHAT_CHANNEL_TOKEN",
+        "WEBCHAT_ALLOWED_ORIGINS",
+    }
+)
+
+
+@pytest.fixture(scope="module")
+def servicios() -> dict[str, dict[str, Any]]:
+    """Servicios de `docker-compose.yml`."""
+    compose = yaml.safe_load((RAIZ / "docker-compose.yml").read_text(encoding="utf-8"))
+    return dict(compose["services"])
+
+
+def _env(servicio: dict[str, Any]) -> dict[str, str]:
+    """Variables `NOMBRE=valor` de un servicio."""
+    resultado: dict[str, str] = {}
+    for entrada in servicio.get("environment", []):
+        nombre, _, valor = str(entrada).partition("=")
+        resultado[nombre] = valor
+    return resultado
+
+
+def _cola_de(servicio: dict[str, Any]) -> str | None:
+    """Cola que consume un worker de Celery (`-Q cola`), o `None` si no lo es."""
+    comando = str(servicio.get("command", ""))
+    encontrado = re.search(r"-Q\s+(\S+)", comando)
+    return encontrado.group(1) if encontrado else None
+
+
+def _worker_de(servicios: dict[str, dict[str, Any]], cola: str) -> dict[str, Any]:
+    for servicio in servicios.values():
+        if _cola_de(servicio) == cola:
+            return servicio
+    pytest.fail(f"Ningun servicio del compose consume la cola {cola!r}")
+
+
+class TestColaMedia:
+    def test_la_tarea_de_whisper_se_enruta_a_la_cola_media(self) -> None:
+        tarea = audio_transcription.transcribe_audio_message
+
+        assert tarea.name == "app.tasks.media_transcribe_audio"
+        assert tarea.queue == "media"
+        ruta = celery_app.amqp.router.route({}, tarea.name)
+        assert ruta["queue"].name == "media"
+
+    def test_la_tarea_de_ia_sigue_en_ai_inference(self) -> None:
+        """Whisper sale de esa cola; el grafo se queda."""
+        ruta = celery_app.amqp.router.route({}, "app.tasks.ai_process_response")
+
+        assert ruta["queue"].name == "ai_inference"
+
+    def test_la_cola_esta_declarada(self) -> None:
+        assert "media" in {q.name for q in celery_app.conf.task_queues}
+
+    def test_el_worker_existe_en_el_compose(self, servicios: dict[str, dict[str, Any]]) -> None:
+        worker = _worker_de(servicios, "media")
+
+        assert "media@" in " ".join(worker["healthcheck"]["test"])
+        assert _env(worker)["OTEL_SERVICE_NAME"] == "omnichannel-worker-media"
+
+    def test_la_concurrencia_es_configurable_con_default_2(
+        self, servicios: dict[str, dict[str, Any]]
+    ) -> None:
+        assert "${CELERY_MEDIA_CONCURRENCY:-2}" in _worker_de(servicios, "media")["command"]
+
+    def test_el_worker_de_media_tiene_lo_que_necesita_whisper(
+        self, servicios: dict[str, dict[str, Any]]
+    ) -> None:
+        faltan = ENV_WHISPER - _env(_worker_de(servicios, "media")).keys()
+
+        assert not faltan, f"celery-media sin {sorted(faltan)}"
+
+    def test_ai_inference_ya_no_tiene_que_cargar_con_whisper(
+        self, servicios: dict[str, dict[str, Any]]
+    ) -> None:
+        """Whisper corre en `media`: `ai_inference` no necesita sus limites de descarga."""
+        env = _env(_worker_de(servicios, "ai_inference"))
+
+        assert "WHISPER_MAX_AUDIO_BYTES" not in env
+
+
+class TestInvarianteColasYWorkers:
+    def test_toda_cola_declarada_tiene_un_worker(
+        self, servicios: dict[str, dict[str, Any]]
+    ) -> None:
+        """Una cola sin worker acumula tareas para siempre, sin ningun error visible."""
+        consumidas = {_cola_de(s) for s in servicios.values()}
+        for cola in celery_app.conf.task_queues:
+            assert cola.name in consumidas, f"la cola {cola.name!r} no tiene worker"
+
+    def test_toda_cola_se_mide_en_redis(self, servicios: dict[str, dict[str, Any]]) -> None:
+        exportador = servicios["redis-exporter"]["environment"]["REDIS_EXPORTER_CHECK_KEYS"]
+        medidas = {p.split("=", 1)[1] for p in exportador.replace("\n", "").split(",") if p}
+
+        for cola in celery_app.conf.task_queues:
+            assert cola.name in medidas, f"la profundidad de {cola.name!r} no se exporta"
+
+    def test_las_colas_de_la_config_existen_como_tarea_ruteada(self) -> None:
+        rutas = celery_app.conf.task_routes
+        colas = {q.name for q in celery_app.conf.task_queues}
+
+        assert {r["queue"] for r in rutas.values()} <= colas
+
+
+class TestCredencialesDeCanales:
+    """Un worker que responde llama a `get_channel_config()`: sin esto, el canal
+    "no esta configurado" y el contacto se queda sin respuesta."""
+
+    @pytest.mark.parametrize("cola", ["ai_inference", "notifications", "media"])
+    def test_los_workers_que_envian_tienen_las_credenciales(
+        self, servicios: dict[str, dict[str, Any]], cola: str
+    ) -> None:
+        faltan = ENV_CANALES - _env(_worker_de(servicios, cola)).keys()
+
+        assert not faltan, f"el worker de {cola!r} no declara {sorted(faltan)}"
+
+    def test_la_api_valida_los_webhooks_y_sirve_el_webchat(
+        self, servicios: dict[str, dict[str, Any]]
+    ) -> None:
+        """Sin los secretos, Telegram y email responden siempre 401; sin el token, el
+        Webchat esta desactivado."""
+        faltan = ENV_API_CANALES - _env(servicios["api"]).keys()
+
+        assert not faltan, f"la API no declara {sorted(faltan)}"
+
+
+class TestDefaultsDeVariablesNoTexto:
+    """`${X}` sin definir llega como cadena vacia: un `int`, un `float` o una lista de
+    `Settings` con "" revientan al arrancar (o pierden su valor por defecto)."""
+
+    GESTIONADAS = ENV_CANALES | ENV_WHISPER | ENV_API_CANALES | {"CELERY_MEDIA_CONCURRENCY"}
+
+    @staticmethod
+    def _no_texto(nombre: str) -> bool:
+        campo = Settings.model_fields.get(nombre)
+        if campo is None:
+            return False
+        tipo = campo.annotation
+        return typing.get_origin(tipo) is list or tipo in (int, float)
+
+    def test_toda_variable_numerica_o_lista_lleva_default(
+        self, servicios: dict[str, dict[str, Any]]
+    ) -> None:
+        for nombre_servicio, servicio in servicios.items():
+            for nombre, valor in _env(servicio).items():
+                if nombre in self.GESTIONADAS and self._no_texto(nombre):
+                    assert ":-" in valor, (
+                        f"{nombre_servicio}: {nombre}={valor} llega vacia si no se define"
+                    )
+
+    def test_las_de_texto_con_default_no_vacio_tambien_lo_llevan(
+        self, servicios: dict[str, dict[str, Any]]
+    ) -> None:
+        """`${WHISPER_MODEL}` sin definir pisaria el `whisper-1` de `Settings` con ''."""
+        for nombre_servicio, servicio in servicios.items():
+            for nombre, valor in _env(servicio).items():
+                campo = Settings.model_fields.get(nombre)
+                if nombre not in self.GESTIONADAS or campo is None or self._no_texto(nombre):
+                    continue
+                if isinstance(campo.default, str) and campo.default:
+                    assert ":-" in valor, (
+                        f"{nombre_servicio}: {nombre}={valor} pisa el default "
+                        f"{campo.default!r} con una cadena vacia"
+                    )

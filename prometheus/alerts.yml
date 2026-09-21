@@ -120,6 +120,18 @@ groups:
         annotations:
           summary: "La cola de inferencia crece y no termina ninguna tarea"
 
+      - alert: ColaDeMediaEstancada
+        # Como la de IA: cola creciendo y ninguna transcripcion terminando. Un audio
+        # sin transcribir es un cliente esperando una respuesta.
+        expr: >-
+          redis_key_size{key="media"} > 20
+          and sum(rate(celery_tasks_total{queue="media"}[10m])) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "La cola de transcripcion de audio crece y no termina ninguna tarea"
+
       - alert: TareasFallando
         expr: >-
           sum by (task) (rate(celery_tasks_total{state=~"FAILURE|DLQ"}[15m])) > 0.1
