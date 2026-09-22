@@ -811,6 +811,176 @@ class TestUnificacionDeContactos:
         assert resultado is contacto
 
 
+# ─── Responder el toque de un boton (Telegram) ───────────────────────────────
+
+
+class TestRespuestaDelCallbackDeTelegram:
+    """`_responder_callback_de_telegram` apaga el reloj de carga del boton."""
+
+    def _mensaje(self, canal: str = "telegram", interactive: dict[str, Any] | None = None) -> Any:
+        from app.schemas.message import NormalizedMessage
+
+        return NormalizedMessage(
+            channel=canal,
+            sender_identifier="789",
+            text="confirmar",
+            timestamp=datetime(2026, 9, 1, tzinfo=timezone.utc),
+            external_message_id="x1",
+            raw_payload={},
+            interactive_response=interactive,
+        )
+
+    @pytest.fixture
+    def canal_configurado(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        """Sustituye `get_channel_config` para que Telegram resuelva sin credenciales reales."""
+        from app.agents.nodes import _tenant
+
+        config = {"bot_token": "T"}
+        monkeypatch.setattr(_tenant, "get_channel_config", lambda canal: ("telegram", config))
+        return config
+
+    @pytest.fixture
+    def respondido(self, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, Any]]]:
+        """Captura las llamadas a `TelegramProvider.answer_callback_query`."""
+        from app.services.messaging import telegram as telegram_module
+
+        llamadas: list[tuple[str, dict[str, Any]]] = []
+
+        async def _responder(
+            self: Any,
+            callback_query_id: str,
+            channel_config: dict[str, Any],
+            text: str | None = None,
+        ) -> None:
+            llamadas.append((callback_query_id, channel_config))
+
+        monkeypatch.setattr(telegram_module.TelegramProvider, "answer_callback_query", _responder)
+        return llamadas
+
+    async def test_responde_el_callback_con_la_credencial_del_canal(
+        self,
+        canal_configurado: dict[str, Any],
+        respondido: list[tuple[str, dict[str, Any]]],
+    ) -> None:
+        mensaje = self._mensaje(
+            interactive={"type": "button_reply", "id": "si", "callback_query_id": "cb-1"}
+        )
+
+        await wp._responder_callback_de_telegram(mensaje)
+
+        assert respondido == [("cb-1", canal_configurado)]
+
+    @pytest.mark.parametrize("canal", ["whatsapp", "webchat", "instagram", "email"])
+    async def test_otro_canal_no_llama_a_telegram(
+        self, respondido: list[tuple[str, dict[str, Any]]], canal: str
+    ) -> None:
+        mensaje = self._mensaje(
+            canal=canal,
+            interactive={"type": "button_reply", "id": "si", "callback_query_id": "cb-1"},
+        )
+
+        await wp._responder_callback_de_telegram(mensaje)
+
+        assert respondido == []
+
+    async def test_sin_interactive_response_no_llama(
+        self, respondido: list[tuple[str, dict[str, Any]]]
+    ) -> None:
+        await wp._responder_callback_de_telegram(self._mensaje(interactive=None))
+
+        assert respondido == []
+
+    @pytest.mark.parametrize(
+        "interactive",
+        [
+            {"type": "button_reply", "id": "si"},  # sin callback_query_id
+            {"type": "button_reply", "id": "si", "callback_query_id": ""},
+            {"type": "quick_reply", "id": "si", "callback_query_id": "cb-1"},  # otro tipo
+        ],
+    )
+    async def test_datos_incompletos_no_llaman(
+        self, respondido: list[tuple[str, dict[str, Any]]], interactive: dict[str, Any]
+    ) -> None:
+        await wp._responder_callback_de_telegram(self._mensaje(interactive=interactive))
+
+        assert respondido == []
+
+    async def test_un_fallo_de_telegram_no_propaga(
+        self, canal_configurado: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """El boton se queda "cargando" un poco mas; el mensaje sigue su camino."""
+        from app.services.messaging import telegram as telegram_module
+
+        async def _revienta(self: Any, *args: Any, **kwargs: Any) -> None:
+            raise telegram_module.TelegramAPIError("query is too old")
+
+        monkeypatch.setattr(telegram_module.TelegramProvider, "answer_callback_query", _revienta)
+        mensaje = self._mensaje(
+            interactive={"type": "button_reply", "id": "si", "callback_query_id": "cb-1"}
+        )
+
+        await wp._responder_callback_de_telegram(mensaje)  # no debe lanzar
+
+    async def test_canal_no_configurado_no_propaga(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.agents.nodes import _tenant
+
+        def _sin_config(canal: str) -> Any:
+            raise _tenant.ChannelNotConfiguredError("faltan credenciales")
+
+        monkeypatch.setattr(_tenant, "get_channel_config", _sin_config)
+        mensaje = self._mensaje(
+            interactive={"type": "button_reply", "id": "si", "callback_query_id": "cb-1"}
+        )
+
+        await wp._responder_callback_de_telegram(mensaje)  # no debe lanzar
+
+    async def test_process_message_lo_llama_antes_de_persistir(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Se responde el callback aunque el mensaje termine siendo un duplicado."""
+        client_id = uuid.uuid4()
+        monkeypatch.setattr(wp, "_resolve_client_id", lambda provider, channel: client_id)
+
+        llamadas: list[Any] = []
+
+        async def _capturar(normalized: Any) -> None:
+            llamadas.append(normalized)
+
+        monkeypatch.setattr(wp, "_responder_callback_de_telegram", _capturar)
+
+        async def _duplicado(*args: Any, **kwargs: Any) -> bool:
+            return True  # corta antes de tocar contact/conversation
+
+        class FakeTenantSession:
+            async def __aenter__(self) -> FakeSession:
+                return FakeSession()
+
+            async def __aexit__(self, *exc: Any) -> None:
+                return None
+
+        monkeypatch.setattr(wp, "tenant_session", lambda _client_id: FakeTenantSession())
+        monkeypatch.setattr(wp, "is_duplicate_persisted", _duplicado)
+
+        message_data = {
+            "external_message_id": "tg.1",
+            "sender_identifier": "789",
+            "channel": "telegram",
+            "text": "si",
+            "timestamp": "2026-09-09T20:00:00+00:00",
+            "raw_payload": {},
+            "interactive_response": {
+                "type": "button_reply",
+                "id": "si",
+                "callback_query_id": "cb-1",
+            },
+        }
+
+        await wp._process_message("telegram", "telegram", message_data)
+
+        assert len(llamadas) == 1
+        assert llamadas[0].interactive_response["callback_query_id"] == "cb-1"
+
+
 # ─── Flujo de vinculo de telefono (Telegram) ────────────────────────────────
 
 

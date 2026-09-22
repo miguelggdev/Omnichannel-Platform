@@ -27,13 +27,23 @@ que el codigo real ya hace o por lo que romperia en produccion:
   silencio.
 - **Solo chats privados.** En un grupo, responder al `from.id` escribiria un DM al
   usuario, que Telegram rechaza si nunca inicio la conversacion.
+- **Throttling y `answerCallbackQuery` en un solo punto.** Telegram limita a unas
+  30 llamadas por segundo por bot, repartidas entre chats distintos (Bot API
+  FAQ; no es un numero formalmente documentado, asi que se deja margen). Como
+  todas las llamadas pasan por `_llamar_raw()`, el contador vive ahi y cubre
+  tambien `answerCallbackQuery` — la respuesta al toque de un boton, para que
+  dejen de mostrar el reloj de carga (Sprint 9, addendum).
 
 El token del bot viaja en el path de la URL (`/bot<TOKEN>/metodo`) sin otra
 alternativa: por eso los errores de red se reescriben sin la URL y
 `app/core/telemetry.py` la redacta en los spans.
 """
 
+import asyncio
+import hashlib
 import hmac
+import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -42,6 +52,7 @@ import httpx
 from app.core.config import get_settings
 from app.core.encryption import mask_identifier
 from app.schemas.message import ChannelEnum, MessageTypeEnum, NormalizedMessage
+from app.services.dedup import get_redis
 from app.services.messaging.base import (
     ChannelConstraints,
     IgnoredWebhookError,
@@ -51,12 +62,20 @@ from app.services.messaging.base import (
     TemplateNotSupportedError,
 )
 
+logger = logging.getLogger(__name__)
+
 #: Prefijo de `media_url` para un archivo de Telegram aun sin resolver.
 TELEGRAM_FILE_PREFIX = "telegram-file:"
 
 #: Limites de la Bot API.
 MAX_TEXT_LENGTH = 4096
 MAX_CAPTION_LENGTH = 1024
+
+#: TTL de la clave de conteo del throttle. Sobra con 2s (la clave nace en el
+#: segundo N y solo hace falta hasta que empiece el N+1), pero un valor mayor
+#: no cambia el comportamiento y tolera relojes ligeramente desincronizados
+#: entre procesos.
+_THROTTLE_TTL_SECONDS = 2
 
 _TIMEOUT_SECONDS = 30.0
 
@@ -112,6 +131,71 @@ def _sin_token(texto: str, token: str) -> str:
         El texto con el token reemplazado por `***`.
     """
     return texto.replace(token, "***") if token else texto
+
+
+def _ahora() -> float:
+    """Reloj usado por el throttle. Punto de sustitucion para los tests."""
+    return time.time()
+
+
+async def _dormir_hasta_el_siguiente_segundo(segundos: float) -> None:
+    """Espera lo que falta del segundo actual. Punto de sustitucion para los tests."""
+    await asyncio.sleep(max(segundos, 0.0))
+
+
+async def _cupo_disponible(token: str, limite: int) -> bool:
+    """Cuenta esta llamada en la ventana del segundo actual y dice si cabe.
+
+    El contador es GLOBAL por bot: todos los procesos (API, cada worker de
+    Celery) comparten el mismo `TELEGRAM_CHANNEL_BOT_TOKEN`, asi que vive en
+    Redis y no en memoria. La clave lleva un hash del token, no el token en
+    claro — no hay motivo para que aparezca en un `KEYS`/`SCAN` de Redis.
+
+    `SET NX EX` antes del `INCR`: la clave nace siempre con caducidad. Con
+    `INCR` y luego `EXPIRE`, un fallo entre los dos la dejaria sin TTL y el
+    contador de ese segundo quedaria pegado para siempre (mismo patron que
+    `app/api/v1/webchat.py::_dentro_del_limite`).
+
+    Args:
+        token: Token del bot.
+        limite: Llamadas permitidas por segundo. `<= 0` desactiva el throttle.
+
+    Returns:
+        True si esta llamada esta dentro del limite. Tambien True si Redis no
+        responde: el throttle es una cortesia con Telegram, no una garantia de
+        entrega — un Redis caido no debe dejar sin responder a un contacto.
+    """
+    if limite <= 0:
+        return True
+    clave = f"telegram:throttle:{hashlib.sha256(token.encode()).hexdigest()[:16]}:{int(_ahora())}"
+    try:
+        redis = get_redis()
+        await redis.set(clave, 0, ex=_THROTTLE_TTL_SECONDS, nx=True)
+        conteo = int(await redis.incr(clave))
+    except Exception:
+        logger.warning("Throttle de Telegram sin Redis disponible; se envia sin frenar")
+        return True
+    return conteo <= limite
+
+
+async def _respetar_limite_de_tasa(token: str) -> None:
+    """Frena antes de una llamada a la Bot API si el bot ya agoto su cupo del segundo.
+
+    Un solo reintento, no un bucle: esperar hasta el siguiente segundo alcanza
+    para el caso normal (una rafaga que se paso por poco) sin arriesgar que una
+    tarea de Celery se quede esperando indefinidamente si algo sigue mandando
+    trafico. Pasado ese segundo, la llamada sale aunque el cupo siga lleno.
+
+    Args:
+        token: Token del bot.
+    """
+    limite = get_settings().TELEGRAM_MAX_MESSAGES_PER_SECOND
+    if await _cupo_disponible(token, limite):
+        return
+    # +0.05 de margen: dormir exactamente "lo que falta" puede despertar un
+    # instante antes de que ruede el segundo, por precision de punto flotante.
+    espera = 1.05 - (_ahora() % 1)
+    await _dormir_hasta_el_siguiente_segundo(espera)
 
 
 def partir_texto(texto: str, limite: int = MAX_TEXT_LENGTH) -> list[str]:
@@ -496,6 +580,32 @@ class TelegramProvider(MessagingProvider):
         """
         raise TemplateNotSupportedError("Telegram no soporta templates preaprobados")
 
+    async def answer_callback_query(
+        self, callback_query_id: str, channel_config: dict[str, Any], text: str | None = None
+    ) -> None:
+        """Apaga el reloj de carga que Telegram muestra tras tocar un boton.
+
+        Sin esta llamada el cliente de Telegram lo sigue mostrando varios
+        segundos (hasta que expira solo). No es una cortesia opcional del todo:
+        pasado un minuto el `callback_query_id` caduca y Telegram empieza a
+        rechazar la respuesta — de ahi que quien llame a esto lo haga apenas
+        recibe el update, no despues de que el LLM genere una respuesta.
+
+        Args:
+            callback_query_id: Id del callback, tal como llego en el update.
+            channel_config: Debe traer `bot_token`.
+            text: Aviso corto opcional que Telegram muestra como notificacion
+                flotante. Sin el, el boton simplemente deja de "cargar".
+
+        Raises:
+            TelegramAPIError: Si Telegram rechaza la peticion (p. ej. el
+                callback ya caduco) o no se pudo hablar con la API.
+        """
+        cuerpo: dict[str, Any] = {"callback_query_id": callback_query_id}
+        if text:
+            cuerpo["text"] = text[:200]
+        await self._llamar_raw(channel_config["bot_token"], "answerCallbackQuery", cuerpo)
+
     def get_channel_constraints(self) -> ChannelConstraints:
         """Restricciones de Telegram.
 
@@ -618,6 +728,8 @@ class TelegramProvider(MessagingProvider):
             TelegramAPIError: Si Telegram responde `ok: false`, la respuesta no es
                 JSON o falla la red. Ningun mensaje incluye el token.
         """
+        await _respetar_limite_de_tasa(token)
+
         url = f"{get_settings().TELEGRAM_API_BASE_URL}/bot{token}/{metodo}"
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as cliente:
