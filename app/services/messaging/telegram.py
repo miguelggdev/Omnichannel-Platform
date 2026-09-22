@@ -171,7 +171,7 @@ async def _cupo_disponible(token: str, limite: int) -> bool:
     try:
         redis = get_redis()
         await redis.set(clave, 0, ex=_THROTTLE_TTL_SECONDS, nx=True)
-        conteo = await redis.incr(clave)
+        conteo = int(await redis.incr(clave))
     except Exception:
         logger.warning("Throttle de Telegram sin Redis disponible; se envia sin frenar")
         return True
