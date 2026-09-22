@@ -123,6 +123,12 @@ class Settings(BaseSettings):
     # (https://usuario:password@host/...): ni SendGrid ni Mailgun firman ese
     # webhook, pero los dos envian la cabecera Authorization: Basic.
     EMAIL_INBOUND_WEBHOOK_SECRET: str = ""
+    # Adjuntos del Inbound Parse: solo se registra su METADATA (nombre, tipo,
+    # tamano), nunca el contenido — guardarlo requiere Storage y una superficie
+    # de seguridad propia que queda fuera de esta entrega (ADR-062). Sin esto un
+    # adjunto desaparecia sin dejar rastro.
+    EMAIL_MAX_ATTACHMENTS: int = 5
+    EMAIL_MAX_ATTACHMENT_BYTES: int = 5 * 1024 * 1024
 
     # Google Calendar (Sprint 7) — un service account global (no OAuth2 por
     # tenant): cada tenant comparte su calendario con el email del service
