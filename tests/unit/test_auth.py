@@ -110,6 +110,56 @@ class _SesionDeLogin:
         return self.fila
 
 
+class _FilaRefresh:
+    """Fila que devuelve `_REFRESH_LOOKUP`: estado actual de usuario y tenant."""
+
+    def __init__(self, user_is_active: bool = True, client_is_active: bool = True) -> None:
+        """Construye la fila con ambos activos por defecto."""
+        self.user_is_active = user_is_active
+        self.client_is_active = client_is_active
+
+
+class _SesionDeRefresh:
+    """Sesión falsa para `_REFRESH_LOOKUP`: devuelve una única fila fija."""
+
+    def __init__(self, fila: "_FilaRefresh | None") -> None:
+        """Guarda la fila que devolverá la consulta."""
+        self.fila = fila
+
+    async def __aenter__(self) -> "_SesionDeRefresh":
+        """Entra al contexto."""
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        """Sale del contexto."""
+        return
+
+    async def execute(self, stmt: object = None, params: object = None) -> "_SesionDeRefresh":
+        """Ignora la sentencia y se devuelve como resultado."""
+        return self
+
+    def one_or_none(self) -> "_FilaRefresh | None":
+        """Devuelve la fila prefijada."""
+        return self.fila
+
+
+def _refresh_falso(fila: "_FilaRefresh | None"):
+    """Sustituto de `tenant_session` para el lookup de `/auth/refresh`.
+
+    Args:
+        fila: Lo que devuelve `_REFRESH_LOOKUP`; None si el usuario ya no existe.
+
+    Returns:
+        Context manager async con la misma firma de `tenant_session`.
+    """
+
+    @asynccontextmanager
+    async def _cm(client_id, user_id=None):
+        yield _SesionDeRefresh(fila)
+
+    return _cm
+
+
 def _tenant_session_falso(registro: list | None = None):
     """Sustituto de `tenant_session` que anota con qué contexto se abrió.
 
@@ -459,15 +509,125 @@ class TestRefreshEndpoint:
         }
         refresh = create_refresh_token(token_data)
 
-        resp = await client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": refresh},
-        )
+        with patch("app.api.v1.auth.tenant_session", _refresh_falso(_FilaRefresh())):
+            resp = await client.post(
+                "/api/v1/auth/refresh",
+                json={"refresh_token": refresh},
+            )
 
         assert resp.status_code == 200
         data = resp.json()
         assert "access_token" in data
         assert data["refresh_token"] == refresh
+
+    @pytest.mark.asyncio
+    async def test_refresh_usuario_ya_no_existe(self, client: AsyncClient) -> None:
+        """Un usuario borrado despues de emitirse el token no puede refrescar."""
+        token_data = {
+            "user_id": str(uuid.uuid4()),
+            "client_id": str(uuid.uuid4()),
+            "email": "test@test.com",
+            "role": "admin",
+        }
+        refresh = create_refresh_token(token_data)
+
+        with patch("app.api.v1.auth.tenant_session", _refresh_falso(None)):
+            resp = await client.post(
+                "/api/v1/auth/refresh",
+                json={"refresh_token": refresh},
+            )
+
+        assert resp.status_code == 401
+        assert resp.json()["error_code"] == "INVALID_TOKEN"
+
+    @pytest.mark.asyncio
+    async def test_refresh_usuario_desactivado(self, client: AsyncClient) -> None:
+        """Un usuario dado de baja despues de emitirse el token no puede refrescar."""
+        token_data = {
+            "user_id": str(uuid.uuid4()),
+            "client_id": str(uuid.uuid4()),
+            "email": "test@test.com",
+            "role": "admin",
+        }
+        refresh = create_refresh_token(token_data)
+
+        with patch(
+            "app.api.v1.auth.tenant_session", _refresh_falso(_FilaRefresh(user_is_active=False))
+        ):
+            resp = await client.post(
+                "/api/v1/auth/refresh",
+                json={"refresh_token": refresh},
+            )
+
+        assert resp.status_code == 401
+        assert resp.json()["error_code"] == "FORBIDDEN"
+
+    @pytest.mark.asyncio
+    async def test_refresh_tenant_suspendido(self, client: AsyncClient) -> None:
+        """Una organizacion suspendida despues de emitirse el token no puede refrescar."""
+        token_data = {
+            "user_id": str(uuid.uuid4()),
+            "client_id": str(uuid.uuid4()),
+            "email": "test@test.com",
+            "role": "admin",
+        }
+        refresh = create_refresh_token(token_data)
+
+        with patch(
+            "app.api.v1.auth.tenant_session",
+            _refresh_falso(_FilaRefresh(client_is_active=False)),
+        ):
+            resp = await client.post(
+                "/api/v1/auth/refresh",
+                json={"refresh_token": refresh},
+            )
+
+        assert resp.status_code == 401
+        assert resp.json()["error_code"] == "FORBIDDEN"
+
+    @pytest.mark.asyncio
+    async def test_refresh_consulta_con_ambos_ids_explicitos(self, client: AsyncClient) -> None:
+        """El WHERE va explicito con user_id y client_id, no solo delegado a RLS.
+
+        Mismo patron que `documents.py`/`contact_unifier.py`: si la politica de
+        RLS fallara en `users`, el filtro explicito sigue evitando que se lea
+        el usuario de otro tenant.
+        """
+        token_data = {
+            "user_id": str(uuid.uuid4()),
+            "client_id": str(uuid.uuid4()),
+            "email": "test@test.com",
+            "role": "admin",
+        }
+        refresh = create_refresh_token(token_data)
+        recibidos: list[dict] = []
+        sentencias: list[str] = []
+
+        class _SesionEspia(_SesionDeRefresh):
+            async def execute(self, stmt: object = None, params: object = None):
+                recibidos.append(dict(params or {}))
+                sentencias.append(str(stmt))
+                return await super().execute(stmt, params)
+
+        @asynccontextmanager
+        async def _cm(client_id, user_id=None):
+            yield _SesionEspia(_FilaRefresh())
+
+        with patch("app.api.v1.auth.tenant_session", _cm):
+            resp = await client.post(
+                "/api/v1/auth/refresh",
+                json={"refresh_token": refresh},
+            )
+
+        assert resp.status_code == 200
+        assert recibidos == [
+            {
+                "user_id": uuid.UUID(token_data["user_id"]),
+                "client_id": uuid.UUID(token_data["client_id"]),
+            }
+        ]
+        assert "u.client_id = :client_id" in sentencias[0]
+        assert "u.id = :user_id" in sentencias[0]
 
     @pytest.mark.asyncio
     async def test_refresh_with_access_token_fails(self, client: AsyncClient) -> None:
