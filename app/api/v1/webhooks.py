@@ -25,11 +25,13 @@ from typing import Any
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import FormData, UploadFile
 
 from app.core.config import get_settings
 from app.core.exceptions import AppException
 from app.services.dedup import mark_if_new, release_mark
 from app.services.messaging.base import IgnoredWebhookError
+from app.services.storage import sanitize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -114,19 +116,86 @@ def _webhook_secret(provider: str) -> str:
     return settings.YCLOUD_WEBHOOK_SECRET
 
 
-async def _leer_payload(request: Request, raw_body: bytes) -> dict[str, Any]:
+async def _tamano_adjunto_acotado(archivo: UploadFile, limite: int) -> tuple[int, bool]:
+    """Cuenta los bytes de un adjunto sin guardarlos, hasta `limite`.
+
+    Se lee en trozos y se corta apenas se supera el limite: un adjunto de 200 MB
+    no se lee entero solo para medirlo.
+
+    Args:
+        archivo: Adjunto del formulario.
+        limite: Tope de bytes a contar antes de cortar.
+
+    Returns:
+        Tupla `(bytes vistos, si se corto por exceder el limite)`. Con corte, el
+        tamano devuelto es aproximado (hasta un trozo de lectura, 64 KB, mas
+        que `limite`), no el real. La memoria usada si esta acotada: nunca se
+        retiene mas de un trozo mas el conteo acumulado, aunque el archivo
+        entero sea enorme.
+    """
+    total = 0
+    excede = False
+    while True:
+        trozo = await archivo.read(65536)
+        if not trozo:
+            break
+        total += len(trozo)
+        if total > limite:
+            excede = True
+            break
+    return total, excede
+
+
+async def _leer_adjuntos(formulario: FormData) -> list[dict[str, Any]]:
+    """Extrae METADATA de los adjuntos de un Inbound Parse — nunca el contenido.
+
+    Guardarlos (Storage, un endpoint para recuperarlos) es una superficie de
+    seguridad propia — tipos permitidos, cuotas por tenant, quien puede leerlos —
+    que queda fuera de esta entrega (ADR-062). Sin esto, un adjunto desaparecia
+    en silencio; con esto, al menos el agente sabe que existio.
+
+    Args:
+        formulario: El formulario ya parseado por Starlette.
+
+    Returns:
+        Hasta `EMAIL_MAX_ATTACHMENTS` entradas `{filename, content_type, size}`.
+        Los adjuntos de mas se ignoran (no se listan ni se cuentan sus bytes).
+    """
+    settings = get_settings()
+    adjuntos: list[dict[str, Any]] = []
+    for valor in formulario.values():
+        if len(adjuntos) >= settings.EMAIL_MAX_ATTACHMENTS:
+            break
+        if not isinstance(valor, UploadFile) or not valor.filename:
+            continue
+        tamano, _excede = await _tamano_adjunto_acotado(valor, settings.EMAIL_MAX_ATTACHMENT_BYTES)
+        adjuntos.append(
+            {
+                "filename": sanitize_filename(valor.filename),
+                "content_type": (valor.content_type or "application/octet-stream").split(";")[0],
+                "size": tamano,
+            }
+        )
+    return adjuntos
+
+
+async def _leer_payload(request: Request, raw_body: bytes, provider: str) -> dict[str, Any]:
     """Deserializa el cuerpo segun su tipo de contenido.
 
     YCloud, Meta y Telegram mandan JSON; el Inbound Parse de email (SendGrid,
-    Mailgun) manda un formulario `multipart/form-data`. Solo se conservan los
-    campos de texto: los adjuntos son `UploadFile`, que no se serializan a Celery.
+    Mailgun) manda un formulario `multipart/form-data`. Los campos de texto se
+    conservan tal cual; de los adjuntos (`UploadFile`, no serializables a Celery)
+    solo se extrae la metadata, y solo para `email` — el unico proveedor que hoy
+    manda multipart.
 
     Args:
         request: Peticion (el cuerpo ya esta cacheado en `raw_body`).
         raw_body: Cuerpo crudo.
+        provider: Proveedor de la URL del webhook.
 
     Returns:
-        Los campos como diccionario.
+        Los campos como diccionario; con email y adjuntos, incluye
+        `_attachments` (ver `_leer_adjuntos`).
 
     Raises:
         ValueError: Si un cuerpo JSON no es un objeto valido.
@@ -134,7 +203,14 @@ async def _leer_payload(request: Request, raw_body: bytes) -> dict[str, Any]:
     tipo = request.headers.get("content-type", "").lower()
     if tipo.startswith(("multipart/form-data", "application/x-www-form-urlencoded")):
         formulario = await request.form()
-        return {clave: valor for clave, valor in formulario.items() if isinstance(valor, str)}
+        resultado: dict[str, Any] = {
+            clave: valor for clave, valor in formulario.items() if isinstance(valor, str)
+        }
+        if provider == "email":
+            adjuntos = await _leer_adjuntos(formulario)
+            if adjuntos:
+                resultado["_attachments"] = adjuntos
+        return resultado
     datos = json.loads(raw_body)
     if not isinstance(datos, dict):
         raise ValueError("El cuerpo del webhook no es un objeto JSON")
@@ -188,7 +264,7 @@ async def receive_webhook(provider: str, channel: str, request: Request) -> JSON
     # Un payload que no se puede parsear devuelve 200: si respondieramos 4xx/5xx el
     # proveedor reintentaria indefinidamente un mensaje que nunca va a poder procesarse.
     try:
-        payload = await _leer_payload(request, raw_body)
+        payload = await _leer_payload(request, raw_body, provider)
         normalized = await messaging_provider.parse_webhook(payload)
     except IgnoredWebhookError as exc:
         # Descarte deliberado (grupo, otro bot, autorespuesta...): habitual y sin
