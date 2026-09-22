@@ -52,6 +52,17 @@ _AUTH_LOOKUP = text(
 
 _LAST_LOGIN = text("UPDATE users SET last_login_at = :ahora WHERE id = :user_id")
 
+# BUG-041: el refresh_token por si solo no basta para saber si el usuario y su
+# tenant siguen activos -- eso puede cambiar en los hasta 7 dias
+# (JWT_REFRESH_EXPIRATION_DAYS) de vida del token. Filtro explicito en el WHERE
+# ademas de la RLS de `tenant_session`, mismo patron que `contact_unifier.py` y
+# `documents.py`.
+_REFRESH_LOOKUP = text(
+    "SELECT u.is_active AS user_is_active, c.is_active AS client_is_active "
+    "FROM users u JOIN clients c ON c.id = u.client_id "
+    "WHERE u.id = :user_id AND u.client_id = :client_id"
+)
+
 
 @lru_cache(maxsize=1)
 def _hash_de_relleno() -> str:
@@ -186,7 +197,11 @@ async def refresh_token(refresh: RefreshRequest) -> TokenResponse:
 
     1. Decodifica el refresh_token.
     2. Verifica que type == 'refresh'.
-    3. Genera nuevo access_token (el refresh_token se mantiene).
+    3. Revalida contra la base que el usuario y su tenant sigan activos
+       (BUG-041): el token puede tener hasta `JWT_REFRESH_EXPIRATION_DAYS` de
+       vida, y nada obliga a que ese estado siga siendo el mismo que cuando se
+       emitió.
+    4. Genera nuevo access_token (el refresh_token se mantiene).
 
     Args:
         refresh: Refresh token JWT.
@@ -195,7 +210,8 @@ async def refresh_token(refresh: RefreshRequest) -> TokenResponse:
         TokenResponse con nuevo access_token y el mismo refresh_token.
 
     Raises:
-        AppException: 401 si el refresh_token es inválido o no es tipo refresh.
+        AppException: 401 si el refresh_token es inválido, no es tipo refresh,
+            el usuario ya no existe, o el usuario o su tenant están inactivos.
     """
     payload = decode_jwt(refresh.refresh_token)
 
@@ -205,6 +221,25 @@ async def refresh_token(refresh: RefreshRequest) -> TokenResponse:
             error_code=INVALID_TOKEN,
             message="Token no es de tipo refresh",
         )
+
+    client_id = UUID(payload["client_id"])
+    user_id = UUID(payload["user_id"])
+
+    async with tenant_session(client_id) as session:
+        fila = (
+            await session.execute(_REFRESH_LOOKUP, {"user_id": user_id, "client_id": client_id})
+        ).one_or_none()
+
+    if fila is None:
+        raise AppException(
+            status_code=401,
+            error_code=INVALID_TOKEN,
+            message="Credenciales inválidas",
+        )
+    if not fila.user_is_active:
+        raise AppException(status_code=401, error_code=FORBIDDEN, message="Usuario desactivado")
+    if not fila.client_is_active:
+        raise AppException(status_code=401, error_code=FORBIDDEN, message="Organización suspendida")
 
     # Generar nuevo access_token con los mismos datos
     token_data = {
