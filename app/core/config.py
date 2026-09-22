@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     # header `X-Telegram-Bot-Api-Secret-Token` de cada update.
     TELEGRAM_WEBHOOK_SECRET: str = ""
     TELEGRAM_API_BASE_URL: str = "https://api.telegram.org"
+    # Cupo global (todos los procesos comparten el mismo bot) de llamadas por
+    # segundo a la Bot API; Telegram documenta ~30/s repartidas entre chats
+    # distintos (Bot API FAQ) — se deja margen. <= 0 desactiva el throttle.
+    TELEGRAM_MAX_MESSAGES_PER_SECOND: int = 25
 
     # Webchat (WebSocket) — Sprint 9. `WEBCHAT_CHANNEL_TOKEN` identifica el canal
     # en la URL del widget (`/api/v1/webchat/{token}`); NO es un secreto (va en el

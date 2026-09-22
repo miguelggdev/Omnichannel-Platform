@@ -32,6 +32,7 @@ ENV_CANALES = frozenset(
         "META_GRAPH_API_VERSION",
         "TELEGRAM_CHANNEL_BOT_TOKEN",
         "TELEGRAM_API_BASE_URL",
+        "TELEGRAM_MAX_MESSAGES_PER_SECOND",
         "EMAIL_SMTP_HOST",
         "EMAIL_SMTP_PORT",
         "EMAIL_SMTP_USER",
@@ -39,6 +40,13 @@ ENV_CANALES = frozenset(
         "EMAIL_FROM_ADDRESS",
         "EMAIL_FROM_NAME",
     }
+)
+
+#: Lo que necesita `celery-webhooks` para `answerCallbackQuery` — llama a Telegram
+#: (`_responder_callback_de_telegram`) antes de persistir el mensaje, asi que solo
+#: hace falta ese canal, no el resto de `ENV_CANALES`.
+ENV_TELEGRAM_RESPONDER = frozenset(
+    {"TELEGRAM_CHANNEL_BOT_TOKEN", "TELEGRAM_API_BASE_URL", "TELEGRAM_MAX_MESSAGES_PER_SECOND"}
 )
 
 ENV_WHISPER = frozenset(
@@ -182,6 +190,14 @@ class TestCredencialesDeCanales:
         faltan = ENV_API_CANALES - _env(servicios["api"]).keys()
 
         assert not faltan, f"la API no declara {sorted(faltan)}"
+
+    def test_celery_webhooks_puede_responder_el_callback_de_telegram(
+        self, servicios: dict[str, dict[str, Any]]
+    ) -> None:
+        """`_responder_callback_de_telegram` corre en `celery-webhooks`, no en `celery-ai`."""
+        faltan = ENV_TELEGRAM_RESPONDER - _env(servicios["celery-webhooks"]).keys()
+
+        assert not faltan, f"celery-webhooks no declara {sorted(faltan)}"
 
 
 class TestDefaultsDeVariablesNoTexto:

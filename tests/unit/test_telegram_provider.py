@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 import pytest
 
+from app.core.config import get_settings
 from app.schemas.message import ChannelEnum, MessageTypeEnum
 from app.services.messaging import telegram as telegram_module
 from app.services.messaging.base import MessageContent, TemplateMessage, TemplateNotSupportedError
@@ -678,6 +679,214 @@ class TestErrores:
             await provider.send_message("789", MessageContent(text="Hola"), CONFIG)
 
         assert TOKEN not in str(error.value)
+
+
+# ─── Responder el toque de un boton ───────────────────────────────────────────
+
+
+class TestAnswerCallbackQuery:
+    """Apaga el reloj de carga que Telegram muestra tras tocar un boton."""
+
+    async def test_manda_el_callback_query_id(
+        self, provider: TelegramProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = _instalar(monkeypatch, _Api())
+
+        await provider.answer_callback_query("cb-77", CONFIG)
+
+        assert api.peticiones == [
+            (f"/bot{TOKEN}/answerCallbackQuery", {"callback_query_id": "cb-77"})
+        ]
+
+    async def test_con_texto_se_manda_como_aviso(
+        self, provider: TelegramProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = _instalar(monkeypatch, _Api())
+
+        await provider.answer_callback_query("cb-77", CONFIG, text="Gracias")
+
+        assert api.peticiones[0][1]["text"] == "Gracias"
+
+    async def test_el_texto_se_trunca_a_200_caracteres(
+        self, provider: TelegramProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = _instalar(monkeypatch, _Api())
+
+        await provider.answer_callback_query("cb-77", CONFIG, text="x" * 300)
+
+        assert len(api.peticiones[0][1]["text"]) == 200
+
+    async def test_sin_texto_no_manda_la_clave(
+        self, provider: TelegramProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        api = _instalar(monkeypatch, _Api())
+
+        await provider.answer_callback_query("cb-77", CONFIG)
+
+        assert "text" not in api.peticiones[0][1]
+
+    async def test_un_callback_caducado_propaga_el_error(
+        self, provider: TelegramProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """El llamador decide que hacer (en `webhook_processor`, se registra y se sigue)."""
+        _instalar(
+            monkeypatch,
+            _Api(
+                lambda r: httpx.Response(400, json={"ok": False, "description": "query is too old"})
+            ),
+        )
+
+        with pytest.raises(TelegramAPIError, match="too old"):
+            await provider.answer_callback_query("cb-viejo", CONFIG)
+
+
+# ─── Throttle: cupo por segundo, global por bot ──────────────────────────────
+
+
+class FakeRedisThrottle:
+    """Redis falso con la semantica `SET NX EX` + `INCR` que usa el throttle."""
+
+    def __init__(self) -> None:
+        self.valores: dict[str, int] = {}
+
+    async def set(self, clave: str, valor: int, ex: int | None = None, nx: bool = False) -> bool:
+        if nx and clave in self.valores:
+            return False
+        self.valores[clave] = valor
+        return True
+
+    async def incr(self, clave: str) -> int:
+        self.valores[clave] = self.valores.get(clave, 0) + 1
+        return self.valores[clave]
+
+
+class TestThrottle:
+    """`_respetar_limite_de_tasa` frena antes de superar el cupo del segundo."""
+
+    def _preparar(
+        self, monkeypatch: pytest.MonkeyPatch, *, limite: int = 3, ahora: float = 1_700_000_000.0
+    ) -> tuple[FakeRedisThrottle, list[float]]:
+        """Instala Redis falso, fija el limite/reloj y captura las esperas."""
+        redis = FakeRedisThrottle()
+        monkeypatch.setattr(telegram_module, "get_redis", lambda: redis)
+        monkeypatch.setattr(get_settings(), "TELEGRAM_MAX_MESSAGES_PER_SECOND", limite)
+        monkeypatch.setattr(telegram_module, "_ahora", lambda: ahora)
+        dormidas: list[float] = []
+
+        async def _dormir(segundos: float) -> None:
+            dormidas.append(segundos)
+
+        monkeypatch.setattr(telegram_module, "_dormir_hasta_el_siguiente_segundo", _dormir)
+        return redis, dormidas
+
+    async def test_dentro_del_limite_no_espera(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _, dormidas = self._preparar(monkeypatch, limite=3)
+
+        for _ in range(3):
+            await telegram_module._respetar_limite_de_tasa(TOKEN)
+
+        assert dormidas == []
+
+    async def test_al_superar_el_limite_espera_al_siguiente_segundo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, dormidas = self._preparar(monkeypatch, limite=2, ahora=1_700_000_000.4)
+
+        for _ in range(3):
+            await telegram_module._respetar_limite_de_tasa(TOKEN)
+
+        assert len(dormidas) == 1
+        assert dormidas[0] == pytest.approx(1.05 - 0.4, abs=1e-6)
+
+    async def test_limite_cero_desactiva_el_throttle_y_no_toca_redis(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        redis, dormidas = self._preparar(monkeypatch, limite=0)
+
+        for _ in range(50):
+            await telegram_module._respetar_limite_de_tasa(TOKEN)
+
+        assert dormidas == []
+        assert redis.valores == {}
+
+    async def test_limite_negativo_tambien_desactiva_el_throttle(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _, dormidas = self._preparar(monkeypatch, limite=-1)
+
+        await telegram_module._respetar_limite_de_tasa(TOKEN)
+
+        assert dormidas == []
+
+    async def test_el_cupo_no_se_arrastra_al_siguiente_segundo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        redis, dormidas = self._preparar(monkeypatch, limite=1, ahora=1_700_000_000.0)
+        await telegram_module._respetar_limite_de_tasa(TOKEN)  # agota el cupo de ese segundo
+
+        monkeypatch.setattr(telegram_module, "_ahora", lambda: 1_700_000_001.0)
+        await telegram_module._respetar_limite_de_tasa(TOKEN)
+
+        assert dormidas == []
+        assert len(redis.valores) == 2  # una clave por segundo
+
+    async def test_la_clave_no_lleva_el_token_en_claro(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        redis, _ = self._preparar(monkeypatch, limite=5)
+
+        await telegram_module._respetar_limite_de_tasa(TOKEN)
+
+        assert all(TOKEN not in clave for clave in redis.valores)
+
+    async def test_dos_tokens_distintos_tienen_cupos_independientes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Si en el futuro hay un bot por tenant, uno saturado no frena al otro."""
+        _, dormidas = self._preparar(monkeypatch, limite=1)
+
+        await telegram_module._respetar_limite_de_tasa(TOKEN)
+        await telegram_module._respetar_limite_de_tasa("otro-token-completamente-distinto")
+
+        assert dormidas == []
+
+    async def test_llamar_raw_pasa_por_el_throttle(
+        self, provider: TelegramProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """El unico punto por el que pasan todas las llamadas queda cubierto."""
+        _, dormidas = self._preparar(monkeypatch, limite=1)
+        api = _instalar(monkeypatch, _Api())
+
+        await provider.send_message("1", MessageContent(text="a"), CONFIG)
+        await provider.send_message("2", MessageContent(text="b"), CONFIG)
+
+        assert len(api.peticiones) == 2
+        assert len(dormidas) == 1
+
+    async def test_si_redis_falla_no_bloquea_el_envio(
+        self, provider: TelegramProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """El throttle es una cortesia, no una garantia: un Redis caido no debe
+        dejar a un contacto sin respuesta."""
+
+        class RedisCaido:
+            async def set(self, *args: Any, **kwargs: Any) -> bool:
+                raise ConnectionError("Redis no responde")
+
+        monkeypatch.setattr(telegram_module, "get_redis", lambda: RedisCaido())
+        monkeypatch.setattr(get_settings(), "TELEGRAM_MAX_MESSAGES_PER_SECOND", 1)
+        dormidas: list[float] = []
+
+        async def _dormir(segundos: float) -> None:
+            dormidas.append(segundos)
+
+        monkeypatch.setattr(telegram_module, "_dormir_hasta_el_siguiente_segundo", _dormir)
+        api = _instalar(monkeypatch, _Api())
+
+        await provider.send_message("1", MessageContent(text="a"), CONFIG)
+
+        assert len(api.peticiones) == 1
+        assert dormidas == []
 
 
 # ─── Templates, restricciones, utilidades ────────────────────────────────────
