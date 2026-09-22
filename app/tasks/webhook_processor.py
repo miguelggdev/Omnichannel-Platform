@@ -347,6 +347,39 @@ def _parse_timestamp(value: Any) -> datetime:
     return datetime.now(timezone.utc)
 
 
+async def _responder_callback_de_telegram(normalized: NormalizedMessage) -> None:
+    """Apaga el reloj de carga del boton que el usuario toco en Telegram.
+
+    Solo Telegram tiene este concepto (`answerCallbackQuery`); el resto de
+    canales no. Se llama fuera de la transaccion y antes de tocar la base a
+    proposito: el `callback_query_id` caduca al minuto, y ese margen no debe
+    competir con la persistencia del mensaje ni con la IA.
+
+    Nunca propaga: si Telegram lo rechaza (el callback ya caduco, credencial
+    invalida) o el canal no esta configurado, el peor caso es que el boton se
+    quede "cargando" un poco mas — no debe impedir que el mensaje se guarde y
+    siga su camino.
+
+    Args:
+        normalized: Mensaje entrante ya validado.
+    """
+    if normalized.channel.value != "telegram":
+        return
+    respuesta = normalized.interactive_response or {}
+    callback_id = respuesta.get("callback_query_id")
+    if respuesta.get("type") != "button_reply" or not callback_id:
+        return
+
+    try:
+        from app.agents.nodes._tenant import get_channel_config
+        from app.services.messaging.telegram import TelegramProvider
+
+        _, config = get_channel_config("telegram")
+        await TelegramProvider().answer_callback_query(callback_id, config)
+    except Exception:
+        logger.warning("No se pudo responder el callback_query de Telegram", exc_info=True)
+
+
 async def _process_message(provider: str, channel: str, message_data: dict[str, Any]) -> None:
     """Logica asincrona de procesamiento de un mensaje entrante.
 
@@ -371,6 +404,10 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
     message_channel = normalized.channel.value
     sender_identifier = normalized.sender_identifier
     timestamp = _parse_timestamp(normalized.timestamp)
+
+    # Antes de la transaccion y de proposito lo primero: el callback_query_id
+    # de Telegram caduca al minuto.
+    await _responder_callback_de_telegram(normalized)
 
     async with tenant_session(client_id) as session:
         # Dedup nivel 2: si Redis perdio la clave, aqui se corta igual.
