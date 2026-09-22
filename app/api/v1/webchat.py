@@ -30,10 +30,12 @@ import contextlib
 import hmac
 import json
 import logging
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from pydantic import TypeAdapter, ValidationError
 from starlette.concurrency import run_in_threadpool
 
@@ -68,6 +70,31 @@ _INBOUND: TypeAdapter[Any] = TypeAdapter(InboundFrame)
 
 #: Conexiones abiertas por visitante, en este proceso.
 _conexiones: dict[str, int] = {}
+
+#: Ruta fija (sin entrada del usuario): no hay riesgo de path traversal.
+_WIDGET_JS_PATH = Path(__file__).resolve().parents[2] / "static" / "webchat-widget.js"
+
+
+@router.get("/widget.js", include_in_schema=False)
+async def widget_js() -> FileResponse:
+    """Sirve el script embebible del widget de Webchat.
+
+    Es el MISMO archivo para todos los tenants: el `channel_token` y el origen
+    de la API los pone quien lo instala, como atributos `data-*` del propio
+    `<script>` (ver la cabecera del archivo). No lleva secretos, asi que no
+    hace falta autenticacion — y `<script src>` no esta sujeto a CORS, asi que
+    tampoco hace falta configurar cabeceras especiales para que cargue desde
+    el dominio del cliente.
+
+    Returns:
+        El archivo, con cache corto (5 min): sirve para poder corregirlo sin
+        depender de que cada visitante purgue su cache del navegador.
+    """
+    return FileResponse(
+        _WIDGET_JS_PATH,
+        media_type="application/javascript",
+        headers={"Cache-Control": "public, max-age=300"},
+    )
 
 
 def _origen_permitido(origen: str | None, settings: Settings) -> bool:
