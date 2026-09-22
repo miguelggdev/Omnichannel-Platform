@@ -22,6 +22,7 @@ from app.models.pending_response import PendingResponse
 from app.models.quick_reply import QuickReply
 from app.models.service_type import Appointment, ServiceType
 from app.models.tag import Tag
+from app.models.tenant_template import InstantiationStatus, TemplateInstantiation, TenantTemplate
 from app.models.token_budget import TokenBudget
 from app.models.token_usage_log import TokenUsageLog
 from app.models.user import User
@@ -41,13 +42,16 @@ __all__ = [
     "Conversation",
     "Document",
     "DocumentChunk",
+    "InstantiationStatus",
     "InternalNote",
     "Message",
     "PendingResponse",
     "QuickReply",
     "ServiceType",
     "Tag",
+    "TemplateInstantiation",
     "TenantBaseModel",
+    "TenantTemplate",
     "TokenBudget",
     "TokenUsageLog",
     "User",
