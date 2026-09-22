@@ -413,6 +413,16 @@
 - **Despliegue:** la tarea cambia de nombre. Una tarea `ai_transcribe_audio` ya encolada y no consumida antes del despliegue se pierde con «unregistered task». Con Whisper aún sin configurar en producción no hay tareas en vuelo; si las hubiera, vaciar la cola `ai_inference` antes de desplegar.
 - **Límite:** el test vigila lo declarado contra `Settings`; una variable que un worker lee por `os.getenv` fuera de `Settings` (los proveedores de enriquecimiento, `CELERY_*`, OpenTelemetry) queda en una lista de excepciones y no se comprueba que su código la use.
 
+### ADR-061: `answerCallbackQuery` y throttling de Telegram, en un solo punto (`_llamar_raw`)
+- **Fecha:** 2026-09-22
+- **Contexto:** dos pendientes de Sprint 9 (PROGRESS.md): sin `answerCallbackQuery` el botón que el usuario toca en Telegram se queda mostrando el reloj de carga hasta que expira solo; y sin *throttling*, una ráfaga de respuestas (una campaña, varios contactos escribiendo a la vez) puede superar el límite no documentado de ~30 llamadas/segundo de la Bot API y hacer que Telegram empiece a rechazar envíos.
+- **Decisión:**
+  - **`TelegramProvider.answer_callback_query(callback_query_id, channel_config, text=None)`**, llamada desde `webhook_processor._responder_callback_de_telegram()` — **fuera de la transacción, antes de tocar la base**, porque el `callback_query_id` caduca al minuto y ese margen no debe competir con la persistencia del mensaje ni con la IA. Corre en la cola `webhooks` (dentro de `_process_message`), así que `celery-webhooks` pasa a necesitar `TELEGRAM_CHANNEL_BOT_TOKEN`/`TELEGRAM_API_BASE_URL` en el compose (antes no los necesitaba: nunca hablaba con Telegram).
+  - **Nunca propaga.** Si Telegram rechaza el callback (ya caducó) o el canal no está configurado, se registra y el mensaje sigue su camino — el peor caso es que el botón tarde un poco más en dejar de "cargar", no que se pierda el mensaje.
+  - **Throttle en `_llamar_raw()`**, el único punto por el que pasan todas las llamadas (envíos, `answerCallbackQuery`, `getFile`, `setWebhook`): contador `SET NX EX` + `INCR` en Redis por segundo (mismo patrón que `webchat._dentro_del_limite`), **global por bot** — todos los procesos comparten el mismo `TELEGRAM_CHANNEL_BOT_TOKEN`. La clave lleva un hash del token, no el token en claro. Un solo reintento (esperar al siguiente segundo), no un bucle: evita que una tarea de Celery quede esperando indefinidamente si algo sigue mandando tráfico.
+  - **Fail-open si Redis no responde.** El throttle es una cortesía con Telegram, no una garantía de entrega: un Redis caído no debe dejar a un contacto sin respuesta. `TELEGRAM_MAX_MESSAGES_PER_SECOND` (default 25, margen bajo el límite no documentado) — `<= 0` lo desactiva.
+- **Consecuencia:** el throttle es de proceso compartido (Redis), no in-memory, así que escala igual con 1 o con N workers/réplicas de la API. Límite conocido: cuenta *todas* las llamadas por igual (getFile/setWebhook incluidos), no solo los envíos — más simple que discriminar por método, a costa de frenar alguna llamada de lectura bajo una ráfaga rara.
+
 ---
 
 ## Bugs Conocidos y Pitfalls
