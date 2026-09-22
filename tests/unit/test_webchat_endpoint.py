@@ -188,6 +188,36 @@ def _hello(ws: WebSocketTestSession, session: str | None = None, **extra: Any) -
     return ws.receive_json()
 
 
+class TestWidgetJs:
+    """`GET /widget.js` sirve el script embebible; no requiere token ni Origin."""
+
+    def test_lo_sirve_como_javascript(self, cliente: TestClient) -> None:
+        respuesta = cliente.get("/api/v1/webchat/widget.js")
+
+        assert respuesta.status_code == 200
+        assert respuesta.headers["content-type"].startswith(
+            "application/javascript"
+        ) or respuesta.headers["content-type"].startswith("text/javascript")
+
+    def test_tiene_cache_corto(self, cliente: TestClient) -> None:
+        respuesta = cliente.get("/api/v1/webchat/widget.js")
+
+        assert respuesta.headers["cache-control"] == "public, max-age=300"
+
+    def test_no_exige_token_de_canal_ni_origin(self, cliente: TestClient) -> None:
+        """El archivo es el mismo para cualquier tenant: no hay nada que autenticar."""
+        respuesta = cliente.get("/api/v1/webchat/widget.js")  # sin header Origin
+
+        assert respuesta.status_code == 200
+
+    def test_el_contenido_es_el_archivo_real_del_repo(self, cliente: TestClient) -> None:
+        """Sin este test, un typo en la ruta serviria un 404 disfrazado de 200 vacio."""
+        respuesta = cliente.get("/api/v1/webchat/widget.js")
+
+        assert "WebSocket" in respuesta.text
+        assert "data-token" in respuesta.text
+
+
 def _codigo(ejecutar: Any) -> int:
     """Codigo con el que el servidor cerro la conexion."""
     with pytest.raises(WebSocketDisconnect) as info:
