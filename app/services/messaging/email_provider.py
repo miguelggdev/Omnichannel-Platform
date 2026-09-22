@@ -28,8 +28,12 @@ codigo real ya hace o por lo que romperia en produccion:
   se calculan a partir del ultimo mensaje entrante (ver
   `app/agents/nodes/_delivery.py`); el spec propone buscar por asunto, que une
   conversaciones ajenas con el mismo "Re: consulta".
-- **Adjuntos ignorados.** Son `UploadFile` de un multipart, no serializables a
-  Celery; guardarlos requiere Storage y limites de tamano.
+- **Adjuntos: solo metadata, nunca el contenido.** El endpoint extrae
+  `filename`/`content_type`/`size` (`app/api/v1/webhooks.py::_leer_adjuntos`);
+  aqui se valida de nuevo (defensa en profundidad) y se anota en `raw_payload` y
+  como una linea al final del texto, para que el agente sepa que hubo un
+  adjunto en vez de silencio total. Guardar el archivo y poder recuperarlo es
+  trabajo aparte — Storage, tipos permitidos, cuotas — (ADR-062).
 - **`raw_payload` compacto.** Se guarda en `messages.metadata`, en la cola de
   Celery y en `audit_logs`: solo lo necesario para el hilo, no el HTML entero.
 """
@@ -67,6 +71,9 @@ SMTP_TLS_IMPLICITO = 465
 MAX_BODY_CHARS = 10_000
 MAX_SUBJECT_CHARS = 200
 _TIMEOUT_SECONDS = 30.0
+
+#: Nombre de archivo cuando el que llego esta vacio o no es texto.
+_ADJUNTO_SIN_NOMBRE = "archivo"
 
 # Remitentes que son buzones de sistema.
 _REMITENTES_DE_SISTEMA = ("mailer-daemon", "postmaster", "no-reply", "noreply", "donotreply")
@@ -219,6 +226,66 @@ def _es_automatico(cabeceras: dict[str, str], direccion: str, propia: str) -> st
     return None
 
 
+def _adjuntos(crudos: Any) -> list[dict[str, Any]]:
+    """Valida y acota la metadata de adjuntos que paso el endpoint.
+
+    Defensa en profundidad: el endpoint (`app/api/v1/webhooks.py::_leer_adjuntos`)
+    ya acota cantidad y tamano, pero este metodo no confia ciegamente en
+    `raw_payload["_attachments"]` — cualquiera que construya el payload a mano
+    (los tests, un llamador futuro) podria mandar algo distinto.
+
+    Args:
+        crudos: Lo que traiga `raw_payload.get("_attachments")`.
+
+    Returns:
+        Hasta `EMAIL_MAX_ATTACHMENTS` entradas `{filename, content_type, size}`
+        saneadas; lista vacia si `crudos` no tiene la forma esperada.
+    """
+    if not isinstance(crudos, list):
+        return []
+    resultado: list[dict[str, Any]] = []
+    for item in crudos[: get_settings().EMAIL_MAX_ATTACHMENTS]:
+        if not isinstance(item, dict):
+            continue
+        nombre = str(item.get("filename") or _ADJUNTO_SIN_NOMBRE).strip() or _ADJUNTO_SIN_NOMBRE
+        tipo = str(item.get("content_type") or "application/octet-stream")[:100]
+        try:
+            tamano = max(0, int(item.get("size") or 0))
+        except (TypeError, ValueError):
+            tamano = 0
+        resultado.append({"filename": nombre[:200], "content_type": tipo, "size": tamano})
+    return resultado
+
+
+def _tamano_legible(cantidad_bytes: int) -> str:
+    """Formatea un tamano en bytes de forma legible para un humano.
+
+    Args:
+        cantidad_bytes: Tamano en bytes.
+
+    Returns:
+        P. ej. `"842 B"`, `"240 KB"`, `"1.2 MB"`.
+    """
+    if cantidad_bytes < 1024:
+        return f"{cantidad_bytes} B"
+    if cantidad_bytes < 1024 * 1024:
+        return f"{cantidad_bytes / 1024:.0f} KB"
+    return f"{cantidad_bytes / (1024 * 1024):.1f} MB"
+
+
+def _resumen_de_adjuntos(adjuntos: list[dict[str, Any]]) -> str:
+    """Linea legible para agregar al texto del mensaje.
+
+    Args:
+        adjuntos: Salida de `_adjuntos()`.
+
+    Returns:
+        `"[Adjunto(s): factura.pdf (240 KB), foto.jpg (1.2 MB)]"`.
+    """
+    partes = [f"{a['filename']} ({_tamano_legible(a['size'])})" for a in adjuntos]
+    return f"[Adjunto(s): {', '.join(partes)}]"
+
+
 class EmailProvider(MessagingProvider):
     """Implementacion de `MessagingProvider` para email.
 
@@ -233,12 +300,13 @@ class EmailProvider(MessagingProvider):
         """Normaliza un email del Inbound Parse de SendGrid o Mailgun.
 
         Args:
-            raw_payload: Campos del formulario, solo los de tipo texto (los
-                adjuntos no se procesan).
+            raw_payload: Campos del formulario, mas `_attachments` (metadata de
+                los adjuntos, ver `app/api/v1/webhooks.py::_leer_adjuntos`) si
+                el email traia alguno.
 
         Returns:
             Mensaje normalizado con `channel=email`. `raw_payload` queda reducido
-            a lo necesario para responder dentro del hilo.
+            a lo necesario para responder dentro del hilo, mas `attachments`.
 
         Raises:
             ValueError: Si no hay remitente valido o si el email es automatico
@@ -261,17 +329,26 @@ class EmailProvider(MessagingProvider):
             :MAX_SUBJECT_CHARS
         ]
         cuerpo = self._cuerpo(raw_payload)
-        if not cuerpo and not asunto:
-            raise IgnoredWebhookError("Email sin asunto ni cuerpo")
+        adjuntos = _adjuntos(raw_payload.get("_attachments"))
+        if not cuerpo and not asunto and not adjuntos:
+            raise IgnoredWebhookError("Email sin asunto, cuerpo ni adjuntos")
 
         # El asunto suele llevar la peticion en un hilo nuevo ("Consulta de precios").
         texto = f"Asunto: {asunto}\n\n{cuerpo}".strip() if asunto else cuerpo
+        if adjuntos:
+            # Sin esto el agente no se entera de que hubo un adjunto: el contenido
+            # no se procesa (ADR-062), pero al menos no queda en silencio total.
+            resumen = _resumen_de_adjuntos(adjuntos)
+            texto = f"{texto}\n\n{resumen}".strip() if texto else resumen
 
         message_id = (cabeceras.get("message-id") or "").strip()
         if not message_id:
             # Sin Message-Id no hay como deduplicar una reentrega: se sintetiza uno
-            # estable a partir del contenido.
-            huella = hashlib.sha256(f"{direccion}|{asunto}|{cuerpo}".encode()).hexdigest()[:32]
+            # estable a partir del contenido (adjuntos incluidos: dos emails sin
+            # asunto ni cuerpo pero con adjuntos distintos no deben colisionar).
+            huella = hashlib.sha256(
+                f"{direccion}|{asunto}|{cuerpo}|{adjuntos}".encode()
+            ).hexdigest()[:32]
             message_id = f"<sintetico-{huella}@inbound.local>"
 
         return NormalizedMessage(
@@ -286,6 +363,7 @@ class EmailProvider(MessagingProvider):
                 "message_id": message_id,
                 "in_reply_to": (cabeceras.get("in-reply-to") or "").strip()[:500],
                 "references": (cabeceras.get("references") or "").strip()[:2000],
+                "attachments": adjuntos,
                 "from": direccion,
                 "to": str(raw_payload.get("to") or raw_payload.get("recipient") or "")[:500],
             },

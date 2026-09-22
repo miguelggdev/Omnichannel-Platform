@@ -403,13 +403,13 @@ class TestWebhookEmail:
         assert mensaje["external_message_id"] == "<abc123@mail.example.com>"
         assert mensaje["text"].startswith("Asunto: Consulta de precios")
 
-    async def test_multipart_con_adjunto_no_rompe_la_serializacion(
+    async def test_multipart_con_adjunto_se_serializa_con_su_metadata(
         self, api_client: Any, patched_webhook: FakeTask
     ) -> None:
         """SendGrid manda `multipart/form-data` y los adjuntos son archivos.
 
-        Un `UploadFile` en el payload no se serializa a Celery: solo se conservan
-        los campos de texto.
+        Un `UploadFile` en el payload no se serializa a Celery tal cual — pero su
+        nombre, tipo y tamano si llegan como texto (ADR-062).
         """
         import json
 
@@ -422,16 +422,20 @@ class TestWebhookEmail:
         assert response.json() == {"status": "queued"}
         (llamada,) = patched_webhook.calls
         json.dumps(llamada["normalized_message"])  # revienta si quedo un UploadFile
-        assert "factura" not in json.dumps(llamada["normalized_message"])
+        mensaje = llamada["normalized_message"]
+        assert mensaje["raw_payload"]["attachments"] == [
+            {"filename": "factura.pdf", "content_type": "application/pdf", "size": 18}
+        ]
+        assert "[Adjunto(s): factura.pdf (18 B)]" in mensaje["text"]
 
-    async def test_el_provider_recibe_solo_campos_de_texto(
+    async def test_el_provider_recibe_metadata_del_adjunto_no_el_archivo(
         self, api_client: Any, monkeypatch: pytest.MonkeyPatch, patched_webhook: FakeTask
     ) -> None:
-        """Los adjuntos (`UploadFile`) no llegan a `parse_webhook`.
+        """El `UploadFile` no llega a `parse_webhook`; su metadata si, aparte.
 
         Cualquier provider que guarde `raw_payload` tal cual lo mandaria a
-        Celery, que no sabe serializarlos. `EmailProvider` los ignora por su
-        cuenta, asi que hace falta mirar lo que el endpoint le entrega.
+        Celery, que no sabe serializar un `UploadFile`. Lo que SI llega es
+        `_attachments`, ya reducido a texto (`app/api/v1/webhooks.py::_leer_adjuntos`).
         """
         recibido: list[dict[str, Any]] = []
 
@@ -447,8 +451,125 @@ class TestWebhookEmail:
         response = await api_client.post(self.URL, files=campos, headers=_basic(self.SECRETO))
 
         assert response.status_code == 200
-        assert set(recibido[0]) == set(self.CAMPOS)
-        assert all(isinstance(valor, str) for valor in recibido[0].values())
+        assert set(recibido[0]) == set(self.CAMPOS) | {"_attachments"}
+        assert all(isinstance(recibido[0][clave], str) for clave in self.CAMPOS)
+        assert recibido[0]["_attachments"] == [
+            {"filename": "factura.pdf", "content_type": "application/pdf", "size": 18}
+        ]
+
+    async def test_sin_adjuntos_no_agrega_la_clave(
+        self, api_client: Any, monkeypatch: pytest.MonkeyPatch, patched_webhook: FakeTask
+    ) -> None:
+        """Un multipart normal (sin archivos) no gana un `_attachments` vacio."""
+        recibido: list[dict[str, Any]] = []
+
+        class EspiaProvider(FakeProvider):
+            async def parse_webhook(self, raw_payload: dict[str, Any]) -> FakeNormalized:
+                recibido.append(raw_payload)
+                return self.normalized
+
+        _use_provider(monkeypatch, EspiaProvider())
+
+        response = await api_client.post(self.URL, data=self.CAMPOS, headers=_basic(self.SECRETO))
+
+        assert response.status_code == 200
+        assert "_attachments" not in recibido[0]
+
+    async def test_no_extrae_adjuntos_de_otros_proveedores(
+        self, api_client: Any, monkeypatch: pytest.MonkeyPatch, patched_webhook: FakeTask
+    ) -> None:
+        """Solo email manda multipart; los demas nunca deberian ganar `_attachments`."""
+        recibido: list[dict[str, Any]] = []
+
+        class EspiaProvider(FakeProvider):
+            async def parse_webhook(self, raw_payload: dict[str, Any]) -> FakeNormalized:
+                recibido.append(raw_payload)
+                return self.normalized
+
+        _use_provider(monkeypatch, EspiaProvider())
+        campos = {clave: (None, valor) for clave, valor in self.CAMPOS.items()}
+        campos["attachment1"] = ("factura.pdf", b"%PDF-1.4 contenido", "application/pdf")
+
+        await api_client.post(
+            "/api/v1/webhooks/linkedin/linkedin", files=campos, headers=_basic(self.SECRETO)
+        )
+
+        assert "_attachments" not in recibido[0]
+
+    async def test_mas_adjuntos_que_el_limite_se_recortan(
+        self,
+        api_client: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        patched_webhook: FakeTask,
+    ) -> None:
+        """Un email con mas adjuntos de la cuenta no debe crecer sin control."""
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "EMAIL_MAX_ATTACHMENTS", 2)
+        recibido: list[dict[str, Any]] = []
+
+        class EspiaProvider(FakeProvider):
+            async def parse_webhook(self, raw_payload: dict[str, Any]) -> FakeNormalized:
+                recibido.append(raw_payload)
+                return self.normalized
+
+        _use_provider(monkeypatch, EspiaProvider())
+        campos = {clave: (None, valor) for clave, valor in self.CAMPOS.items()}
+        campos["attachment1"] = ("uno.pdf", b"111", "application/pdf")
+        campos["attachment2"] = ("dos.pdf", b"222", "application/pdf")
+        campos["attachment3"] = ("tres.pdf", b"333", "application/pdf")
+
+        await api_client.post(self.URL, files=campos, headers=_basic(self.SECRETO))
+
+        assert len(recibido[0]["_attachments"]) == 2
+
+    async def test_un_nombre_con_ruta_se_sanea(
+        self, api_client: Any, monkeypatch: pytest.MonkeyPatch, patched_webhook: FakeTask
+    ) -> None:
+        """El nombre del adjunto lo elige el remitente: no debe colarse un path."""
+        recibido: list[dict[str, Any]] = []
+
+        class EspiaProvider(FakeProvider):
+            async def parse_webhook(self, raw_payload: dict[str, Any]) -> FakeNormalized:
+                recibido.append(raw_payload)
+                return self.normalized
+
+        _use_provider(monkeypatch, EspiaProvider())
+        campos = {clave: (None, valor) for clave, valor in self.CAMPOS.items()}
+        campos["attachment1"] = ("../../etc/passwd", b"x", "text/plain")
+
+        await api_client.post(self.URL, files=campos, headers=_basic(self.SECRETO))
+
+        nombre = recibido[0]["_attachments"][0]["filename"]
+        assert "/" not in nombre
+        assert ".." not in nombre
+
+    async def test_un_adjunto_que_supera_el_limite_no_se_lee_completo(
+        self, api_client: Any, monkeypatch: pytest.MonkeyPatch, patched_webhook: FakeTask
+    ) -> None:
+        """El conteo se corta apenas se supera el limite, no sigue leyendo el resto.
+
+        El adjunto tiene que ser mayor a un trozo de lectura (64 KB): con uno mas
+        chico, un solo `.read()` ya trae todo el archivo y no hay forma de
+        distinguir "se corto" de "no habia mas que leer".
+        """
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "EMAIL_MAX_ATTACHMENT_BYTES", 100)
+        recibido: list[dict[str, Any]] = []
+
+        class EspiaProvider(FakeProvider):
+            async def parse_webhook(self, raw_payload: dict[str, Any]) -> FakeNormalized:
+                recibido.append(raw_payload)
+                return self.normalized
+
+        _use_provider(monkeypatch, EspiaProvider())
+        campos = {clave: (None, valor) for clave, valor in self.CAMPOS.items()}
+        campos["attachment1"] = ("grande.pdf", b"x" * 200_000, "application/pdf")
+
+        await api_client.post(self.URL, files=campos, headers=_basic(self.SECRETO))
+
+        assert recibido[0]["_attachments"][0]["size"] < 150_000
 
     @pytest.mark.parametrize("cabeceras", [{}, _basic("hook:otra-password"), _basic(":")])
     async def test_sin_credenciales_correctas_es_401(

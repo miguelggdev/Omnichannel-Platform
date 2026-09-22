@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     # header `X-Telegram-Bot-Api-Secret-Token` de cada update.
     TELEGRAM_WEBHOOK_SECRET: str = ""
     TELEGRAM_API_BASE_URL: str = "https://api.telegram.org"
+    # Cupo global (todos los procesos comparten el mismo bot) de llamadas por
+    # segundo a la Bot API; Telegram documenta ~30/s repartidas entre chats
+    # distintos (Bot API FAQ) — se deja margen. <= 0 desactiva el throttle.
+    TELEGRAM_MAX_MESSAGES_PER_SECOND: int = 25
 
     # Webchat (WebSocket) — Sprint 9. `WEBCHAT_CHANNEL_TOKEN` identifica el canal
     # en la URL del widget (`/api/v1/webchat/{token}`); NO es un secreto (va en el
@@ -119,6 +123,12 @@ class Settings(BaseSettings):
     # (https://usuario:password@host/...): ni SendGrid ni Mailgun firman ese
     # webhook, pero los dos envian la cabecera Authorization: Basic.
     EMAIL_INBOUND_WEBHOOK_SECRET: str = ""
+    # Adjuntos del Inbound Parse: solo se registra su METADATA (nombre, tipo,
+    # tamano), nunca el contenido — guardarlo requiere Storage y una superficie
+    # de seguridad propia que queda fuera de esta entrega (ADR-062). Sin esto un
+    # adjunto desaparecia sin dejar rastro.
+    EMAIL_MAX_ATTACHMENTS: int = 5
+    EMAIL_MAX_ATTACHMENT_BYTES: int = 5 * 1024 * 1024
 
     # Google Calendar (Sprint 7) — un service account global (no OAuth2 por
     # tenant): cada tenant comparte su calendario con el email del service

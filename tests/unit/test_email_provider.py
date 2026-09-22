@@ -138,6 +138,7 @@ class TestParseWebhook:
             "message_id",
             "in_reply_to",
             "references",
+            "attachments",
             "from",
             "to",
         }
@@ -160,7 +161,7 @@ class TestParseWebhook:
 
     async def test_sin_asunto_ni_cuerpo_se_ignora(self, provider: EmailProvider) -> None:
         """No hay nada que responder."""
-        with pytest.raises(IgnoredWebhookError, match="sin asunto ni cuerpo"):
+        with pytest.raises(IgnoredWebhookError, match="sin asunto, cuerpo ni adjuntos"):
             await provider.parse_webhook(_sendgrid(subject="", text=""))
 
     async def test_solo_html(self, provider: EmailProvider) -> None:
@@ -221,6 +222,131 @@ class TestParseWebhook:
             await provider.parse_webhook(_sendgrid(**{"from": remitente}))
 
         assert not isinstance(error.value, IgnoredWebhookError)
+
+
+# ─── Adjuntos: solo metadata, nunca el contenido (ADR-062) ───────────────────
+
+
+def _adjunto(**extra: Any) -> dict[str, Any]:
+    """Metadata de un adjunto, tal como la deja `_leer_adjuntos` en el endpoint."""
+    base = {"filename": "factura.pdf", "content_type": "application/pdf", "size": 245_760}
+    base.update(extra)
+    return base
+
+
+class TestAdjuntos:
+    """`raw_payload["_attachments"]` se valida de nuevo y se resume en el texto."""
+
+    async def test_se_agrega_un_resumen_legible_al_final_del_texto(
+        self, provider: EmailProvider
+    ) -> None:
+        normalizado = await provider.parse_webhook(_sendgrid(_attachments=[_adjunto()]))
+
+        assert normalizado.text.endswith("[Adjunto(s): factura.pdf (240 KB)]")
+        assert "Consulta de precios" in normalizado.text  # no pisa lo anterior
+
+    async def test_varios_adjuntos_se_listan_juntos(self, provider: EmailProvider) -> None:
+        normalizado = await provider.parse_webhook(
+            _sendgrid(
+                _attachments=[
+                    _adjunto(filename="factura.pdf", size=100),
+                    _adjunto(filename="foto.jpg", size=1_500_000),
+                ]
+            )
+        )
+
+        assert "[Adjunto(s): factura.pdf (100 B), foto.jpg (1.4 MB)]" in normalizado.text
+
+    async def test_van_en_raw_payload(self, provider: EmailProvider) -> None:
+        normalizado = await provider.parse_webhook(_sendgrid(_attachments=[_adjunto()]))
+
+        assert normalizado.raw_payload["attachments"] == [_adjunto()]
+
+    async def test_solo_adjunto_sin_asunto_ni_cuerpo_no_se_ignora(
+        self, provider: EmailProvider
+    ) -> None:
+        """Antes desaparecia en silencio (200 `ignored`); ahora al menos se sabe que llego algo."""
+        normalizado = await provider.parse_webhook(
+            _sendgrid(subject="", text="", _attachments=[_adjunto()])
+        )
+
+        assert normalizado.text == "[Adjunto(s): factura.pdf (240 KB)]"
+
+    async def test_sin_attachments_el_texto_no_cambia(self, provider: EmailProvider) -> None:
+        normalizado = await provider.parse_webhook(_sendgrid())
+
+        assert "Adjunto" not in normalizado.text
+        assert normalizado.raw_payload["attachments"] == []
+
+    @pytest.mark.parametrize("crudo", [None, "no-es-una-lista", {"filename": "x"}, 42])
+    async def test_una_forma_invalida_no_rompe_el_mensaje(
+        self, provider: EmailProvider, crudo: Any
+    ) -> None:
+        """Defensa en profundidad: no se confia ciegamente en lo que trae el payload."""
+        normalizado = await provider.parse_webhook(_sendgrid(_attachments=crudo))
+
+        assert normalizado.raw_payload["attachments"] == []
+        assert "Adjunto" not in normalizado.text
+
+    async def test_un_item_que_no_es_dict_se_descarta_sin_romper_los_demas(
+        self, provider: EmailProvider
+    ) -> None:
+        normalizado = await provider.parse_webhook(
+            _sendgrid(_attachments=["no-es-un-dict", _adjunto()])
+        )
+
+        assert normalizado.raw_payload["attachments"] == [_adjunto()]
+
+    async def test_respeta_el_limite_configurado(
+        self, provider: EmailProvider, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(get_settings(), "EMAIL_MAX_ATTACHMENTS", 2)
+        tres = [_adjunto(filename=f"{i}.pdf") for i in range(3)]
+
+        normalizado = await provider.parse_webhook(_sendgrid(_attachments=tres))
+
+        assert len(normalizado.raw_payload["attachments"]) == 2
+
+    @pytest.mark.parametrize("filename", ["", "   ", "\t\n"])
+    async def test_sin_nombre_util_usa_un_nombre_generico(
+        self, provider: EmailProvider, filename: str
+    ) -> None:
+        """Vacio o solo espacios (tras `strip()`) cae al mismo generico."""
+        normalizado = await provider.parse_webhook(
+            _sendgrid(_attachments=[_adjunto(filename=filename)])
+        )
+
+        assert normalizado.raw_payload["attachments"][0]["filename"] == "archivo"
+
+    async def test_tamano_negativo_o_invalido_se_normaliza_a_cero(
+        self, provider: EmailProvider
+    ) -> None:
+        normalizado = await provider.parse_webhook(
+            _sendgrid(_attachments=[_adjunto(size=-5), _adjunto(size="no-es-un-numero")])
+        )
+
+        assert [a["size"] for a in normalizado.raw_payload["attachments"]] == [0, 0]
+
+    async def test_mensajes_sinteticos_de_adjuntos_distintos_no_colisionan(
+        self, provider: EmailProvider
+    ) -> None:
+        """Dos emails sin asunto ni cuerpo pero con adjuntos distintos no se deduplican entre si."""
+        sin_id = _sendgrid(subject="", text="", headers="Date: Mon, 14 Nov 2023 22:13:20 +0000\n")
+
+        uno = await provider.parse_webhook({**sin_id, "_attachments": [_adjunto(filename="a.pdf")]})
+        otro = await provider.parse_webhook(
+            {**sin_id, "_attachments": [_adjunto(filename="b.pdf")]}
+        )
+
+        assert uno.external_message_id != otro.external_message_id
+
+    def test_tamano_legible(self) -> None:
+        assert email_module._tamano_legible(0) == "0 B"
+        assert email_module._tamano_legible(1023) == "1023 B"
+        assert email_module._tamano_legible(1024) == "1 KB"
+        assert email_module._tamano_legible(245_760) == "240 KB"
+        assert email_module._tamano_legible(1024 * 1024) == "1.0 MB"
+        assert email_module._tamano_legible(1_500_000) == "1.4 MB"
 
 
 class TestNoResponderAAutomaticos:
