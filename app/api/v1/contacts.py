@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import tenant_session
 from app.core.dependencies import require_role
+from app.core.events import EVENT_CONTACT_CREATED, EVENT_CONTACT_UPDATED, EventEmitter
 from app.core.exceptions import NOT_FOUND, VALIDATION_ERROR, AppException
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
@@ -185,6 +186,13 @@ async def create_contact(
         respuesta = ContactResponse.model_validate(contact)
 
     logger.info("Contacto %s creado por tenant %s", respuesta.id, client_id)
+
+    # Despues del commit: el evento anuncia un contacto que ya existe.
+    await EventEmitter.emit(
+        EVENT_CONTACT_CREATED,
+        client_id,
+        {"contact_id": str(respuesta.id), "channel": None},
+    )
     return respuesta
 
 
@@ -306,17 +314,29 @@ async def update_contact(
 
         cambios = data.model_dump(exclude_unset=True)
         # `metadata` es el alias publico de la columna `metadata_` del modelo.
+        metadata_modificada = False
         if "metadata" in cambios:
             metadata = cambios.pop("metadata")
             if metadata is not None:
                 contact.metadata_ = metadata
+                metadata_modificada = True
 
         for campo, valor in cambios.items():
             setattr(contact, campo, valor)
 
         await session.flush()
         await session.refresh(contact)
-        return ContactResponse.model_validate(contact)
+        respuesta = ContactResponse.model_validate(contact)
+        campos_modificados = sorted(cambios) + (["metadata"] if metadata_modificada else [])
+
+    # Un PATCH sin campos no cambio nada: anunciarlo seria un evento falso.
+    if campos_modificados:
+        await EventEmitter.emit(
+            EVENT_CONTACT_UPDATED,
+            client_id,
+            {"contact_id": str(contact_id), "updated_fields": campos_modificados},
+        )
+    return respuesta
 
 
 @router.post("/{contact_id}/merge/{target_id}", response_model=ContactResponse)

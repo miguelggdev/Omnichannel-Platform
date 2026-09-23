@@ -18,11 +18,13 @@ from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.models.internal_note import InternalNote
 from app.models.message import Message
+from app.models.outgoing_webhook_log import OutgoingWebhookLog
 from app.models.pending_response import PendingResponse
 from app.models.quick_reply import QuickReply
 from app.models.service_type import Appointment, ServiceType
 from app.models.tag import Tag
 from app.models.tenant_template import InstantiationStatus, TemplateInstantiation, TenantTemplate
+from app.models.tenant_webhook import TenantWebhook
 from app.models.token_budget import TokenBudget
 from app.models.token_usage_log import TokenUsageLog
 from app.models.user import User
@@ -45,6 +47,7 @@ __all__ = [
     "InstantiationStatus",
     "InternalNote",
     "Message",
+    "OutgoingWebhookLog",
     "PendingResponse",
     "QuickReply",
     "ServiceType",
@@ -52,6 +55,7 @@ __all__ = [
     "TemplateInstantiation",
     "TenantBaseModel",
     "TenantTemplate",
+    "TenantWebhook",
     "TokenBudget",
     "TokenUsageLog",
     "User",

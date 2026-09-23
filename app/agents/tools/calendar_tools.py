@@ -28,7 +28,7 @@ declara pero nunca los conecta a ninguna tool).
 import logging
 from datetime import datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from langchain_core.runnables import RunnableConfig
@@ -36,6 +36,7 @@ from langchain_core.tools import tool
 from sqlalchemy import select, text
 
 from app.core.database import tenant_session
+from app.core.events import EVENT_APPOINTMENT_CREATED, EventEmitter
 from app.models.contact import Contact
 from app.models.service_type import Appointment, ServiceType
 from app.services.calendar import GoogleCalendarService
@@ -234,8 +235,10 @@ async def create_appointment(
             description=notes,
         )
 
+        appointment_id = uuid4()
         session.add(
             Appointment(
+                id=appointment_id,
                 client_id=client_id,
                 contact_id=contact_id,
                 conversation_id=UUID(conversation_id) if conversation_id else None,
@@ -248,6 +251,20 @@ async def create_appointment(
                 notes=notes,
             )
         )
+
+    # Despues del commit: la cita que se anuncia ya esta en la base.
+    await EventEmitter.emit(
+        EVENT_APPOINTMENT_CREATED,
+        client_id,
+        {
+            "appointment_id": str(appointment_id),
+            "contact_id": str(contact_id),
+            "conversation_id": conversation_id,
+            "service_type": service_type_name,
+            "scheduled_at": start.isoformat(),
+            "ends_at": end.isoformat(),
+        },
+    )
 
     return (
         "Cita creada exitosamente:\n"

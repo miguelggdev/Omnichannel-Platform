@@ -8,6 +8,7 @@ completo contra PostgreSQL vive en `tests/integration/test_webhook_flow.py`.
 import json
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -288,19 +289,25 @@ class TestResolverConversacion:
         activa = object()
         session = FakeSession(results=[activa])
 
-        resultado = await wp._resolve_conversation(session, uuid.uuid4(), uuid.uuid4(), "whatsapp")
+        resultado, creada = await wp._resolve_conversation(
+            session, uuid.uuid4(), uuid.uuid4(), "whatsapp"
+        )
 
         assert resultado is activa
+        assert creada is False
         assert session.added == []
 
     async def test_crea_conversacion_en_bot_active(self) -> None:
         """Sin hilo abierto se crea uno nuevo listo para el grafo de agentes."""
         session = FakeSession(results=[None])
 
-        resultado = await wp._resolve_conversation(session, uuid.uuid4(), uuid.uuid4(), "instagram")
+        resultado, creada = await wp._resolve_conversation(
+            session, uuid.uuid4(), uuid.uuid4(), "instagram"
+        )
 
         assert resultado.status == "bot_active"
         assert resultado.channel == "instagram"
+        assert creada is True
         assert len(session.added) == 1
 
 
@@ -447,6 +454,99 @@ class TestProcessMessage:
         await wp._process_message("meta", "instagram", message_data)
 
         assert capturado["channel"] == "facebook"
+
+
+# ─── Eventos salientes (Sprint 11) ───────────────────────────────────────────
+
+
+class TestEventosDelMensajeEntrante:
+    """`_process_message` anuncia lo que ocurrio, y solo despues del commit."""
+
+    def _preparar(self, monkeypatch: pytest.MonkeyPatch, session: "FakeSession") -> uuid.UUID:
+        client_id = uuid.uuid4()
+        monkeypatch.setattr(wp, "_resolve_client_id", lambda provider, channel: client_id)
+
+        class FakeTenantSession:
+            async def __aenter__(self) -> FakeSession:
+                return session
+
+            async def __aexit__(self, *exc: Any) -> None:
+                return None
+
+        monkeypatch.setattr(wp, "tenant_session", lambda _client_id: FakeTenantSession())
+
+        async def sin_duplicado(*args: Any, **kwargs: Any) -> bool:
+            return False
+
+        async def persistido_ok(*args: Any, **kwargs: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(wp, "is_duplicate_persisted", sin_duplicado)
+        monkeypatch.setattr(wp, "persist_dedup", persistido_ok)
+        monkeypatch.setattr(wp, "_enqueue_ai_processing", lambda **kw: None)
+        return client_id
+
+    @staticmethod
+    def _mensaje() -> dict[str, Any]:
+        return {
+            "external_message_id": "wa.1",
+            "sender_identifier": "573001112233",
+            "channel": "whatsapp",
+            "text": "hola",
+            "timestamp": "2026-09-23T10:00:00+00:00",
+            "raw_payload": {},
+        }
+
+    async def test_contacto_conversacion_y_mensaje_nuevos_emiten_los_tres_eventos(
+        self, monkeypatch: pytest.MonkeyPatch, eventos_emitidos: list
+    ) -> None:
+        session = FakeSession(results=[None, None])
+        client_id = self._preparar(monkeypatch, session)
+
+        await wp._process_message("ycloud", "whatsapp", self._mensaje())
+
+        emitidos = [evento for evento, _cliente, _data in eventos_emitidos]
+        assert emitidos == ["contact.created", "conversation.created", "message.received"]
+        assert all(cliente == str(client_id) for _e, cliente, _d in eventos_emitidos)
+        data = eventos_emitidos[-1][2]
+        assert data["channel"] == "whatsapp"
+        assert data["content"] == "hola"
+        assert data["direction"] == "incoming"
+
+    async def test_sobre_un_hilo_existente_solo_emite_el_mensaje(
+        self, monkeypatch: pytest.MonkeyPatch, eventos_emitidos: list
+    ) -> None:
+        """Un contacto y una conversacion que ya existian no son hechos nuevos."""
+        contacto = SimpleNamespace(
+            id=uuid.uuid4(), display_name="Alguien", merged_into_id=None, metadata_={}
+        )
+        # `_find_or_create_contact` busca primero el identificador (indice
+        # ciego) y despues el contacto al que apunta.
+        identificador = SimpleNamespace(contact_id=contacto.id)
+        conversacion = SimpleNamespace(
+            id=uuid.uuid4(), status="bot_active", channel="whatsapp", last_message_at=None
+        )
+        session = FakeSession(results=[identificador, contacto, conversacion])
+        self._preparar(monkeypatch, session)
+
+        await wp._process_message("ycloud", "whatsapp", self._mensaje())
+
+        assert [evento for evento, _c, _d in eventos_emitidos] == ["message.received"]
+
+    async def test_un_duplicado_no_emite_nada(
+        self, monkeypatch: pytest.MonkeyPatch, eventos_emitidos: list
+    ) -> None:
+        session = FakeSession(results=[None, None])
+        self._preparar(monkeypatch, session)
+
+        async def duplicado(*args: Any, **kwargs: Any) -> bool:
+            return True
+
+        monkeypatch.setattr(wp, "is_duplicate_persisted", duplicado)
+
+        await wp._process_message("ycloud", "whatsapp", self._mensaje())
+
+        assert eventos_emitidos == []
 
 
 # ─── No responder cuando la conversacion ya es de un humano ──────────────────

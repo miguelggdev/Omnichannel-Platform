@@ -24,6 +24,7 @@ import uuid
 import pytest
 from sqlalchemy import text
 
+from app.core.config import get_settings
 from tests.integration.identifiers import params_identificador
 
 pytestmark = [
@@ -519,10 +520,12 @@ class TestRLSMVPTables:
 
 
 @pytest.mark.skip(
-    reason="Tablas de Fase 2 (audit_logs, tenant_templates, tenant_webhooks, "
-    "satisfaction_surveys, channel_configs) aun no existen en ninguna migracion "
+    reason="Tablas de Fase 2 (audit_logs, tenant_templates, satisfaction_surveys, "
+    "channel_configs) aun no existen en ninguna migracion "
     "de Alembic (solo en supabase/init/phase2_tables.sql, que ADR-020 no ejecuta "
-    "contra Supabase Cloud). Reactivar cuando su migracion se agregue."
+    "contra Supabase Cloud). Reactivar cuando su migracion se agregue. "
+    "tenant_webhooks salio de aqui: ya existe (migracion 011) y tiene su propia "
+    "clase, TestRLSOutgoingWebhooks."
 )
 class TestRLSPhase2Tables:
     """Tests de aislamiento RLS para las 6 tablas de Fase 2."""
@@ -553,22 +556,6 @@ class TestRLSPhase2Tables:
             insert_sql="""
                 INSERT INTO tenant_templates (id, client_id, name, template_data)
                 VALUES (:id, :client_id, 'Template Test', '{}')
-            """,
-            params={
-                "id": str(uuid.uuid4()),
-                "client_id": str(rls_harness["tenant_a"]),
-            },
-        )
-
-    async def test_tenant_webhooks(self, rls_harness: dict) -> None:
-        """tenant_webhooks: aislamiento por tenant."""
-        await assert_rls_isolation(
-            rls_harness["session_a"],
-            rls_harness["session_b"],
-            table="tenant_webhooks",
-            insert_sql="""
-                INSERT INTO tenant_webhooks (id, client_id, url, events, is_active)
-                VALUES (:id, :client_id, 'https://example.com/hook', ARRAY['message.received'], true)
             """,
             params={
                 "id": str(uuid.uuid4()),
@@ -674,6 +661,102 @@ class TestRLSFeatureTables:
                 "id": str(uuid.uuid4()),
                 "client_id": cid_a,
                 "conv_id": conv_id,
+            },
+        )
+
+
+# ─── Tests por tabla: webhooks salientes (Sprint 11) ────────────────────────
+
+
+class TestRLSOutgoingWebhooks:
+    """Aislamiento RLS de las dos tablas del engine de webhooks salientes."""
+
+    async def test_tenant_webhooks(self, rls_harness: dict) -> None:
+        """tenant_webhooks: un tenant no ve la configuracion del otro."""
+        await assert_rls_isolation(
+            rls_harness["session_a"],
+            rls_harness["session_b"],
+            table="tenant_webhooks",
+            # `secret` es BYTEA cifrado con pgcrypto (migracion 011): con SQL
+            # crudo hay que cifrar a mano, igual que contact_identifiers.
+            insert_sql="""
+                INSERT INTO tenant_webhooks (id, client_id, url, secret, events)
+                VALUES (:id, :client_id, 'https://ejemplo.com/hook',
+                        pgp_sym_encrypt(:secreto, :clave), ARRAY['message.received'])
+            """,
+            params={
+                "id": str(uuid.uuid4()),
+                "client_id": str(rls_harness["tenant_a"]),
+                "secreto": "un-secreto-de-firma",
+                "clave": get_settings().ENCRYPTION_KEY,
+            },
+        )
+
+    async def test_el_secreto_no_queda_en_claro(self, rls_harness: dict) -> None:
+        """El secreto de firma es una credencial: en la base va cifrado."""
+        sa = rls_harness["session_a"]
+        webhook_id = str(uuid.uuid4())
+        clave = get_settings().ENCRYPTION_KEY
+
+        await sa.execute(
+            text("""
+                INSERT INTO tenant_webhooks (id, client_id, url, secret, events)
+                VALUES (:id, :cid, 'https://ejemplo.com/hook',
+                        pgp_sym_encrypt(:secreto, :clave), ARRAY['message.received'])
+            """),
+            {
+                "id": webhook_id,
+                "cid": str(rls_harness["tenant_a"]),
+                "secreto": "un-secreto-de-firma",
+                "clave": clave,
+            },
+        )
+
+        crudo = await sa.scalar(
+            text("SELECT secret::text FROM tenant_webhooks WHERE id = :id"), {"id": webhook_id}
+        )
+        descifrado = await sa.scalar(
+            text("SELECT pgp_sym_decrypt(secret, :clave) FROM tenant_webhooks WHERE id = :id"),
+            {"id": webhook_id, "clave": clave},
+        )
+
+        assert "un-secreto-de-firma" not in (crudo or "")
+        assert descifrado == "un-secreto-de-firma"
+
+    async def test_outgoing_webhook_logs(self, rls_harness: dict) -> None:
+        """outgoing_webhook_logs: el historial de envios tampoco cruza tenants."""
+        sa = rls_harness["session_a"]
+        cid_a = str(rls_harness["tenant_a"])
+        webhook_id = str(uuid.uuid4())
+
+        await sa.execute(
+            text("""
+                INSERT INTO tenant_webhooks (id, client_id, url, secret, events)
+                VALUES (:id, :cid, 'https://ejemplo.com/hook',
+                        pgp_sym_encrypt(:secreto, :clave), ARRAY['message.received'])
+            """),
+            {
+                "id": webhook_id,
+                "cid": cid_a,
+                "secreto": "otro-secreto",
+                "clave": get_settings().ENCRYPTION_KEY,
+            },
+        )
+
+        await assert_rls_isolation(
+            sa,
+            rls_harness["session_b"],
+            table="outgoing_webhook_logs",
+            insert_sql="""
+                INSERT INTO outgoing_webhook_logs
+                    (id, client_id, webhook_id, event, payload, status, response_code, attempt)
+                VALUES (:id, :client_id, :webhook_id, 'message.received',
+                        '{"event": "message.received"}'::jsonb, 'success', 200, 1)
+            """,
+            params={
+                "id": str(uuid.uuid4()),
+                "client_id": cid_a,
+                "webhook_id": webhook_id,
             },
         )
 

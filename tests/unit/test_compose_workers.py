@@ -283,6 +283,10 @@ REQUERIDAS_POR_SERVICIO: dict[str, frozenset[str]] = {
     "celery-ai": frozenset(
         {"GOOGLE_CALENDAR_CREDENTIALS_JSON", "GOOGLE_CALENDAR_ID", "OPENAI_CHAT_MODEL"}
     ),
+    # El engine de webhooks salientes corre entero en este worker (Sprint 11).
+    "celery-notifications": frozenset(
+        {"OUTGOING_WEBHOOK_TIMEOUT_SECONDS", "OUTGOING_WEBHOOK_ALLOW_PRIVATE_HOSTS"}
+    ),
     "api": frozenset({"SUPABASE_STORAGE_BUCKET", "JWT_REFRESH_EXPIRATION_DAYS"}),
 }
 

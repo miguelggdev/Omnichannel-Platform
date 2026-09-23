@@ -182,6 +182,13 @@ class Settings(BaseSettings):
     WHISPER_TIMEOUT_SECONDS: float = 60.0
     MEDIA_DOWNLOAD_TIMEOUT_SECONDS: float = 30.0
 
+    # Webhooks salientes — Sprint 11
+    OUTGOING_WEBHOOK_TIMEOUT_SECONDS: float = 10.0
+    # Permitir URLs que resuelven a direcciones privadas/loopback. Solo para
+    # desarrollo local (un receptor en localhost); en produccion abre la puerta
+    # a SSRF contra la red interna, ver ADR-065.
+    OUTGOING_WEBHOOK_ALLOW_PRIVATE_HOSTS: bool = False
+
     # Anthropic (Admin Assistant)
     ANTHROPIC_API_KEY: str = ""
     ADMIN_ASSISTANT_MODEL: str = "claude-sonnet-4-20250514"

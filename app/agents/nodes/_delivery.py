@@ -16,12 +16,13 @@ historial no.
 import logging
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 
 from app.agents.nodes._tenant import get_channel_config, get_contact_identifier
 from app.core.database import tenant_session
+from app.core.events import EVENT_MESSAGE_SENT, EventEmitter
 from app.core.metrics import record_message
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -122,9 +123,12 @@ async def deliver_message(
         channel_config=channel_config,
     )
 
+    message_id = uuid4()
+
     async with tenant_session(client_id) as session:
         session.add(
             Message(
+                id=message_id,
                 client_id=client_id,
                 conversation_id=conversation_id,
                 direction="outbound",
@@ -146,6 +150,23 @@ async def deliver_message(
             conversation.last_message_at = datetime.now(timezone.utc)
 
     record_message(str(client_id), channel, "outbound")
+
+    # Despues del commit, como las metricas: un mensaje que no llego a
+    # persistirse no es un mensaje del historial.
+    await EventEmitter.emit(
+        EVENT_MESSAGE_SENT,
+        client_id,
+        {
+            "message_id": str(message_id),
+            "conversation_id": str(conversation_id),
+            "contact_id": str(contact_id),
+            "channel": channel,
+            "content": text,
+            "direction": "outgoing",
+            "external_message_id": external_id or None,
+        },
+    )
+
     logger.info(
         "Mensaje saliente enviado por %s: conversation_id=%s external_id=%s",
         provider_name,
