@@ -33,6 +33,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.database import run_isolated, tenant_session
 from app.core.encryption import blind_index, mask_identifier
+from app.core.events import (
+    EVENT_CONTACT_CREATED,
+    EVENT_CONVERSATION_CREATED,
+    EVENT_MESSAGE_RECEIVED,
+    EventEmitter,
+)
 from app.core.metrics import record_message
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
@@ -285,7 +291,7 @@ async def _resolve_conversation(
     client_id: UUID,
     contact_id: UUID,
     channel: str,
-) -> Conversation:
+) -> tuple[Conversation, bool]:
     """Busca la conversacion activa del contacto en el canal, o crea una nueva.
 
     Activa = su status no esta en `CLOSED_STATUSES`. Si hay varias, gana la de
@@ -298,7 +304,9 @@ async def _resolve_conversation(
         channel: Canal de la conversacion.
 
     Returns:
-        Conversacion existente o recien creada con status `bot_active`.
+        `(conversacion, creada)`. `creada` es True solo si esta llamada la
+        creo: es lo que distingue un `conversation.created` real de un
+        mensaje mas en un hilo que ya existia.
     """
     stmt = (
         select(Conversation)
@@ -313,7 +321,7 @@ async def _resolve_conversation(
     )
     conversation = (await session.execute(stmt)).scalar_one_or_none()
     if conversation is not None:
-        return conversation
+        return conversation, False
 
     conversation = Conversation(
         client_id=client_id,
@@ -323,7 +331,7 @@ async def _resolve_conversation(
     )
     session.add(conversation)
     await session.flush()  # necesitamos conversation.id para el mensaje
-    return conversation
+    return conversation, True
 
 
 def _parse_timestamp(value: Any) -> datetime:
@@ -418,8 +426,15 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
         contact, contact_creado = await _find_or_create_contact(
             session, client_id, message_channel, sender_identifier, normalized.sender_name
         )
+        contact_nuevo_id = contact.id if contact_creado else None
         contact = await _unificar_contacto(session, client_id, contact, normalized, contact_creado)
-        conversation = await _resolve_conversation(session, client_id, contact.id, message_channel)
+        # Si la unificacion por telefono fusiono el contacto recien creado
+        # dentro de uno que ya existia, no hay ningun contacto nuevo que
+        # anunciar: el que sobrevive es el viejo.
+        contact_creado = contact_creado and contact.id == contact_nuevo_id
+        conversation, conversacion_creada = await _resolve_conversation(
+            session, client_id, contact.id, message_channel
+        )
 
         message_id = uuid4()
         session.add(
@@ -445,6 +460,38 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
     # Despues del commit: un mensaje que no llego a persistirse no es un mensaje
     # procesado, y contarlo aqui dejaria la metrica por encima de la tabla.
     record_message(str(client_id), message_channel, "inbound")
+
+    # Los eventos, por lo mismo: un webhook saliente anuncia un hecho, y un
+    # hecho que se fue en un rollback no ocurrio. EventEmitter.emit() no lanza.
+    if contact_creado:
+        await EventEmitter.emit(
+            EVENT_CONTACT_CREATED,
+            client_id,
+            {"contact_id": str(contact.id), "channel": message_channel},
+        )
+    if conversacion_creada:
+        await EventEmitter.emit(
+            EVENT_CONVERSATION_CREATED,
+            client_id,
+            {
+                "conversation_id": str(conversation.id),
+                "contact_id": str(contact.id),
+                "channel": message_channel,
+            },
+        )
+    await EventEmitter.emit(
+        EVENT_MESSAGE_RECEIVED,
+        client_id,
+        {
+            "message_id": str(message_id),
+            "conversation_id": str(conversation.id),
+            "contact_id": str(contact.id),
+            "channel": message_channel,
+            "content": normalized.text,
+            "direction": "incoming",
+            "timestamp": timestamp.isoformat(),
+        },
+    )
 
     if conversation_status in HUMAN_OWNED_STATUSES:
         logger.info(

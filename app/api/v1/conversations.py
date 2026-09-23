@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import tenant_session
 from app.core.dependencies import require_role
+from app.core.events import EVENT_CONVERSATION_RESOLVED, EventEmitter
 from app.core.exceptions import NOT_FOUND, VALIDATION_ERROR, AppException
 from app.models.conversation import Conversation
 from app.models.message import Message
@@ -301,6 +302,28 @@ async def change_conversation_status(
 
         await ConversationLifecycle(session).transition(conversation, data.status, user_id=user_id)
         await session.flush()
+        contact_id = conversation.contact_id
+        resuelta_en = conversation.resolved_at
+        creada_en = conversation.created_at
+
+    # Fuera del `async with`, o sea despues del commit: un webhook saliente no
+    # puede anunciar una resolucion que termino en rollback.
+    if data.status == "resolved":
+        await EventEmitter.emit(
+            EVENT_CONVERSATION_RESOLVED,
+            client_id,
+            {
+                "conversation_id": str(conversation_id),
+                "contact_id": str(contact_id),
+                "previous_status": estado_anterior,
+                "resolved_by": str(user["user_id"]),
+                "resolution_time_seconds": (
+                    int((resuelta_en - creada_en).total_seconds())
+                    if resuelta_en and creada_en
+                    else None
+                ),
+            },
+        )
 
     return {
         "message": f"Estado actualizado a '{data.status}'",
