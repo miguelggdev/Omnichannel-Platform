@@ -329,11 +329,13 @@ async def update_contact(
         respuesta = ContactResponse.model_validate(contact)
         campos_modificados = sorted(cambios) + (["metadata"] if metadata_modificada else [])
 
-    await EventEmitter.emit(
-        EVENT_CONTACT_UPDATED,
-        client_id,
-        {"contact_id": str(contact_id), "updated_fields": campos_modificados},
-    )
+    # Un PATCH sin campos no cambio nada: anunciarlo seria un evento falso.
+    if campos_modificados:
+        await EventEmitter.emit(
+            EVENT_CONTACT_UPDATED,
+            client_id,
+            {"contact_id": str(contact_id), "updated_fields": campos_modificados},
+        )
     return respuesta
 
 
