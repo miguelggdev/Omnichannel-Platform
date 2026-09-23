@@ -35,19 +35,38 @@ class _Resultado:
     def scalar_one_or_none(self):
         return self._filas[0] if self._filas else None
 
+    def first(self):
+        return self._filas[0] if self._filas else None
+
 
 class _SesionFalsa:
     def __init__(self, resultados: list[_Resultado] | None = None) -> None:
         self._resultados = list(resultados or [])
         self.added: list[object] = []
+        self.ejecutadas: list[object] = []
 
     async def execute(self, stmt: object = None, params: object = None) -> _Resultado:
+        self.ejecutadas.append(stmt)
         if self._resultados:
             return self._resultados.pop(0)
         return _Resultado([])
 
     def add(self, obj: object) -> None:
         self.added.append(obj)
+
+
+def _updates(sesion: _SesionFalsa) -> list:
+    """Los UPDATE sobre tenant_webhooks que ejecuto la sesion."""
+    return [
+        stmt
+        for stmt in sesion.ejecutadas
+        if "UPDATE tenant_webhooks" in str(stmt.compile(compile_kwargs={"literal_binds": False}))
+    ]
+
+
+def _valores(stmt) -> dict:
+    """Parametros ligados de un UPDATE, por nombre de columna."""
+    return dict(stmt.compile().params)
 
 
 def _tenant_session_falsa(sesion: _SesionFalsa):
@@ -228,6 +247,13 @@ class TestDespachar:
 
 
 class TestEnviar:
+    @staticmethod
+    def _enviar_devuelve(resultado: dict):
+        return patch(
+            "app.tasks.outgoing_webhooks.WebhookDispatcher.send_webhook",
+            AsyncMock(return_value=resultado),
+        )
+
     @pytest.mark.asyncio
     async def test_exito_resetea_el_contador_y_deja_log(self) -> None:
         webhook = _webhook(consecutive_failures=4)
@@ -235,27 +261,49 @@ class TestEnviar:
 
         with (
             patch("app.tasks.outgoing_webhooks.tenant_session", _tenant_session_falsa(sesion)),
-            patch(
-                "app.tasks.outgoing_webhooks.WebhookDispatcher.send_webhook",
-                AsyncMock(
-                    return_value={
-                        "success": True,
-                        "status_code": 200,
-                        "duration_ms": 12,
-                        "response_body": "OK",
-                    }
-                ),
+            self._enviar_devuelve(
+                {"success": True, "status_code": 200, "duration_ms": 12, "response_body": "OK"}
             ),
         ):
             resultado = await ow._enviar(str(webhook.id), str(uuid4()), _payload(), 1)
 
         assert resultado["status"] == "success"
-        assert webhook.consecutive_failures == 0
-        assert webhook.last_success_at is not None
         log = sesion.added[0]
         assert log.status == "success"
         assert log.response_code == 200
         assert log.attempt == 1
+
+        valores = _valores(_updates(sesion)[0])
+        assert valores["consecutive_failures"] == 0
+        assert valores["last_success_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_el_post_se_hace_sin_transaccion_abierta(self) -> None:
+        """Con Supavisor, mantenerla abierta retiene una conexion del pooler por envio."""
+        orden: list[str] = []
+        sesion = _SesionFalsa([_Resultado([_webhook()])])
+
+        @asynccontextmanager
+        async def _sesion_que_registra(client_id, user_id=None):
+            orden.append("abre")
+            try:
+                yield sesion
+            finally:
+                orden.append("cierra")
+
+        async def _enviar_registrando(self, webhook, payload):
+            orden.append("post")
+            return {"success": True, "status_code": 200, "duration_ms": 3, "response_body": "OK"}
+
+        with (
+            patch("app.tasks.outgoing_webhooks.tenant_session", _sesion_que_registra),
+            patch(
+                "app.tasks.outgoing_webhooks.WebhookDispatcher.send_webhook", _enviar_registrando
+            ),
+        ):
+            await ow._enviar(str(uuid4()), str(uuid4()), _payload(), 1)
+
+        assert orden == ["abre", "cierra", "post", "abre", "cierra"], orden
 
     @pytest.mark.asyncio
     async def test_fallo_con_reintentos_pendientes_no_toca_el_contador(self) -> None:
@@ -265,56 +313,69 @@ class TestEnviar:
 
         with (
             patch("app.tasks.outgoing_webhooks.tenant_session", _tenant_session_falsa(sesion)),
-            patch(
-                "app.tasks.outgoing_webhooks.WebhookDispatcher.send_webhook",
-                AsyncMock(
-                    return_value={"success": False, "duration_ms": 9, "error": "HTTP 500: boom"}
-                ),
-            ),
+            self._enviar_devuelve({"success": False, "duration_ms": 9, "error": "HTTP 500: boom"}),
         ):
             resultado = await ow._enviar(str(webhook.id), str(uuid4()), _payload(), 1)
 
         assert resultado == {"status": "failed", "retry_in": ow.RETRY_DELAYS[0]}
-        assert webhook.consecutive_failures == 2
-        assert webhook.last_failure_at is not None
         assert sesion.added[0].status == "failed"
+
+        valores = _valores(_updates(sesion)[0])
+        assert "consecutive_failures" not in valores
+        assert valores["last_failure_at"] is not None
 
     @pytest.mark.asyncio
     async def test_el_ultimo_intento_cuenta_la_entrega_como_fallida(self) -> None:
         webhook = _webhook(consecutive_failures=2)
-        sesion = _SesionFalsa([_Resultado([webhook])])
+        fila = SimpleNamespace(consecutive_failures=3, is_active=True)
+        sesion = _SesionFalsa([_Resultado([webhook]), _Resultado([fila])])
 
         with (
             patch("app.tasks.outgoing_webhooks.tenant_session", _tenant_session_falsa(sesion)),
-            patch(
-                "app.tasks.outgoing_webhooks.WebhookDispatcher.send_webhook",
-                AsyncMock(return_value={"success": False, "duration_ms": 9, "error": "timeout"}),
-            ),
+            self._enviar_devuelve({"success": False, "duration_ms": 9, "error": "timeout"}),
         ):
             resultado = await ow._enviar(str(webhook.id), str(uuid4()), _payload(), ow.MAX_ATTEMPTS)
 
         assert resultado == {"status": "failed", "retry_in": None}
-        assert webhook.consecutive_failures == 3
-        assert webhook.is_active is True
+
+    @pytest.mark.asyncio
+    async def test_el_contador_lo_incrementa_postgres_no_python(self) -> None:
+        """Varias entregas del mismo webhook corren en paralelo: un
+        read-modify-write desde Python perderia incrementos (BUG-022)."""
+        webhook = _webhook(consecutive_failures=2)
+        fila = SimpleNamespace(consecutive_failures=3, is_active=True)
+        sesion = _SesionFalsa([_Resultado([webhook]), _Resultado([fila])])
+
+        with (
+            patch("app.tasks.outgoing_webhooks.tenant_session", _tenant_session_falsa(sesion)),
+            self._enviar_devuelve({"success": False, "duration_ms": 9, "error": "timeout"}),
+        ):
+            await ow._enviar(str(webhook.id), str(uuid4()), _payload(), ow.MAX_ATTEMPTS)
+
+        sql = " ".join(
+            str(_updates(sesion)[0].compile(compile_kwargs={"literal_binds": False})).split()
+        )
+        assert "consecutive_failures=(tenant_webhooks.consecutive_failures +" in sql
+        assert "RETURNING" in sql.upper()
 
     @pytest.mark.asyncio
     async def test_se_desactiva_solo_al_llegar_al_umbral(self) -> None:
         """Criterio 3: una URL muerta deja de generar trafico inutil."""
         webhook = _webhook(consecutive_failures=MAX_CONSECUTIVE_FAILURES - 1)
-        sesion = _SesionFalsa([_Resultado([webhook])])
+        # Lo que devuelve el RETURNING del UPDATE: ya apagado por el CASE.
+        fila = SimpleNamespace(consecutive_failures=MAX_CONSECUTIVE_FAILURES, is_active=False)
+        sesion = _SesionFalsa([_Resultado([webhook]), _Resultado([fila])])
 
         with (
             patch("app.tasks.outgoing_webhooks.tenant_session", _tenant_session_falsa(sesion)),
-            patch(
-                "app.tasks.outgoing_webhooks.WebhookDispatcher.send_webhook",
-                AsyncMock(return_value={"success": False, "duration_ms": 9, "error": "timeout"}),
-            ),
+            self._enviar_devuelve({"success": False, "duration_ms": 9, "error": "timeout"}),
         ):
             resultado = await ow._enviar(str(webhook.id), str(uuid4()), _payload(), ow.MAX_ATTEMPTS)
 
         assert resultado["status"] == "disabled"
-        assert webhook.is_active is False
-        assert webhook.disabled_reason == AUTO_DISABLED_REASON
+        sql = str(_updates(sesion)[0].compile(compile_kwargs={"literal_binds": True}))
+        assert AUTO_DISABLED_REASON in sql
+        assert str(MAX_CONSECUTIVE_FAILURES) in sql
 
     @pytest.mark.asyncio
     async def test_un_webhook_borrado_no_es_un_fallo(self) -> None:
@@ -346,6 +407,31 @@ class TestEnviar:
 
         assert resultado == {"status": "skipped"}
         enviados.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_los_datos_del_webhook_sobreviven_al_cierre_de_la_sesion(self) -> None:
+        """Se copian a un objeto suelto: tocar el ORM ya cerrado explotaria."""
+        webhook = _webhook(url="https://destino.com/h", secret="s3cr3t", headers={"X-A": "1"})
+        sesion = _SesionFalsa([_Resultado([webhook])])
+        recibido: dict = {}
+
+        async def _capturar(self, destino, payload):
+            recibido["url"] = destino.url
+            recibido["secret"] = destino.secret
+            recibido["headers"] = destino.headers
+            return {"success": True, "status_code": 200, "duration_ms": 1, "response_body": ""}
+
+        with (
+            patch("app.tasks.outgoing_webhooks.tenant_session", _tenant_session_falsa(sesion)),
+            patch("app.tasks.outgoing_webhooks.WebhookDispatcher.send_webhook", _capturar),
+        ):
+            await ow._enviar(str(webhook.id), str(uuid4()), _payload(), 1)
+
+        assert recibido == {
+            "url": "https://destino.com/h",
+            "secret": "s3cr3t",
+            "headers": {"X-A": "1"},
+        }
 
 
 class TestReintento:

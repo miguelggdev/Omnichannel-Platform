@@ -27,6 +27,7 @@ lo que rompe SNI/TLS por nombre; queda documentado en ADR-065 y fuera de este
 sprint.
 """
 
+import asyncio
 import hashlib
 import hmac
 import ipaddress
@@ -34,13 +35,12 @@ import json
 import logging
 import socket
 import time
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 import httpx
 
 from app.core.config import get_settings
-from app.models.tenant_webhook import TenantWebhook
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +57,35 @@ class WebhookTargetError(ValueError):
     """La URL destino no es un destino valido para un webhook saliente."""
 
 
-def _direcciones_del_host(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+class DestinoDeWebhook(Protocol):
+    """Lo unico que necesita el dispatcher para firmar y enviar.
+
+    Lo cumple tanto el modelo `TenantWebhook` como la copia suelta que arma la
+    task para poder cerrar la transaccion antes del POST.
+    """
+
+    # Declarados como propiedades de solo lectura: asi lo cumple tanto el
+    # modelo (atributos normales) como la copia inmutable de la task.
+    @property
+    def id(self) -> Any: ...
+
+    @property
+    def url(self) -> str: ...
+
+    @property
+    def secret(self) -> str: ...
+
+    @property
+    def headers(self) -> dict[str, Any]: ...
+
+
+async def _direcciones_del_host(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
     """Resuelve un host a todas sus direcciones IP.
+
+    Usa el `getaddrinfo` del event loop, que resuelve en su propio executor:
+    el `socket.getaddrinfo` de la libreria estandar es una llamada bloqueante
+    y aca estamos en contexto async (regla 4 de CLAUDE.md). Un DNS lento
+    dejaria parado todo el loop del worker, no solo este envio.
 
     Args:
         host: Nombre o literal IP tomado de la URL.
@@ -70,14 +97,14 @@ def _direcciones_del_host(host: str) -> list[ipaddress.IPv4Address | ipaddress.I
         WebhookTargetError: Si el host no resuelve.
     """
     try:
-        infos = socket.getaddrinfo(host, None)
+        infos = await asyncio.get_running_loop().getaddrinfo(host, None)
     except socket.gaierror as exc:
         raise WebhookTargetError(f"El host {host} no resuelve") from exc
 
     return [ipaddress.ip_address(info[4][0]) for info in infos]
 
 
-def validar_destino(url: str) -> None:
+async def validar_destino(url: str) -> None:
     """Rechaza destinos que apunten a la red interna del despliegue.
 
     Args:
@@ -96,11 +123,39 @@ def validar_destino(url: str) -> None:
     if get_settings().OUTGOING_WEBHOOK_ALLOW_PRIVATE_HOSTS:
         return
 
-    for direccion in _direcciones_del_host(partes.hostname):
+    for direccion in await _direcciones_del_host(partes.hostname):
         if not direccion.is_global or direccion.is_multicast:
             raise WebhookTargetError(
                 f"El host {partes.hostname} resuelve a una direccion no publica ({direccion})"
             )
+
+
+def _cabeceras_del_tenant(headers: dict[str, Any] | None) -> dict[str, str]:
+    """Sanea las cabeceras extra que configuro el tenant.
+
+    Vienen de una columna JSONB, asi que pueden traer cualquier cosa: un valor
+    numerico revienta el envio con un `AttributeError` que no es un
+    `httpx.HTTPError` y por lo tanto se escapaba del manejo de errores (el
+    intento moria sin dejar log ni tocar los contadores), y un salto de linea
+    en el valor es un intento de inyeccion de cabeceras.
+
+    Args:
+        headers: Cabeceras configuradas por el tenant, tal como estan en JSONB.
+
+    Returns:
+        Solo las utilizables, con clave y valor en texto.
+    """
+    limpias: dict[str, str] = {}
+    for clave, valor in (headers or {}).items():
+        if valor is None or isinstance(valor, (dict, list)):
+            logger.warning("Cabecera %r del webhook ignorada: valor no es escalar", clave)
+            continue
+        clave_txt, valor_txt = str(clave), str(valor)
+        if any(c in clave_txt or c in valor_txt for c in ("\r", "\n")):
+            logger.warning("Cabecera %r del webhook ignorada: contiene saltos de linea", clave)
+            continue
+        limpias[clave_txt] = valor_txt
+    return limpias
 
 
 class WebhookDispatcher:
@@ -121,7 +176,7 @@ class WebhookDispatcher:
         return hmac.new(secret.encode("utf-8"), mensaje.encode("utf-8"), hashlib.sha256).hexdigest()
 
     def build_headers(
-        self, webhook: TenantWebhook, payload: dict[str, Any], body: str
+        self, webhook: DestinoDeWebhook, payload: dict[str, Any], body: str
     ) -> tuple[dict[str, str], str]:
         """Arma las cabeceras del envio, firma incluida.
 
@@ -139,7 +194,7 @@ class WebhookDispatcher:
         timestamp = str(int(time.time()))
         firma = self.compute_signature(body, webhook.secret, timestamp)
         return {
-            **(webhook.headers or {}),
+            **_cabeceras_del_tenant(webhook.headers),
             "Content-Type": "application/json",
             "X-Webhook-Signature": f"sha256={firma}",
             "X-Webhook-Event": str(payload.get("event", "unknown")),
@@ -148,7 +203,9 @@ class WebhookDispatcher:
             "User-Agent": USER_AGENT,
         }, timestamp
 
-    async def send_webhook(self, webhook: TenantWebhook, payload: dict[str, Any]) -> dict[str, Any]:
+    async def send_webhook(
+        self, webhook: DestinoDeWebhook, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         """Envia el evento al webhook y describe como fue.
 
         No lanza: todo fallo (destino invalido, timeout, error de red, 5xx del
@@ -170,7 +227,7 @@ class WebhookDispatcher:
             return int((time.monotonic() - inicio) * 1000)
 
         try:
-            validar_destino(webhook.url)
+            await validar_destino(webhook.url)
         except WebhookTargetError as exc:
             logger.warning("Destino rechazado para el webhook %s: %s", webhook.id, exc)
             return {"success": False, "duration_ms": _transcurrido(), "error": str(exc)}

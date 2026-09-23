@@ -32,12 +32,14 @@ eventos y medio.
 """
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
 from celery import shared_task
-from sqlalchemy import literal, select
+from sqlalchemy import case, literal, select
+from sqlalchemy import update as sa_update
 
 from app.core.database import run_isolated, tenant_session
 from app.models.outgoing_webhook_log import OutgoingWebhookLog
@@ -112,10 +114,152 @@ async def _despachar(event: str, client_id: str, data: dict[str, Any]) -> int:
     return len(webhook_ids)
 
 
+@dataclass(frozen=True)
+class _DatosDelWebhook:
+    """Lo que hace falta para firmar y enviar, ya fuera de la sesion.
+
+    `send_webhook()` solo lee `id`, `url`, `secret` y `headers`; copiarlos a un
+    objeto suelto permite cerrar la transaccion antes del POST sin que ningun
+    atributo dispare una carga perezosa contra una sesion ya cerrada.
+    """
+
+    id: UUID
+    url: str
+    secret: str
+    headers: dict[str, Any]
+
+
+async def _cargar_webhook(tenant_id: UUID, webhook_uuid: UUID) -> _DatosDelWebhook | None:
+    """Lee el webhook activo del tenant en una transaccion corta.
+
+    Args:
+        tenant_id: Tenant dueno del webhook.
+        webhook_uuid: Webhook a leer.
+
+    Returns:
+        Sus datos de envio, o None si ya no existe o esta apagado.
+    """
+    async with tenant_session(tenant_id) as session:
+        webhook = (
+            await session.execute(
+                select(TenantWebhook).where(
+                    TenantWebhook.id == webhook_uuid, TenantWebhook.client_id == tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+
+        if webhook is None or not webhook.is_active:
+            return None
+
+        return _DatosDelWebhook(
+            id=webhook.id,
+            url=webhook.url,
+            secret=webhook.secret,
+            headers=dict(webhook.headers or {}),
+        )
+
+
+async def _registrar_intento(
+    tenant_id: UUID,
+    webhook_uuid: UUID,
+    payload: dict[str, Any],
+    attempt: int,
+    resultado: dict[str, Any],
+    ultimo_intento: bool,
+) -> dict[str, Any]:
+    """Deja el intento en la base y decide que sigue.
+
+    El UPDATE del contador va como una sola sentencia atomica
+    (`consecutive_failures + 1` calculado por PostgreSQL, con la
+    desactivacion resuelta en el mismo `CASE`), no leyendo y reescribiendo
+    desde Python: varias entregas del mismo webhook corren en paralelo en el
+    worker, y un read-modify-write perderia incrementos — la misma correccion
+    que BUG-022 en `TokenBudgetGuard.record_usage`.
+
+    Args:
+        tenant_id: Tenant dueno del webhook.
+        webhook_uuid: Webhook al que se intento enviar.
+        payload: Evento enviado.
+        attempt: Numero de intento.
+        resultado: Lo que devolvio `send_webhook()`.
+        ultimo_intento: Si ya no quedan reintentos para esta entrega.
+
+    Returns:
+        `{"status": "success" | "failed" | "disabled", ...}`.
+    """
+    ahora = datetime.now(timezone.utc)
+    exito = bool(resultado["success"])
+
+    async with tenant_session(tenant_id) as session:
+        session.add(
+            OutgoingWebhookLog(
+                client_id=tenant_id,
+                webhook_id=webhook_uuid,
+                event=str(payload.get("event", "unknown")),
+                payload=payload,
+                status="success" if exito else "failed",
+                response_code=resultado.get("status_code"),
+                response_body=resultado.get("response_body"),
+                duration_ms=resultado.get("duration_ms"),
+                attempt=attempt,
+                error=resultado.get("error"),
+            )
+        )
+
+        base = (
+            sa_update(TenantWebhook)
+            .where(TenantWebhook.id == webhook_uuid, TenantWebhook.client_id == tenant_id)
+            .execution_options(synchronize_session=False)
+        )
+
+        if exito:
+            await session.execute(
+                base.values(last_triggered_at=ahora, last_success_at=ahora, consecutive_failures=0)
+            )
+            return {"status": "success", "status_code": resultado.get("status_code")}
+
+        if not ultimo_intento:
+            # Quedan reintentos: la entrega todavia no fracaso, solo el intento.
+            await session.execute(base.values(last_triggered_at=ahora, last_failure_at=ahora))
+            return {"status": "failed", "retry_in": RETRY_DELAYS[attempt - 1]}
+
+        fallos = TenantWebhook.consecutive_failures + 1
+        se_apaga = fallos >= MAX_CONSECUTIVE_FAILURES
+        nuevos_fallos = (
+            await session.execute(
+                base.values(
+                    last_triggered_at=ahora,
+                    last_failure_at=ahora,
+                    consecutive_failures=fallos,
+                    is_active=case((se_apaga, False), else_=TenantWebhook.is_active),
+                    disabled_reason=case(
+                        (se_apaga, AUTO_DISABLED_REASON), else_=TenantWebhook.disabled_reason
+                    ),
+                ).returning(TenantWebhook.consecutive_failures, TenantWebhook.is_active)
+            )
+        ).first()
+
+    if nuevos_fallos is not None and not nuevos_fallos.is_active:
+        logger.warning(
+            "Webhook %s desactivado tras %d entregas fallidas seguidas",
+            webhook_uuid,
+            nuevos_fallos.consecutive_failures,
+        )
+        return {"status": "disabled"}
+
+    return {"status": "failed", "retry_in": None}
+
+
 async def _enviar(
     webhook_id: str, client_id: str, payload: dict[str, Any], attempt: int
 ) -> dict[str, Any]:
     """Hace un intento de envio y deja el resultado en la base.
+
+    El POST se hace **sin transaccion abierta**: con Supavisor en modo
+    transaccion, mantenerla abierta durante la llamada retiene una conexion
+    del pooler hasta 10 segundos (el timeout del envio) por cada webhook, y el
+    worker de `notifications` manda muchos en paralelo. Son dos transacciones
+    cortas, una antes y otra despues, como ya hace la subida de documentos.
 
     Args:
         webhook_id: Webhook destino, serializado.
@@ -128,62 +272,23 @@ async def _enviar(
     """
     tenant_id = UUID(client_id)
     webhook_uuid = UUID(webhook_id)
-    ahora = datetime.now(timezone.utc)
 
-    async with tenant_session(tenant_id) as session:
-        webhook = (
-            await session.execute(
-                select(TenantWebhook).where(
-                    TenantWebhook.id == webhook_uuid, TenantWebhook.client_id == tenant_id
-                )
-            )
-        ).scalar_one_or_none()
+    datos = await _cargar_webhook(tenant_id, webhook_uuid)
+    if datos is None:
+        # Borrado o apagado entre el encolado y el envio: no es un fallo.
+        logger.info("Webhook %s ya no esta activo; no se envia", webhook_id)
+        return {"status": "skipped"}
 
-        if webhook is None or not webhook.is_active:
-            # Borrado o apagado entre el encolado y el envio: no es un fallo.
-            logger.info("Webhook %s ya no esta activo; no se envia", webhook_id)
-            return {"status": "skipped"}
+    resultado = await WebhookDispatcher().send_webhook(datos, payload)
 
-        resultado = await WebhookDispatcher().send_webhook(webhook, payload)
-
-        session.add(
-            OutgoingWebhookLog(
-                client_id=tenant_id,
-                webhook_id=webhook_uuid,
-                event=str(payload.get("event", "unknown")),
-                payload=payload,
-                status="success" if resultado["success"] else "failed",
-                response_code=resultado.get("status_code"),
-                response_body=resultado.get("response_body"),
-                duration_ms=resultado.get("duration_ms"),
-                attempt=attempt,
-                error=resultado.get("error"),
-            )
-        )
-
-        webhook.last_triggered_at = ahora
-        if resultado["success"]:
-            webhook.last_success_at = ahora
-            webhook.consecutive_failures = 0
-            return {"status": "success", "status_code": resultado.get("status_code")}
-
-        webhook.last_failure_at = ahora
-        if attempt < MAX_ATTEMPTS:
-            # Quedan reintentos: la entrega todavia no fracaso, solo el intento.
-            return {"status": "failed", "retry_in": RETRY_DELAYS[attempt - 1]}
-
-        webhook.consecutive_failures += 1
-        if webhook.consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-            webhook.is_active = False
-            webhook.disabled_reason = AUTO_DISABLED_REASON
-            logger.warning(
-                "Webhook %s desactivado tras %d entregas fallidas seguidas",
-                webhook_id,
-                webhook.consecutive_failures,
-            )
-            return {"status": "disabled"}
-
-        return {"status": "failed", "retry_in": None}
+    return await _registrar_intento(
+        tenant_id,
+        webhook_uuid,
+        payload,
+        attempt,
+        resultado,
+        ultimo_intento=attempt >= MAX_ATTEMPTS,
+    )
 
 
 @shared_task(
@@ -209,8 +314,18 @@ def dispatch_outgoing_webhooks(
 
     Returns:
         `{"webhooks": <cuantos envios se encolaron>}`.
+
+    Raises:
+        Retry: Ante un fallo transitorio (la base sin responder, por ejemplo);
+            hasta `max_retries`, que es lo unico que puede salvar al evento de
+            perderse. Aca reintentar es seguro porque todavia no se envio nada
+            a nadie — en `send_outgoing_webhook` no lo es, ver su docstring.
     """
-    encolados = run_isolated(_despachar(event, client_id, data))
+    try:
+        encolados = run_isolated(_despachar(event, client_id, data))
+    except Exception as exc:
+        logger.exception("No se pudo despachar el evento %s del tenant %s", event, client_id)
+        raise self.retry(exc=exc) from exc
     return {"webhooks": encolados}
 
 
@@ -235,6 +350,11 @@ def send_outgoing_webhook(
     `self.retry()`: asi el intento que fallo queda cerrado (y su fila de log
     escrita) en vez de reencolarse entero, y el numero de intento viaja
     explicito en los argumentos.
+
+    Un error inesperado (la base sin responder al registrar el intento) **no**
+    se reintenta: el POST puede haber salido ya, y reintentar la tarea entera
+    lo repetiria. Queda el `webhook_delivery_id` en el payload para que el
+    receptor deduplique si el broker llegara a reentregar la tarea.
 
     Args:
         self: Instancia de la tarea (bind=True).
