@@ -35,6 +35,18 @@ logger = logging.getLogger(__name__)
 # un traceback completo (CLAUDE.md, regla 3).
 _ERROR_MESSAGE_MAX_CHARS = 500
 
+# La task es `acks_late=True`: si el worker muere a mitad, el broker la
+# reentrega. Un segundo intento con el mismo `instantiation_id` volveria a
+# crear un tenant desde cero (UUID nuevo) — el `UNIQUE` global de
+# `users.email` lo frenaria, pero con un error de integridad ilegible y
+# dejando el tenant del primer intento huerfano y sin rastro. Si la
+# instanciacion ya tiene `target_client_id`, no se reintenta: se deja dicho
+# que hay un tenant a medias para que un super_admin decida.
+_REENTREGA_MSG = (
+    "Reintento descartado: un intento anterior ya creo el tenant {client_id}. "
+    "Revisar ese tenant antes de volver a clonar."
+)
+
 
 async def _actualizar_instantiation(instantiation_id: UUID, **campos: Any) -> None:
     """Aplica un UPDATE puntual sobre una instanciacion, en su propia transaccion.
@@ -49,6 +61,23 @@ async def _actualizar_instantiation(instantiation_id: UUID, **campos: Any) -> No
             .where(TemplateInstantiation.id == instantiation_id)
             .values(**campos)
         )
+
+
+async def _leer_instantiation(instantiation_id: UUID) -> TemplateInstantiation | None:
+    """Lee una instanciacion por id, sin contexto de tenant (la tabla no tiene RLS).
+
+    Args:
+        instantiation_id: Instanciacion a leer.
+
+    Returns:
+        La fila, o None si no existe.
+    """
+    async with AsyncSessionLocal() as session:
+        return (
+            await session.execute(
+                select(TemplateInstantiation).where(TemplateInstantiation.id == instantiation_id)
+            )
+        ).scalar_one_or_none()
 
 
 async def _clone(
@@ -74,6 +103,20 @@ async def _clone(
     tpl_id = UUID(template_id)
     inst_id = UUID(instantiation_id)
     cloner = TenantCloner()
+
+    instantiation = await _leer_instantiation(inst_id)
+    if instantiation is None:
+        raise ValueError(f"Instanciacion {inst_id} no encontrada")
+    if instantiation.target_client_id is not None:
+        mensaje = _REENTREGA_MSG.format(client_id=instantiation.target_client_id)
+        logger.error("%s (instanciacion %s)", mensaje, inst_id)
+        await _actualizar_instantiation(
+            inst_id,
+            status=InstantiationStatus.FAILED.value,
+            error_message=mensaje[:_ERROR_MESSAGE_MAX_CHARS],
+            completed_at=datetime.now(timezone.utc),
+        )
+        return {"status": "failed", "target_client_id": str(instantiation.target_client_id)}
 
     await _actualizar_instantiation(
         inst_id,

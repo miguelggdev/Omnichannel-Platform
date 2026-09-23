@@ -22,11 +22,24 @@ from app.tasks.celery_config import celery_app
 from app.tasks.tenant_operations import _clone
 
 
-class _SesionFalsa:
-    """Sesion falsa para `AsyncSessionLocal`: registra cada UPDATE ejecutado."""
+def _instantiation(target_client_id: object | None = None):
+    """Fila de `template_instantiations` tal como la lee la task."""
+    return type(
+        "I", (), {"id": uuid4(), "target_client_id": target_client_id, "status": "pending"}
+    )()
 
-    def __init__(self, template: object | None) -> None:
+
+class _SesionFalsa:
+    """Sesion falsa para `AsyncSessionLocal`: registra cada UPDATE ejecutado.
+
+    Distingue por la tabla del statement: los SELECT sobre
+    `template_instantiations` devuelven la instanciacion, los de
+    `tenant_templates` el template, y los UPDATE se registran en `updates`.
+    """
+
+    def __init__(self, template: object | None, instantiation: object | None = None) -> None:
         self._template = template
+        self._instantiation = instantiation if instantiation is not None else _instantiation()
         self.updates: list[dict] = []
 
     async def __aenter__(self) -> "_SesionFalsa":
@@ -40,19 +53,21 @@ class _SesionFalsa:
         yield
 
     async def execute(self, stmt: object = None, params: object = None):
-        compilado = stmt.compile(compile_kwargs={"literal_binds": False})
-        if "template_instantiations" in str(compilado) and "UPDATE" in str(compilado).upper():
+        sql = str(stmt.compile(compile_kwargs={"literal_binds": False}))
+        if "template_instantiations" in sql and "UPDATE" in sql.upper():
             self.updates.append(dict(stmt.compile().params))
             return None
-        return _ResultadoTemplate(self._template)
+        if "template_instantiations" in sql:
+            return _ResultadoFila(self._instantiation)
+        return _ResultadoFila(self._template)
 
 
-class _ResultadoTemplate:
-    def __init__(self, template: object | None) -> None:
-        self._template = template
+class _ResultadoFila:
+    def __init__(self, fila: object | None) -> None:
+        self._fila = fila
 
     def scalar_one_or_none(self):
-        return self._template
+        return self._fila
 
 
 def _session_local_falsa(sesion: _SesionFalsa):
@@ -171,6 +186,52 @@ class TestClone:
 
         con_error = [u for u in sesion.updates if "error_message" in u]
         assert len(con_error[-1]["error_message"]) == 500
+
+    @pytest.mark.asyncio
+    async def test_una_reentrega_no_crea_un_segundo_tenant(self) -> None:
+        """`acks_late`: si un intento anterior ya creo el tenant, no se vuelve a clonar."""
+        template = type("T", (), {"id": uuid4(), "config": {}})()
+        ya_creado = uuid4()
+        sesion = _SesionFalsa(template, _instantiation(target_client_id=ya_creado))
+
+        with (
+            patch("app.tasks.tenant_operations.AsyncSessionLocal", _session_local_falsa(sesion)),
+            patch(
+                "app.tasks.tenant_operations.TenantCloner.instantiate", AsyncMock()
+            ) as mock_instantiate,
+            patch(
+                "app.tasks.tenant_operations.TenantCloner.clone_documents", AsyncMock()
+            ) as mock_clone_documents,
+        ):
+            resultado = await _clone(
+                str(template.id), str(uuid4()), "Nuevo Tenant", "admin@nuevo.com", None
+            )
+
+        mock_instantiate.assert_not_awaited()
+        mock_clone_documents.assert_not_awaited()
+        assert resultado == {"status": "failed", "target_client_id": str(ya_creado)}
+        estados = [u.get("status") for u in sesion.updates if u.get("status")]
+        assert estados == [InstantiationStatus.FAILED.value]
+        con_error = [u for u in sesion.updates if "error_message" in u]
+        assert str(ya_creado) in con_error[-1]["error_message"]
+
+    @pytest.mark.asyncio
+    async def test_instanciacion_inexistente_no_clona_nada(self) -> None:
+        template = type("T", (), {"id": uuid4(), "config": {}})()
+        sesion = _SesionFalsa(template, instantiation=None)
+        sesion._instantiation = None
+
+        with (
+            patch("app.tasks.tenant_operations.AsyncSessionLocal", _session_local_falsa(sesion)),
+            patch(
+                "app.tasks.tenant_operations.TenantCloner.instantiate", AsyncMock()
+            ) as mock_instantiate,
+            pytest.raises(ValueError, match="no encontrada"),
+        ):
+            await _clone(str(template.id), str(uuid4()), "Nuevo Tenant", "admin@nuevo.com", None)
+
+        mock_instantiate.assert_not_awaited()
+        assert sesion.updates == []
 
     def test_la_task_esta_registrada_en_la_cola_bulk(self) -> None:
         assert "app.tasks.bulk_clone_tenant_from_template" in celery_app.tasks
