@@ -270,8 +270,11 @@ NO_SETTINGS_PERMITIDAS = frozenset(
 
 #: Lo que necesita cada servicio ademas de lo comun, segun el codigo que ejecuta.
 REQUERIDAS_POR_SERVICIO: dict[str, frozenset[str]] = {
-    # `auto_close` resuelve el tenant con DEFAULT_CLIENT_ID.
-    "celery-bulk": frozenset({"DEFAULT_CLIENT_ID"}),
+    # `auto_close` resuelve el tenant con DEFAULT_CLIENT_ID; `tenant_cloner`
+    # (Sprint 10) copia archivos de Storage al clonar documentos.
+    "celery-bulk": frozenset(
+        {"DEFAULT_CLIENT_ID", "SUPABASE_URL", "SUPABASE_SECRET_KEY", "SUPABASE_STORAGE_BUCKET"}
+    ),
     # `document_pipeline` descarga el archivo subido desde Supabase Storage.
     "celery-documents": frozenset(
         {"SUPABASE_URL", "SUPABASE_SECRET_KEY", "SUPABASE_STORAGE_BUCKET", "OPENAI_EMBEDDING_MODEL"}

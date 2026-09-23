@@ -418,6 +418,11 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - DEFAULT_CLIENT_ID=${DEFAULT_CLIENT_ID}
+      # Sprint 10: bulk_clone_tenant_from_template copia archivos de Storage
+      # al clonar los documentos del tenant nuevo (ver tenant_cloner.py).
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SECRET_KEY=${SUPABASE_SECRET_KEY}
+      - SUPABASE_STORAGE_BUCKET=${SUPABASE_STORAGE_BUCKET:-documents}
       - OTEL_SERVICE_NAME=omnichannel-worker-bulk
       - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
