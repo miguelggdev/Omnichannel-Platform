@@ -115,6 +115,34 @@ def random_tenant_id() -> uuid.UUID:
     return uuid.uuid4()
 
 
+# ─── Eventos salientes (Sprint 11) ──────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def eventos_emitidos(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, dict]]:
+    """Corta el encolado de `EventEmitter.emit()` hacia el broker.
+
+    `emit()` encola `app.tasks.notification_dispatch_outgoing_webhooks`, y sin
+    esto cualquier test que pase por un punto de emision intentaria hablar con
+    el Redis del docker-compose. Es autouse a proposito: la lista de eventos
+    solo la pide quien quiere afirmar sobre ella.
+
+    Returns:
+        Lista `(event, client_id, data)` que se va llenando con lo emitido.
+    """
+    from app.tasks import outgoing_webhooks
+
+    registrados: list[tuple[str, str, dict]] = []
+
+    def _registrar(*_args: object, **kwargs: object) -> None:
+        # `emit()` siempre llama con `args=(event, client_id, data)`.
+        event, client_id, data = kwargs["args"]  # type: ignore[misc]
+        registrados.append((event, client_id, data))
+
+    monkeypatch.setattr(outgoing_webhooks.dispatch_outgoing_webhooks, "apply_async", _registrar)
+    return registrados
+
+
 # ─── Database Fixtures (requieren --run-db) ─────────────────────────────────
 
 
