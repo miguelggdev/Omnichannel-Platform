@@ -21,14 +21,14 @@ tenant origen los genero con un modelo distinto al que este desplegado tenga
 configurado hoy, copiarlos daria vectores incompatibles con las nuevas
 busquedas. `clone_documents()` copia el archivo crudo a una ruta nueva y
 reencola la misma tarea de ingesta que usa una subida manual
-(`app.tasks.document_ingest_document`), no un pipeline aparte.
+(`app.tasks.document_ingest`), no un pipeline aparte.
 
 Por que no hay flujo de invitacion todavia
 --------------------------------------------
 `users.password_hash` es NOT NULL y este repo no tiene (todavia) un flujo de
 invitacion/reset de password. `instantiate()` genera uno aleatorio, lo
 hashea para la fila y devuelve el valor en claro una sola vez para que la
-task lo dejeen `template_instantiations.progress` (visible solo a
+task lo deje en `template_instantiations.progress` (visible solo a
 `super_admin`). Es una solucion de paso: la forma correcta es un token de
 invitacion de un solo uso, fuera del alcance de este sprint.
 """
@@ -56,6 +56,7 @@ from app.services.storage import (
     StorageError,
     build_object_path,
     download_from_storage,
+    storage_metadata,
     upload_to_storage,
 )
 
@@ -286,6 +287,13 @@ class TenantCloner:
     async def clone_documents(self, template: TenantTemplate, new_client_id: UUID) -> list[UUID]:
         """Copia los archivos de los documentos del template al tenant nuevo.
 
+        Primero copia los archivos en Storage (uno por vez, sin transaccion
+        abierta) y recien despues abre una unica transaccion corta para
+        insertar las filas `Document` — el mismo orden que usa la subida
+        manual (`app/api/v1/documents.py`): con Supavisor en modo transaccion,
+        una transaccion abierta retiene una conexion del pooler, y copiar N
+        archivos puede tardar minutos.
+
         Crea la fila `Document` (en `status="pending"`) pero NO encola la
         ingesta: eso es responsabilidad de quien llama (la task), para poder
         hacerlo fuera de esta transaccion, igual que el resto del codebase
@@ -303,37 +311,52 @@ class TenantCloner:
             IDs de los documentos creados, listos para encolar su ingesta.
         """
         documentos_creados: list[UUID] = []
+        filas: list[Document] = []
+
+        for doc_data in template.config.get("documents", []):
+            filename = doc_data["file_url"].rsplit("/", 1)[-1]
+            new_document_id = uuid4()
+            new_path = build_object_path(new_client_id, new_document_id, filename)
+            # `documents.file_type` guarda la extension normalizada ("pdf"),
+            # no un MIME: el Content-Type real de la subida quedo en la
+            # metadata (`storage_metadata()`). Mandar "pdf" como Content-Type
+            # deja el objeto copiado con una cabecera invalida.
+            metadata_origen = dict(doc_data.get("metadata") or {})
+            content_type = metadata_origen.get("content_type") or "application/octet-stream"
+
+            try:
+                contenido = await download_from_storage(doc_data["file_url"])
+                await upload_to_storage(new_path, contenido, content_type)
+            except StorageError:
+                logger.warning(
+                    "No se pudo copiar el archivo de %s al tenant %s; se omite ese documento",
+                    doc_data["file_url"],
+                    new_client_id,
+                )
+                continue
+
+            filas.append(
+                Document(
+                    id=new_document_id,
+                    client_id=new_client_id,
+                    title=doc_data["title"],
+                    file_url=new_path,
+                    file_type=doc_data.get("file_type"),
+                    file_size=doc_data.get("file_size"),
+                    status="pending",
+                    metadata_={
+                        **metadata_origen,
+                        **storage_metadata(new_path, content_type, len(contenido)),
+                    },
+                )
+            )
+            documentos_creados.append(new_document_id)
+
+        if not filas:
+            return []
 
         async with tenant_session(new_client_id) as session:
-            for doc_data in template.config.get("documents", []):
-                filename = doc_data["file_url"].rsplit("/", 1)[-1]
-                new_document_id = uuid4()
-                new_path = build_object_path(new_client_id, new_document_id, filename)
-
-                try:
-                    contenido = await download_from_storage(doc_data["file_url"])
-                    await upload_to_storage(
-                        new_path, contenido, doc_data.get("file_type") or "application/octet-stream"
-                    )
-                except StorageError:
-                    logger.warning(
-                        "No se pudo copiar el archivo de %s al tenant %s; se omite ese documento",
-                        doc_data["file_url"],
-                        new_client_id,
-                    )
-                    continue
-
-                session.add(
-                    Document(
-                        id=new_document_id,
-                        client_id=new_client_id,
-                        title=doc_data["title"],
-                        file_url=new_path,
-                        file_type=doc_data.get("file_type"),
-                        file_size=doc_data.get("file_size"),
-                        status="pending",
-                    )
-                )
-                documentos_creados.append(new_document_id)
+            for fila in filas:
+                session.add(fila)
 
         return documentos_creados

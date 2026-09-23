@@ -110,9 +110,12 @@ def _document(**over):
     base = {
         "title": "Manual",
         "file_url": "client/doc/manual.pdf",
-        "file_type": "application/pdf",
+        # `documents.file_type` guarda la extension normalizada, no el MIME
+        # (ver ALLOWED_TYPES en app/api/v1/documents.py); el MIME real vive
+        # en la metadata que dejo `storage_metadata()` al subir.
+        "file_type": "pdf",
         "file_size": 1024,
-        "metadata_": {},
+        "metadata_": {"content_type": "application/pdf", "storage_path": "client/doc/manual.pdf"},
         "status": "completed",
     }
     base.update(over)
@@ -421,8 +424,9 @@ class TestCloneDocuments:
             {
                 "title": "Manual",
                 "file_url": "origen/doc-1/manual.pdf",
-                "file_type": "application/pdf",
+                "file_type": "pdf",
                 "file_size": 2048,
+                "metadata": {"content_type": "application/pdf", "uploaded_by": "u-1"},
             }
         ]
 
@@ -454,8 +458,8 @@ class TestCloneDocuments:
         new_client_id = uuid4()
         template = _template()
         template.config["documents"] = [
-            {"title": "Roto", "file_url": "origen/doc-1/roto.pdf", "file_type": "application/pdf"},
-            {"title": "Sano", "file_url": "origen/doc-2/sano.pdf", "file_type": "application/pdf"},
+            {"title": "Roto", "file_url": "origen/doc-1/roto.pdf", "file_type": "pdf"},
+            {"title": "Sano", "file_url": "origen/doc-2/sano.pdf", "file_type": "pdf"},
         ]
 
         async def _download(path: str) -> bytes:
@@ -476,6 +480,97 @@ class TestCloneDocuments:
         documentos_creados = [o for o in sesion.added if type(o).__name__ == "Document"]
         assert len(documentos_creados) == 1
         assert documentos_creados[0].title == "Sano"
+
+    @pytest.mark.asyncio
+    async def test_sube_la_copia_con_el_mime_original_no_con_el_file_type(self) -> None:
+        """`file_type` es "pdf", no un MIME: mandarlo como Content-Type es invalido."""
+        sesion = _SesionFalsa()
+        cloner = TenantCloner()
+        new_client_id = uuid4()
+        template = _template()
+        template.config["documents"] = [
+            {
+                "title": "Manual",
+                "file_url": "origen/doc-1/manual.pdf",
+                "file_type": "pdf",
+                "file_size": 2048,
+                "metadata": {"content_type": "application/pdf"},
+            }
+        ]
+
+        with (
+            patch("app.services.tenant_cloner.tenant_session", _tenant_session_falsa(sesion)),
+            patch(
+                "app.services.tenant_cloner.download_from_storage",
+                AsyncMock(return_value=b"contenido"),
+            ),
+            patch(
+                "app.services.tenant_cloner.upload_to_storage", AsyncMock(return_value="nueva/ruta")
+            ) as mock_upload,
+        ):
+            await cloner.clone_documents(template, new_client_id)
+
+        assert mock_upload.await_args.args[2] == "application/pdf"
+
+        documento_creado = next(o for o in sesion.added if type(o).__name__ == "Document")
+        assert documento_creado.file_type == "pdf"
+        assert documento_creado.metadata_["content_type"] == "application/pdf"
+        assert documento_creado.metadata_["storage_path"] == documento_creado.file_url
+        assert documento_creado.metadata_["size_bytes"] == len(b"contenido")
+
+    @pytest.mark.asyncio
+    async def test_sin_content_type_en_la_metadata_cae_a_octet_stream(self) -> None:
+        sesion = _SesionFalsa()
+        cloner = TenantCloner()
+        template = _template()
+        template.config["documents"] = [
+            {"title": "Viejo", "file_url": "origen/doc-1/viejo.pdf", "file_type": "pdf"}
+        ]
+
+        with (
+            patch("app.services.tenant_cloner.tenant_session", _tenant_session_falsa(sesion)),
+            patch("app.services.tenant_cloner.download_from_storage", AsyncMock(return_value=b"x")),
+            patch(
+                "app.services.tenant_cloner.upload_to_storage", AsyncMock(return_value="nueva/ruta")
+            ) as mock_upload,
+        ):
+            await cloner.clone_documents(template, uuid4())
+
+        assert mock_upload.await_args.args[2] == "application/octet-stream"
+
+    @pytest.mark.asyncio
+    async def test_los_archivos_se_copian_antes_de_abrir_la_transaccion(self) -> None:
+        """Copiar N archivos con una transaccion abierta retiene una conexion del pooler."""
+        orden: list[str] = []
+        sesion = _SesionFalsa()
+        cloner = TenantCloner()
+        template = _template()
+        template.config["documents"] = [
+            {"title": "Uno", "file_url": "origen/doc-1/uno.pdf", "file_type": "pdf"},
+            {"title": "Dos", "file_url": "origen/doc-2/dos.pdf", "file_type": "pdf"},
+        ]
+
+        @asynccontextmanager
+        async def _sesion_que_registra(client_id, user_id=None):
+            orden.append("transaccion")
+            yield sesion
+
+        async def _download(path: str) -> bytes:
+            orden.append(f"copia:{path}")
+            return b"contenido"
+
+        with (
+            patch("app.services.tenant_cloner.tenant_session", _sesion_que_registra),
+            patch("app.services.tenant_cloner.download_from_storage", _download),
+            patch(
+                "app.services.tenant_cloner.upload_to_storage", AsyncMock(return_value="nueva/ruta")
+            ),
+        ):
+            document_ids = await cloner.clone_documents(template, uuid4())
+
+        assert len(document_ids) == 2
+        assert orden.count("transaccion") == 1
+        assert orden[-1] == "transaccion", f"la transaccion no fue la ultima: {orden}"
 
     @pytest.mark.asyncio
     async def test_sin_documentos_en_el_template_no_hace_nada(self) -> None:
