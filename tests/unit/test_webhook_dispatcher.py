@@ -7,6 +7,7 @@ request, no que httpx sepa hacer un POST.
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 from types import SimpleNamespace
@@ -92,7 +93,11 @@ def _cliente(monkeypatch, respuesta=None, error: Exception | None = None):
 
 def _sin_ssrf(monkeypatch) -> None:
     """Desactiva la comprobacion de destino (se prueba aparte)."""
-    monkeypatch.setattr(wd, "validar_destino", lambda url: None)
+
+    async def _permitir(url: str) -> None:
+        return None
+
+    monkeypatch.setattr(wd, "validar_destino", _permitir)
 
 
 class TestFirma:
@@ -144,32 +149,35 @@ class TestValidarDestino:
             "http://[::1]/hook",
         ],
     )
-    def test_rechaza_la_red_interna(self, url: str) -> None:
+    @pytest.mark.asyncio
+    async def test_rechaza_la_red_interna(self, url: str) -> None:
         """El destino lo elige el tenant y quien hace el POST esta dentro de la red."""
         with pytest.raises(WebhookTargetError):
-            validar_destino(url)
+            await validar_destino(url)
 
     @pytest.mark.parametrize("url", ["ftp://ejemplo.com/hook", "file:///etc/passwd", "no-es-url"])
-    def test_rechaza_esquemas_que_no_son_http(self, url: str) -> None:
+    @pytest.mark.asyncio
+    async def test_rechaza_esquemas_que_no_son_http(self, url: str) -> None:
         with pytest.raises(WebhookTargetError):
-            validar_destino(url)
+            await validar_destino(url)
 
-    def test_acepta_una_ip_publica(self, monkeypatch) -> None:
-        monkeypatch.setattr(
-            wd,
-            "_direcciones_del_host",
-            lambda host: [__import__("ipaddress").ip_address("93.184.216.34")],
-        )
+    @pytest.mark.asyncio
+    async def test_acepta_una_ip_publica(self, monkeypatch) -> None:
+        async def _resuelve(host: str) -> list:
+            return [ipaddress.ip_address("93.184.216.34")]
 
-        validar_destino("https://ejemplo.com/hook")
+        monkeypatch.setattr(wd, "_direcciones_del_host", _resuelve)
 
-    def test_el_flag_de_desarrollo_permite_localhost(self, monkeypatch) -> None:
+        await validar_destino("https://ejemplo.com/hook")
+
+    @pytest.mark.asyncio
+    async def test_el_flag_de_desarrollo_permite_localhost(self, monkeypatch) -> None:
         """`OUTGOING_WEBHOOK_ALLOW_PRIVATE_HOSTS` existe para el receptor local."""
         monkeypatch.setattr(
             wd, "get_settings", lambda: SimpleNamespace(OUTGOING_WEBHOOK_ALLOW_PRIVATE_HOSTS=True)
         )
 
-        validar_destino("http://127.0.0.1:8001/hook")
+        await validar_destino("http://127.0.0.1:8001/hook")
 
 
 class TestSendWebhook:
@@ -269,6 +277,47 @@ class TestSendWebhook:
         assert headers["X-Webhook-ID"] == payload["webhook_delivery_id"]
         assert headers["Content-Type"] == "application/json"
         assert headers["User-Agent"] == wd.USER_AGENT
+
+    @pytest.mark.asyncio
+    async def test_una_cabecera_numerica_del_tenant_no_rompe_el_envio(self, monkeypatch) -> None:
+        """`headers` es JSONB: un 123 ahi reventaba el POST con un AttributeError
+        que no es httpx.HTTPError, asi que el intento moria sin log ni contadores."""
+        _sin_ssrf(monkeypatch)
+        _cliente(monkeypatch, respuesta=SimpleNamespace(status_code=200, text="OK"))
+
+        resultado = await WebhookDispatcher().send_webhook(
+            _webhook(headers={"X-Reintentos": 3}), _payload()
+        )
+
+        assert resultado["success"] is True
+        assert _ClienteFalso.ultima_llamada["headers"]["X-Reintentos"] == "3"
+
+    @pytest.mark.asyncio
+    async def test_una_cabecera_con_saltos_de_linea_se_descarta(self, monkeypatch) -> None:
+        """Inyeccion de cabeceras: el valor lo escribe el tenant."""
+        _sin_ssrf(monkeypatch)
+        _cliente(monkeypatch, respuesta=SimpleNamespace(status_code=200, text="OK"))
+
+        await WebhookDispatcher().send_webhook(
+            _webhook(headers={"X-Mala": "a\r\nX-Colada: si", "X-Buena": "ok"}), _payload()
+        )
+
+        headers = _ClienteFalso.ultima_llamada["headers"]
+        assert "X-Mala" not in headers
+        assert headers["X-Buena"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_una_cabecera_con_objeto_anidado_se_descarta(self, monkeypatch) -> None:
+        _sin_ssrf(monkeypatch)
+        _cliente(monkeypatch, respuesta=SimpleNamespace(status_code=200, text="OK"))
+
+        resultado = await WebhookDispatcher().send_webhook(
+            _webhook(headers={"X-Objeto": {"a": 1}, "X-Nula": None}), _payload()
+        )
+
+        assert resultado["success"] is True
+        assert "X-Objeto" not in _ClienteFalso.ultima_llamada["headers"]
+        assert "X-Nula" not in _ClienteFalso.ultima_llamada["headers"]
 
     @pytest.mark.asyncio
     async def test_la_respuesta_se_recorta(self, monkeypatch) -> None:
