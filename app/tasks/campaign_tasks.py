@@ -39,6 +39,7 @@ from uuid import UUID
 from celery import shared_task
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.nodes._tenant import (
     ChannelNotConfiguredError,
@@ -108,7 +109,7 @@ def resolver_plantilla(plantilla: str, contacto: Contact) -> str:
     return resuelta
 
 
-async def _plantilla_aprobada(session: Any, client_id: UUID, template: str) -> bool:
+async def _plantilla_aprobada(session: AsyncSession, client_id: UUID, template: str) -> bool:
     """Si `template` esta en la lista de plantillas de WhatsApp del tenant.
 
     Misma lectura que `marketing_tools._plantillas_aprobadas()`, repetida aca
@@ -137,7 +138,9 @@ async def _plantilla_aprobada(session: Any, client_id: UUID, template: str) -> b
     return template in aprobadas if isinstance(aprobadas, list) else False
 
 
-async def _campana_duplicada(session: Any, client_id: UUID, campana: Campaign) -> Campaign | None:
+async def _campana_duplicada(
+    session: AsyncSession, client_id: UUID, campana: Campaign
+) -> Campaign | None:
     """Si el mismo segmento y canal ya recibio una campana en las ultimas 24h.
 
     Misma consulta que `marketing_tools.send_campaign()`, repetida aca por el
@@ -255,7 +258,7 @@ async def _guardar_progreso(client_id: UUID, campaign_id: UUID, **campos: Any) -
 
 
 async def _resolver_identificadores(
-    session: Any, client_id: UUID, contact_ids: list[UUID], channel: str
+    session: AsyncSession, client_id: UUID, contact_ids: list[UUID], channel: str
 ) -> dict[UUID, str]:
     """Trae de una sola consulta el identificador de canal de varios contactos.
 
