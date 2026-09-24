@@ -34,7 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models.satisfaction_survey import STATUS_RESPONDED, SatisfactionSurvey
+from app.models.satisfaction_survey import STATUS_EXPIRED, STATUS_RESPONDED, SatisfactionSurvey
 
 logger = logging.getLogger(__name__)
 
@@ -47,15 +47,19 @@ def build_survey_message(
 ) -> str:
     """Arma el texto de la encuesta CSAT.
 
-    En email se agrega el link de respuesta de un clic
-    (`GET /api/v1/csat/respond`): un correo no tiene el concepto de "responder
-    con un numero" que si tienen WhatsApp o Telegram, y pedirle a alguien que
-    escriba un email de vuelta con solo un digito es mucha friccion. El link
-    lleva `client_id` ademas de `survey_id` porque el endpoint es publico (sin
-    JWT) y `tenant_session()` necesita el tenant *antes* de poder leer la
-    encuesta bajo RLS — la seguridad real la da `survey_id`, un UUID que nadie
-    adivina; un `client_id` que no le corresponde simplemente no encuentra
-    nada (ver el 404 de `respond_csat_via_link`).
+    En email se agrega el link de respuesta (`GET /api/v1/csat/respond`): un
+    correo no tiene el concepto de "responder con un numero" que si tienen
+    WhatsApp o Telegram, y pedirle a alguien que escriba un email de vuelta
+    con solo un digito es mucha friccion. El link abre una pagina de
+    confirmacion, no registra nada por si solo — un GET que grabara el rating
+    de una vez quedaria a merced de cualquier escaner de enlaces de un gateway
+    de correo que prefetchee los 5 links del mensaje (ver el docstring de
+    `app/api/v1/csat.py`); el registro real pasa por el POST que confirma.
+    El link lleva `client_id` ademas de `survey_id` porque el endpoint es
+    publico (sin JWT) y `tenant_session()` necesita el tenant *antes* de poder
+    leer la encuesta bajo RLS — la seguridad real la da `survey_id`, un UUID
+    que nadie adivina; un `client_id` que no le corresponde simplemente no
+    encuentra nada (ver el 404 de `respond_csat_via_link`).
 
     Args:
         channel: Canal por el que se envia.
@@ -105,22 +109,30 @@ def extract_rating_from_text(text: str | None) -> int | None:
     return int(match.group(1)) if match else None
 
 
-async def survey_exists(session: AsyncSession, conversation_id: UUID) -> bool:
+async def survey_exists(session: AsyncSession, client_id: UUID, conversation_id: UUID) -> bool:
     """Si ya hay una encuesta (de cualquier status) para esta conversacion.
 
     La usa `send_csat_survey` (`app/tasks/csat_tasks.py`) para no duplicar el
     envio: el `UNIQUE` de la migracion 012 es la garantia de fondo, esto evita
     el viaje extra a la base cuando ya se sabe la respuesta.
 
+    `client_id` va explicito en el WHERE ademas de la RLS de la sesion (CLAUDE.md
+    §2, "las queries de seguridad deben ser explicitas"), igual que el resto de
+    las consultas nuevas de este sprint: sin el, esta funcion pasaria a depender
+    por completo de que quien la llame ya este dentro de un `tenant_session()`
+    correcto, sin nada que lo verifique en la propia query.
+
     Args:
         session: Sesion con contexto de tenant.
+        client_id: Tenant propietario de la conversacion.
         conversation_id: Conversacion a comprobar.
 
     Returns:
         `True` si ya existe una fila en `satisfaction_surveys` para ella.
     """
     stmt = select(SatisfactionSurvey.id).where(
-        SatisfactionSurvey.conversation_id == conversation_id
+        SatisfactionSurvey.client_id == client_id,
+        SatisfactionSurvey.conversation_id == conversation_id,
     )
     return (await session.execute(stmt)).scalar_one_or_none() is not None
 
@@ -142,8 +154,9 @@ async def process_response(
         comment: Comentario opcional.
 
     Returns:
-        La encuesta ya actualizada, o `None` si no existe, ya fue respondida o
-        el rating esta fuera de rango.
+        La encuesta ya actualizada, o `None` si no existe, ya expiro o el
+        rating esta fuera de rango. Si ya estaba respondida, devuelve la
+        encuesta tal cual sin sobreescribir el rating anterior.
     """
     if not 1 <= rating <= 5:
         return None
@@ -161,6 +174,13 @@ async def process_response(
     if survey.status == STATUS_RESPONDED:
         logger.info("Encuesta CSAT %s ya estaba respondida", survey_id)
         return survey
+    if survey.status == STATUS_EXPIRED:
+        # Un link de email viejo no puede revivir una encuesta que
+        # `bulk_expire_csat_surveys` ya cerro: `None` hace que el llamador
+        # (`respond_csat_via_link`) la trate igual que un link invalido, que es
+        # exactamente lo que es a esta altura.
+        logger.info("Encuesta CSAT %s ya habia expirado; no se registra", survey_id)
+        return None
 
     survey.rating = rating
     survey.comment = comment

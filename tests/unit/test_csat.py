@@ -17,6 +17,7 @@ from app.api.v1 import admin as admin_module
 from app.api.v1 import csat as csat_api_module
 from app.services import csat as csat_service
 from app.services.csat import (
+    STATUS_EXPIRED,
     STATUS_RESPONDED,
     build_survey_message,
     extract_rating_from_text,
@@ -139,12 +140,12 @@ class TestSurveyExists:
     @pytest.mark.asyncio
     async def test_existe(self) -> None:
         sesion = _Sesion(resultados=[_Resultado(uuid.uuid4())])
-        assert await survey_exists(sesion, uuid.uuid4()) is True
+        assert await survey_exists(sesion, uuid.uuid4(), uuid.uuid4()) is True
 
     @pytest.mark.asyncio
     async def test_no_existe(self) -> None:
         sesion = _Sesion(resultados=[_Resultado(None)])
-        assert await survey_exists(sesion, uuid.uuid4()) is False
+        assert await survey_exists(sesion, uuid.uuid4(), uuid.uuid4()) is False
 
 
 class TestProcessResponse:
@@ -176,6 +177,18 @@ class TestProcessResponse:
         assert encuesta.rating == 2  # no se piso con el 5 nuevo
 
     @pytest.mark.asyncio
+    async def test_encuesta_expirada_no_se_puede_revivir(self) -> None:
+        """Un link de email viejo no puede reabrir una encuesta ya cerrada."""
+        encuesta = _survey(status=STATUS_EXPIRED)
+        sesion = _Sesion(resultados=[_Resultado(encuesta)])
+
+        resultado = await process_response(sesion, uuid.uuid4(), uuid.uuid4(), rating=5)
+
+        assert resultado is None
+        assert encuesta.rating is None
+        assert encuesta.status == STATUS_EXPIRED
+
+    @pytest.mark.asyncio
     async def test_registra_rating_y_comentario(self) -> None:
         encuesta = _survey()
         sesion = _Sesion(resultados=[_Resultado(encuesta)])
@@ -191,11 +204,64 @@ class TestProcessResponse:
         assert encuesta.responded_at is not None
 
 
-# ─── GET /csat/respond ────────────────────────────────────────────────────────
+# ─── GET /csat/respond (confirmacion, no muta) ──────────────────────────────
+
+
+class TestConfirmarRespuestaCsat:
+    URL = "/api/v1/csat/respond"
+
+    async def test_no_requiere_jwt(self, api_client: Any) -> None:
+        """Publico: sin Authorization no debe dar 401 (esta en PUBLIC_PATHS)."""
+        response = await api_client.get(
+            self.URL,
+            params={"survey_id": str(uuid.uuid4()), "client_id": str(uuid.uuid4()), "rating": 5},
+        )
+
+        assert response.status_code == 200
+
+    async def test_no_toca_la_base(self, api_client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Un escaner de enlaces de email que solo hace GET no debe registrar nada."""
+        sesion = _Sesion(resultados=[_Resultado(_survey())])
+        monkeypatch.setattr(csat_api_module, "tenant_session", fake_tenant_session(sesion))
+
+        await api_client.get(
+            self.URL,
+            params={"survey_id": str(uuid.uuid4()), "client_id": str(uuid.uuid4()), "rating": 5},
+        )
+
+        assert sesion.flushed == 0
+
+    async def test_arma_un_formulario_que_postea_al_mismo_path(self, api_client: Any) -> None:
+        survey_id, client_id = uuid.uuid4(), uuid.uuid4()
+
+        response = await api_client.get(
+            self.URL, params={"survey_id": str(survey_id), "client_id": str(client_id), "rating": 4}
+        )
+
+        assert 'method="post"' in response.text
+        assert f'action="{self.URL}"' in response.text
+        assert str(survey_id) in response.text
+        assert str(client_id) in response.text
+
+    async def test_rating_fuera_de_rango_es_422(self, api_client: Any) -> None:
+        response = await api_client.get(
+            self.URL,
+            params={"survey_id": str(uuid.uuid4()), "client_id": str(uuid.uuid4()), "rating": 9},
+        )
+
+        assert response.status_code == 422
+
+
+# ─── POST /csat/respond (registra la respuesta) ─────────────────────────────
 
 
 class TestRespondViaLink:
     URL = "/api/v1/csat/respond"
+
+    def _form(self, **over: Any) -> dict[str, str]:
+        base = {"survey_id": str(uuid.uuid4()), "client_id": str(uuid.uuid4()), "rating": "5"}
+        base.update(over)
+        return base
 
     async def test_no_requiere_jwt(self, api_client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
         """Publico: sin Authorization no debe dar 401 (esta en PUBLIC_PATHS)."""
@@ -206,10 +272,7 @@ class TestRespondViaLink:
             fake_tenant_session(_Sesion(resultados=[_Resultado(encuesta)])),
         )
 
-        response = await api_client.get(
-            self.URL,
-            params={"survey_id": str(uuid.uuid4()), "client_id": str(uuid.uuid4()), "rating": 5},
-        )
+        response = await api_client.post(self.URL, data=self._form())
 
         assert response.status_code == 200
         assert "Gracias" in response.text
@@ -223,19 +286,13 @@ class TestRespondViaLink:
             fake_tenant_session(_Sesion(resultados=[_Resultado(None)])),
         )
 
-        response = await api_client.get(
-            self.URL,
-            params={"survey_id": str(uuid.uuid4()), "client_id": str(uuid.uuid4()), "rating": 3},
-        )
+        response = await api_client.post(self.URL, data=self._form())
 
         assert response.status_code == 200
         assert "no encontrada" in response.text.lower()
 
     async def test_rating_fuera_de_rango_es_422(self, api_client: Any) -> None:
-        response = await api_client.get(
-            self.URL,
-            params={"survey_id": str(uuid.uuid4()), "client_id": str(uuid.uuid4()), "rating": 9},
-        )
+        response = await api_client.post(self.URL, data=self._form(rating="9"))
 
         assert response.status_code == 422
 

@@ -88,7 +88,7 @@ async def _enviar_encuesta(client_id: str, conversation_id: str) -> dict[str, st
             logger.info("Conversacion %s ya no esta resuelta; se cancela la encuesta CSAT", conv_id)
             return {"status": "skipped_not_resolved"}
 
-        if await survey_exists(session, conv_id):
+        if await survey_exists(session, tenant_id, conv_id):
             return {"status": "skipped_duplicate"}
 
         contact = (
