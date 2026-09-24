@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID as _UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -68,6 +68,17 @@ class Invoice(TenantBaseModel):
     __table_args__ = (
         Index("uq_invoices_number", "client_id", "invoice_number", unique=True),
         Index("idx_invoices_contact_status", "client_id", "contact_id", "status"),
+        # Mismas dos CheckConstraint que crea la migracion 012 — declaradas
+        # aca tambien porque el autogenerate de Alembic compara el metadata
+        # del modelo contra la base real; sin esto, `alembic check`/
+        # `--autogenerate` ve una tabla real con mas restricciones que las que
+        # el modelo dice tener y propone un diff espurio (mismo hallazgo de
+        # /code-review que le rompio el Alembic Migration Check al PR #43).
+        CheckConstraint(
+            "status IN ('draft', 'pending_dian', 'approved', 'rejected')",
+            name="ck_invoices_status",
+        ),
+        CheckConstraint("total_cents = subtotal_cents + tax_total_cents", name="ck_invoices_total"),
     )
 
     contact_id: Mapped[_UUID | None] = mapped_column(

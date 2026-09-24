@@ -24,13 +24,13 @@ Cambios sobre el pseudocodigo del spec (§1.2), todos en ADR-066:
 """
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.core.database import tenant_session
 from app.models.invoice import (
@@ -189,6 +189,18 @@ def _formatear_pesos(centavos: int) -> str:
 async def _siguiente_consecutivo(session: Any, client_id: UUID) -> str:
     """Calcula el siguiente numero de factura del tenant.
 
+    `pg_advisory_xact_lock` antes del `COUNT(*)`, no solo el `UNIQUE` de la
+    migracion 012 como red: sin el lock, dos `create_invoice` casi
+    simultaneas del mismo tenant leen el mismo conteo antes de que ninguna
+    inserte, calculan el mismo consecutivo, y la segunda revienta contra el
+    `UNIQUE` — pero para entonces la DIAN ya pudo haber aceptado las dos
+    facturas (`create_invoice` llama a la DIAN antes de abrir esta
+    transaccion), asi que el choque deja una factura aprobada sin fila local.
+    El lock es por tenant (`hashtext(client_id)`) y de alcance transaccional:
+    se libera solo al terminar la transaccion, mismo patron que el
+    doble-booking de citas (`calendar_tools.create_appointment`).
+    Hallazgo de /code-review sobre el PR #42.
+
     Args:
         session: Sesion con el contexto de tenant ya aplicado.
         client_id: Tenant que emite.
@@ -196,6 +208,9 @@ async def _siguiente_consecutivo(session: Any, client_id: UUID) -> str:
     Returns:
         Consecutivo con el formato `FE-000001`.
     """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:client_id))"), {"client_id": str(client_id)}
+    )
     emitidas = (
         await session.execute(
             select(func.count()).select_from(Invoice).where(Invoice.client_id == client_id)
@@ -302,27 +317,55 @@ async def create_invoice(
         logger.info("Factura %s queda pendiente de la DIAN: %s", invoice_id, exc)
         error = str(exc)
 
-    async with tenant_session(client_id) as session:
-        numero = await _siguiente_consecutivo(session, client_id)
-        session.add(
-            Invoice(
-                id=invoice_id,
-                client_id=client_id,
-                contact_id=_contact_id(config),
-                conversation_id=_conversation_id(config),
-                invoice_number=numero,
-                buyer_nit=f"{nit_limpio}-{digito}",
-                buyer_name=buyer_name,
-                items=lineas,
-                subtotal_cents=subtotal,
-                tax_total_cents=impuestos,
-                total_cents=total,
-                status=estado,
-                dian_cufe=cufe,
-                dian_response=respuesta_dian,
-                error_message=error,
-                issued_at=emitida,
+    try:
+        async with tenant_session(client_id) as session:
+            numero = await _siguiente_consecutivo(session, client_id)
+            session.add(
+                Invoice(
+                    id=invoice_id,
+                    client_id=client_id,
+                    contact_id=_contact_id(config),
+                    conversation_id=_conversation_id(config),
+                    invoice_number=numero,
+                    buyer_nit=f"{nit_limpio}-{digito}",
+                    buyer_name=buyer_name,
+                    items=lineas,
+                    subtotal_cents=subtotal,
+                    tax_total_cents=impuestos,
+                    total_cents=total,
+                    status=estado,
+                    dian_cufe=cufe,
+                    dian_response=respuesta_dian,
+                    error_message=error,
+                    issued_at=emitida,
+                )
             )
+    except Exception:
+        # La DIAN ya pudo haber aceptado la factura (estado == INVOICE_APPROVED,
+        # cufe con valor) antes de que esto fallara: un `raise` aca dejaria que
+        # `ai_processor.py` reintente el turno completo, y el reintento
+        # volveria a llamar a `enviar_factura()` — una segunda factura real
+        # ante la DIAN por el mismo pedido. En vez de eso se registra en
+        # CRITICAL con el CUFE (si lo hay) para que un humano concilie a mano,
+        # y se le devuelve al agente un resultado que deja claro que hace
+        # falta revisar, no un error generico que invite a reintentar.
+        # Hallazgo de /code-review sobre el PR #42.
+        logger.critical(
+            "No se pudo guardar la factura %s tras la respuesta de la DIAN "
+            "(estado=%s cufe=%s tenant=%s); requiere conciliacion manual",
+            invoice_id,
+            estado,
+            cufe,
+            client_id,
+            exc_info=True,
+        )
+        aviso_dian = (
+            f" La DIAN ya la habia aprobado con CUFE {cufe}." if cufe else ""
+        )
+        return (
+            "No se pudo registrar la factura por un problema tecnico al guardarla."
+            f"{aviso_dian} Avisa a soporte con este identificador para revisarlo "
+            f"a mano: {invoice_id}."
         )
 
     resumen = (
@@ -410,8 +453,14 @@ async def list_invoices(
         if columna == "desde":
             stmt = stmt.where(Invoice.issued_at >= momento)
         else:
-            # Hasta el final del dia indicado, no hasta su medianoche.
-            stmt = stmt.where(Invoice.issued_at < momento.replace(hour=23, minute=59, second=59))
+            # Estrictamente antes de la medianoche del dia SIGUIENTE, no
+            # `.replace(hour=23, minute=59, second=59)`: ese replace deja
+            # microsecond=0 (heredado de `datetime.min.time()`), asi que el
+            # limite real quedaba en 23:59:59.000000 y una factura emitida en
+            # cualquier momento de ese ultimo segundo (23:59:59.000001 en
+            # adelante) se perdia del listado. Hallazgo de /code-review sobre
+            # el PR #42.
+            stmt = stmt.where(Invoice.issued_at < momento + timedelta(days=1))
 
     async with tenant_session(client_id) as session:
         facturas = (

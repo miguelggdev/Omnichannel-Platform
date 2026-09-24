@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID as _UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -63,7 +63,16 @@ class Campaign(TenantBaseModel):
     """
 
     __tablename__ = "campaigns"
-    __table_args__ = (Index("idx_campaigns_client_status", "client_id", "status"),)
+    __table_args__ = (
+        Index("idx_campaigns_client_status", "client_id", "status"),
+        # Misma CheckConstraint que crea la migracion 012 — ver el comentario
+        # equivalente en app/models/invoice.py sobre por que hace falta
+        # repetirla aca (drift de metadata / Alembic Migration Check).
+        CheckConstraint(
+            "status IN ('draft', 'scheduled', 'sending', 'completed', 'failed')",
+            name="ck_campaigns_status",
+        ),
+    )
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     channel: Mapped[str] = mapped_column(String(50), nullable=False)
