@@ -182,6 +182,16 @@ class Settings(BaseSettings):
     WHISPER_TIMEOUT_SECONDS: float = 60.0
     MEDIA_DOWNLOAD_TIMEOUT_SECONDS: float = 30.0
 
+    # Facturacion electronica DIAN — Sprint 12
+    # Vacias = sin integracion: se valida el NIT en local (formato + digito de
+    # verificacion) y la factura queda en `pending_dian`. Nunca se inventa CUFE.
+    DIAN_API_URL: str = ""
+    DIAN_API_TOKEN: str = ""
+    DIAN_TIMEOUT_SECONDS: float = 10.0
+
+    # Campanas masivas — Sprint 12
+    CAMPAIGN_MAX_MESSAGES_PER_SECOND: int = 100
+
     # Webhooks salientes — Sprint 11
     OUTGOING_WEBHOOK_TIMEOUT_SECONDS: float = 10.0
     # Permitir URLs que resuelven a direcciones privadas/loopback. Solo para

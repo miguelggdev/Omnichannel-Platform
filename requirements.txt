@@ -10,7 +10,7 @@ uvicorn[standard]>=0.27.0
 python-multipart>=0.0.9
 
 # ─── Database ────────────────────────────────────────────────────────────────
-sqlalchemy[asyncio]>=2.0.25
+sqlalchemy[asyncio]>=2.0.25,<2.1  # 2.1.0 quito sqlalchemy.ext.mypy (plugin de pyproject.toml) y cambio el orden de DDL de CREATE TYPE/CREATE TABLE en Enum inline
 asyncpg>=0.29.0
 psycopg2-binary>=2.9.9  # Driver sync para Alembic (env.py convierte asyncpg→postgresql://)
 alembic>=1.13.0

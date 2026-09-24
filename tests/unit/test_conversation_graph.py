@@ -91,7 +91,8 @@ class TestRouteAfterScheduling:
 
 
 class TestBuildConversationGraph:
-    """El grafo se arma y compila con los 7 nodos (6 de Sprint 6 + scheduling)."""
+    """El grafo se arma y compila con los 9 nodos (6 de Sprint 6, scheduling y los
+    dos agentes especializados del Sprint 12)."""
 
     def test_compila_sin_checkpointer(self) -> None:
         """Compilar sin checkpointer no debe fallar ni abrir ninguna conexion."""
@@ -99,8 +100,8 @@ class TestBuildConversationGraph:
 
         assert compiled is not None
 
-    def test_tiene_los_siete_nodos(self) -> None:
-        """Los 6 nodos de Sprint 6 mas `scheduling` (Sprint 7) quedan registrados."""
+    def test_tiene_los_nueve_nodos(self) -> None:
+        """Los 6 de Sprint 6, `scheduling` (Sprint 7) y los dos agentes del Sprint 12."""
         graph = build_conversation_graph()
 
         assert set(graph.nodes.keys()) == {
@@ -111,6 +112,8 @@ class TestBuildConversationGraph:
             "human_handoff",
             "training_mode_approval",
             "scheduling",
+            "financial",
+            "marketing",
         }
 
 

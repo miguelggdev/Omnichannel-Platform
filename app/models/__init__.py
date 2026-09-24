@@ -9,6 +9,7 @@ from app.models.agent_config import AgentConfig
 from app.models.approved_response import ApprovedResponse
 from app.models.audit_log import AuditLog
 from app.models.base import Base, TenantBaseModel
+from app.models.campaign import Campaign
 from app.models.client import Client
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
@@ -17,6 +18,7 @@ from app.models.conversation import Conversation
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.models.internal_note import InternalNote
+from app.models.invoice import Invoice
 from app.models.message import Message
 from app.models.outgoing_webhook_log import OutgoingWebhookLog
 from app.models.pending_response import PendingResponse
@@ -38,6 +40,7 @@ __all__ = [
     "ApprovedResponse",
     "AuditLog",
     "Base",
+    "Campaign",
     "Client",
     "Contact",
     "ContactIdentifier",
@@ -47,6 +50,7 @@ __all__ = [
     "DocumentChunk",
     "InstantiationStatus",
     "InternalNote",
+    "Invoice",
     "Message",
     "OutgoingWebhookLog",
     "PendingResponse",
