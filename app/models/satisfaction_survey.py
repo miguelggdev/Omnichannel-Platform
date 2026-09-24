@@ -17,7 +17,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import TenantBaseModel
 
 # Estados de `status`. `sent` -> `responded` (con `rating`) o `sent` -> `expired`
-# (`app.tasks.notification_expire_csat_surveys`, transcurrido `SURVEY_EXPIRY_HOURS`).
+# (`app.tasks.bulk_expire_csat_surveys`, transcurrido `CSAT_SURVEY_EXPIRY_HOURS`).
 STATUS_SENT = "sent"
 STATUS_RESPONDED = "responded"
 STATUS_EXPIRED = "expired"

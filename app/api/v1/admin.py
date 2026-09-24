@@ -659,7 +659,7 @@ async def csat_summary(
         average_rating=round(float(agregado.promedio or 0), 2),
         promoters=agregado.promotores or 0,
         detractors=agregado.detractores or 0,
-        distribution=dict(distribucion),
+        distribution={fila[0]: fila[1] for fila in distribucion},
         weekly_trend=[
             {"week": semana.isoformat(), "avg_rating": round(float(promedio), 2), "count": cantidad}
             for semana, promedio, cantidad in tendencia

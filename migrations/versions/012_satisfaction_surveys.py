@@ -58,15 +58,21 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["conversation_id"], ["conversations.id"]),
         sa.ForeignKeyConstraint(["contact_id"], ["contacts.id"]),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("conversation_id", name="uq_csat_conversation_id"),
     )
     op.create_index(
         op.f("ix_satisfaction_surveys_client_id"), "satisfaction_surveys", ["client_id"]
     )
+    # Indice UNICO, no una constraint aparte mas un indice plano: el modelo
+    # (`mapped_column(unique=True, index=True)`) declara esto como un unico
+    # indice unico, y con la constraint separada el autogenerate de Alembic
+    # detectaba drift entre la migracion y los modelos (Alembic Migration
+    # Check de CI). Ademas es lo correcto: un UNIQUE ya sirve de indice para
+    # las busquedas por igualdad, un segundo indice plano al lado es redundante.
     op.create_index(
         op.f("ix_satisfaction_surveys_conversation_id"),
         "satisfaction_surveys",
         ["conversation_id"],
+        unique=True,
     )
     op.create_index(
         op.f("ix_satisfaction_surveys_contact_id"), "satisfaction_surveys", ["contact_id"]
