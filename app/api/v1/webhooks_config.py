@@ -20,7 +20,6 @@ historial que ese engine deja en `outgoing_webhook_logs`.
 import logging
 import secrets
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -43,6 +42,12 @@ from app.schemas.webhook_config import (
     eventos_no_soportados,
 )
 from app.services.webhook_dispatcher import WebhookDispatcher
+
+# Privada y reusada tal cual: ya existe con exactamente estos cuatro campos
+# para exactamente este proposito (copiar el webhook fuera de la sesion antes
+# de un POST que puede tardar) — duplicarla con un SimpleNamespace aparte solo
+# daria dos implementaciones del mismo Protocol sin chequeo estatico.
+from app.tasks.outgoing_webhooks import _DatosDelWebhook
 
 logger = logging.getLogger(__name__)
 
@@ -201,10 +206,29 @@ async def update_outgoing_webhook(
     if data.events is not None:
         _validar_eventos(data.events)
 
+    cambios = data.model_dump(exclude_unset=True)
+    # `url`/`events`/`headers` son NOT NULL en la base: un cliente que mande
+    # `null` explicito para alguno pasa la validacion de Pydantic (el schema
+    # los tipa Optional para que "no enviado" siga significando "no tocar"),
+    # y sin este chequeo el `setattr` de abajo dejaria el atributo en `None` y
+    # el `flush()` reventaria con un `IntegrityError` sin atrapar — un 500
+    # generico en vez del 400 que un valor invalido deberia dar.
+    nulos = [
+        campo
+        for campo in ("url", "events", "headers")
+        if campo in cambios and cambios[campo] is None
+    ]
+    if nulos:
+        raise AppException(
+            status_code=400,
+            error_code=VALIDATION_ERROR,
+            message=f"No se puede poner en null: {', '.join(nulos)}",
+        )
+
     async with tenant_session(client_id) as session:
         webhook = await _get_or_404(session, webhook_id, client_id)
 
-        for campo, valor in data.model_dump(exclude_unset=True).items():
+        for campo, valor in cambios.items():
             setattr(webhook, campo, valor)
 
         if data.is_active:
@@ -308,7 +332,7 @@ async def send_test_webhook(
 
     async with tenant_session(client_id) as session:
         webhook = await _get_or_404(session, webhook_id, client_id)
-        datos = SimpleNamespace(
+        datos = _DatosDelWebhook(
             id=webhook.id, url=webhook.url, secret=webhook.secret, headers=webhook.headers
         )
 

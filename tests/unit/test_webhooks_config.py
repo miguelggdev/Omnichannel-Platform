@@ -169,6 +169,21 @@ class TestEdicionYBorrado:
         assert webhook.consecutive_failures == 0
         assert webhook.disabled_reason is None
 
+    @pytest.mark.parametrize("campo", ["url", "events", "headers"])
+    async def test_null_explicito_en_columna_not_null_es_400(
+        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch, campo: str
+    ) -> None:
+        """Un `null` explicito no debe llegar como `IntegrityError` (500)."""
+        webhook = FakeTenantWebhook()
+        session = _usa_sesion(monkeypatch, CrmSession(resultados=[webhook]))
+
+        response = await authenticated_client.put(f"{URL}/{webhook.id}", json={campo: None})
+
+        assert response.status_code == 400
+        assert campo in response.json()["message"]
+        # No debe haber tocado la base: el chequeo va antes de cargar el webhook.
+        assert session.executed == []
+
     async def test_evento_no_soportado_en_update_es_400(
         self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
