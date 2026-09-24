@@ -13,7 +13,7 @@ Dos tablas multi-tenant normales: `client_id` + FORCE RLS, mismo patron que
 `campaigns`), pero §1.2 deja "Guardar en DB # ..." en `create_invoice()` y
 hace que `get_invoice_status()`/`list_invoices()` devuelvan datos inventados:
 sin esta tabla, tres de las cuatro tools del agente financiero son una
-maqueta. Ver ADR-066.
+maqueta. Ver ADR-067.
 
 Dos decisiones que se apartan del pseudocodigo del spec:
 

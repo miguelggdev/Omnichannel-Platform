@@ -23,6 +23,7 @@ from app.models.message import Message
 from app.models.outgoing_webhook_log import OutgoingWebhookLog
 from app.models.pending_response import PendingResponse
 from app.models.quick_reply import QuickReply
+from app.models.satisfaction_survey import SatisfactionSurvey
 from app.models.service_type import Appointment, ServiceType
 from app.models.tag import Tag
 from app.models.tenant_template import InstantiationStatus, TemplateInstantiation, TenantTemplate
@@ -54,6 +55,7 @@ __all__ = [
     "OutgoingWebhookLog",
     "PendingResponse",
     "QuickReply",
+    "SatisfactionSurvey",
     "ServiceType",
     "Tag",
     "TemplateInstantiation",

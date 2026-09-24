@@ -6,7 +6,7 @@ como argumentos que el LLM pueda rellenar — el modelo no tiene ninguna fuente
 legitima de esos UUID internos, y dejarlos como argumentos abriria la puerta a
 que el bot facturara a nombre de otro contacto del mismo tenant.
 
-Cambios sobre el pseudocodigo del spec (§1.2), todos en ADR-066:
+Cambios sobre el pseudocodigo del spec (§1.2), todos en ADR-067:
 
 - **Los importes se calculan en centavos enteros.** El spec suma flotantes
   (`quantity * unit_price`) y con IVA del 19% sobre varias lineas el total no

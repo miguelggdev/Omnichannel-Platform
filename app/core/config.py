@@ -198,6 +198,21 @@ class Settings(BaseSettings):
     # desarrollo local (un receptor en localhost); en produccion abre la puerta
     # a SSRF contra la red interna, ver ADR-065.
     OUTGOING_WEBHOOK_ALLOW_PRIVATE_HOSTS: bool = False
+    # Cuantos dias se conservan las filas de outgoing_webhook_logs antes de
+    # purgarse (ADR-065, pendiente anotado: el payload guarda el evento
+    # completo y no debe acumularse sin limite). Ver app/tasks/maintenance.py.
+    OUTGOING_WEBHOOK_LOG_RETENTION_DAYS: int = 90
+
+    # CSAT — Sprint 11 (Dev B)
+    # Minutos de espera tras resolver una conversacion antes de mandar la
+    # encuesta; dejar procesar la resolucion al contacto antes de pedirle nota.
+    CSAT_SURVEY_DELAY_MINUTES: int = 5
+    # Horas que una encuesta sin responder queda en `sent` antes de expirar.
+    CSAT_SURVEY_EXPIRY_HOURS: int = 48
+    # URL publica de la API, para el link de respuesta que lleva el email
+    # (`GET /api/v1/csat/respond`). Vacio en dev: el link sale relativo y no
+    # sirve para clickear desde un cliente de correo, pero no rompe nada mas.
+    APP_PUBLIC_URL: str = ""
 
     # Anthropic (Admin Assistant)
     ANTHROPIC_API_KEY: str = ""

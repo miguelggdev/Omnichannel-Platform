@@ -29,12 +29,12 @@ exige borrar es el dato personal, no la prueba de que hubo una operacion.
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import bindparam, select, text, update
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import bindparam, case, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import tenant_session
@@ -46,13 +46,16 @@ from app.models.contact_tag import ContactTag
 from app.models.conversation import Conversation
 from app.models.internal_note import InternalNote
 from app.models.message import Message
+from app.models.satisfaction_survey import SatisfactionSurvey
 from app.models.tag import Tag
+from app.schemas.csat import CsatSummaryResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 _GDPR_ROLES = ("super_admin", "admin")
+_CSAT_ROLES = ("super_admin", "admin", "supervisor")
 
 # Texto con el que se reemplazan los datos personales.
 ANONIMIZADO = "[ELIMINADO]"
@@ -361,6 +364,69 @@ async def _redactar_rastro_de_auditoria(
     )
 
 
+async def _redactar_payloads_de_webhooks_salientes(
+    session: AsyncSession, client_id: UUID, contact_id: UUID
+) -> int:
+    """Redacta el texto de mensaje dentro de `outgoing_webhook_logs.payload`.
+
+    Pendiente anotado en ADR-065: `payload` guarda el evento completo, que en
+    `message.received` incluye el texto que escribio el contacto — dato
+    personal que el borrado RGPD tiene que alcanzar, igual que ya hace con
+    `messages.content` (`CONTENIDO_ANONIMIZADO`). Se sobreescribe solo la clave
+    `data.content` con `jsonb_set`, no el payload entero: el resto (evento,
+    ids, timestamp) es el rastro de que el envio ocurrio, no un dato personal,
+    y algunos eventos (`conversation.resolved`, `appointment.created`) ni
+    siquiera tienen `content`.
+
+    Solo `message.received`, nunca `message.sent`: igual que el bloque de
+    mensajes de `gdpr_delete_contact()` mas arriba filtra
+    `Message.direction == "inbound"` y deja intactos los salientes ("lo que
+    respondio la empresa"), esta redaccion tiene que respetar la misma
+    frontera — `message.sent` tambien lleva `data.content` (lo que el bot le
+    escribio al contacto) y `data.contact_id` del mismo contacto, y redactarlo
+    borraria el rastro de lo que la empresa dijo, no un dato del contacto.
+
+    `jsonb_typeof(...) <> 'null'` ademas de `? 'content'`: el operador `?` de
+    JSONB solo verifica que la clave exista, no que su valor no sea el `null`
+    de JSON — un mensaje de solo medios sin caption serializa `data.content`
+    como `null`, y sin este chequeo la redaccion lo sobreescribiria con el
+    aviso de "eliminado" aunque nunca hubo texto. Ojo: `... -> 'content' IS
+    NOT NULL` **no sirve** para esto — el operador `->` devuelve un valor
+    `jsonb` que representa el `null` de JSON, y eso no es un `NULL` de SQL, asi
+    que `IS NOT NULL` da verdadero igual (se comprobo con un test de
+    integracion que lo hizo fallar antes de este cambio).
+
+    No pasa por `audit_logs`: `outgoing_webhook_logs` no esta en las tablas que
+    audita el trigger de la migracion 006 (es un log de entregas, no una
+    entidad de negocio), asi que no hace falta una redaccion equivalente ahi.
+
+    Args:
+        session: Sesion con contexto de tenant ya aplicado.
+        client_id: Tenant propietario (filtro explicito ademas de RLS).
+        contact_id: Contacto cuyos payloads hay que redactar.
+
+    Returns:
+        Cuantas filas se redactaron.
+    """
+    resultado: Any = await session.execute(
+        text("""
+            UPDATE outgoing_webhook_logs
+            SET payload = jsonb_set(payload, '{data,content}', to_jsonb(CAST(:contenido AS text)))
+            WHERE client_id = :client_id
+              AND event = 'message.received'
+              AND payload -> 'data' ->> 'contact_id' = :contact_id
+              AND payload -> 'data' ? 'content'
+              AND jsonb_typeof(payload -> 'data' -> 'content') <> 'null'
+        """),
+        {
+            "contenido": CONTENIDO_ANONIMIZADO,
+            "client_id": str(client_id),
+            "contact_id": str(contact_id),
+        },
+    )
+    return int(resultado.rowcount or 0)
+
+
 @router.delete("/contacts/{contact_id}/gdpr-delete")
 async def gdpr_delete_contact(
     contact_id: UUID,
@@ -512,6 +578,7 @@ async def gdpr_delete_contact(
         await _redactar_rastro_de_auditoria(
             session, client_id, contact_id, mensaje_ids, list(conversaciones)
         )
+        await _redactar_payloads_de_webhooks_salientes(session, client_id, contact_id)
 
     logger.info(
         "RGPD: contacto %s anonimizado por %s (tenant %s)",
@@ -528,3 +595,93 @@ async def gdpr_delete_contact(
         "messages_anonymized": mensajes_anonimizados,
         "notes_anonymized": len(notas),
     }
+
+
+# ─── CSAT (Sprint 11, Dev B) ──────────────────────────────────────────────────
+
+
+@router.get("/csat/summary", response_model=CsatSummaryResponse)
+async def csat_summary(
+    days: int = Query(default=30, ge=1, le=365),
+    user: dict[str, Any] = Depends(require_role(*_CSAT_ROLES)),
+) -> CsatSummaryResponse:
+    """Resumen de CSAT del tenant en los ultimos `days` dias.
+
+    `promoters` (rating >= 4) y `detractors` (rating <= 2) usan el corte que
+    NPS/CSAT convencional aplica a una escala 1-5, no el 0-10 de NPS puro.
+
+    Args:
+        days: Ventana de dias hacia atras; por defecto 30.
+        user: Usuario autenticado.
+
+    Returns:
+        Total enviado y respondido, tasa de respuesta, promedio, promotores y
+        detractores, distribucion por rating y tendencia semanal de respuestas.
+    """
+    client_id: UUID = user["client_id"]
+    desde = datetime.now(timezone.utc) - timedelta(days=days)
+
+    async with tenant_session(client_id) as session:
+        agregado = (
+            await session.execute(
+                select(
+                    func.count(SatisfactionSurvey.id).label("total"),
+                    func.count(SatisfactionSurvey.rating).label("respuestas"),
+                    func.avg(SatisfactionSurvey.rating).label("promedio"),
+                    func.count(case((SatisfactionSurvey.rating >= 4, 1))).label("promotores"),
+                    func.count(case((SatisfactionSurvey.rating <= 2, 1))).label("detractores"),
+                ).where(
+                    SatisfactionSurvey.client_id == client_id,
+                    SatisfactionSurvey.sent_at >= desde,
+                )
+            )
+        ).one()
+
+        distribucion = (
+            await session.execute(
+                select(SatisfactionSurvey.rating, func.count(SatisfactionSurvey.id))
+                .where(
+                    SatisfactionSurvey.client_id == client_id,
+                    SatisfactionSurvey.sent_at >= desde,
+                    SatisfactionSurvey.rating.is_not(None),
+                )
+                .group_by(SatisfactionSurvey.rating)
+                .order_by(SatisfactionSurvey.rating)
+            )
+        ).all()
+
+        tendencia = (
+            await session.execute(
+                select(
+                    func.date_trunc("week", SatisfactionSurvey.responded_at).label("semana"),
+                    func.avg(SatisfactionSurvey.rating).label("promedio"),
+                    func.count(SatisfactionSurvey.id).label("cantidad"),
+                )
+                .where(
+                    SatisfactionSurvey.client_id == client_id,
+                    SatisfactionSurvey.responded_at >= desde,
+                    SatisfactionSurvey.rating.is_not(None),
+                )
+                .group_by(text("semana"))
+                .order_by(text("semana"))
+            )
+        ).all()
+
+    total = agregado.total or 0
+    respuestas = agregado.respuestas or 0
+    tasa_respuesta = (respuestas / total * 100) if total else 0.0
+
+    return CsatSummaryResponse(
+        period_days=days,
+        total_surveys_sent=total,
+        total_responses=respuestas,
+        response_rate=round(tasa_respuesta, 1),
+        average_rating=round(float(agregado.promedio or 0), 2),
+        promoters=agregado.promotores or 0,
+        detractors=agregado.detractores or 0,
+        distribution={fila[0]: fila[1] for fila in distribucion},
+        weekly_trend=[
+            {"week": semana.isoformat(), "avg_rating": round(float(promedio), 2), "count": cantidad}
+            for semana, promedio, cantidad in tendencia
+        ],
+    )

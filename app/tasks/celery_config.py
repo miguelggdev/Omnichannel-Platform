@@ -112,6 +112,17 @@ celery_app.conf.update(
             "schedule": crontab(day_of_month="1", hour=4, minute=0),
             "options": {"queue": "bulk"},
         },
+        "expire-csat-surveys": {
+            "task": "app.tasks.bulk_expire_csat_surveys",
+            "schedule": 3600.0,  # cada hora
+            "options": {"queue": "bulk"},
+        },
+        "purge-outgoing-webhook-logs": {
+            "task": "app.tasks.bulk_purge_outgoing_webhook_logs",
+            # Domingo 05:00 UTC, fuera de la ventana del backup diario (03:00).
+            "schedule": crontab(day_of_week="sun", hour=5, minute=0),
+            "options": {"queue": "bulk"},
+        },
         # Cada entrada de aqui tiene que apuntar a una tarea que exista: Beat
         # publica el mensaje igual, y un worker que no la conoce lo rechaza
         # como "unregistered task" en cada ciclo, para siempre, sin que nada
