@@ -386,11 +386,15 @@ async def _redactar_payloads_de_webhooks_salientes(
     escribio al contacto) y `data.contact_id` del mismo contacto, y redactarlo
     borraria el rastro de lo que la empresa dijo, no un dato del contacto.
 
-    `payload -> 'data' -> 'content' IS NOT NULL` ademas de `? 'content'`: el
-    operador `?` de JSONB solo verifica que la clave exista, no que su valor
-    no sea `null` — un mensaje de solo medios sin caption serializa
-    `data.content` como `null`, y sin este chequeo la redaccion lo
-    sobreescribiria con el aviso de "eliminado" aunque nunca hubo texto.
+    `jsonb_typeof(...) <> 'null'` ademas de `? 'content'`: el operador `?` de
+    JSONB solo verifica que la clave exista, no que su valor no sea el `null`
+    de JSON — un mensaje de solo medios sin caption serializa `data.content`
+    como `null`, y sin este chequeo la redaccion lo sobreescribiria con el
+    aviso de "eliminado" aunque nunca hubo texto. Ojo: `... -> 'content' IS
+    NOT NULL` **no sirve** para esto — el operador `->` devuelve un valor
+    `jsonb` que representa el `null` de JSON, y eso no es un `NULL` de SQL, asi
+    que `IS NOT NULL` da verdadero igual (se comprobo con un test de
+    integracion que lo hizo fallar antes de este cambio).
 
     No pasa por `audit_logs`: `outgoing_webhook_logs` no esta en las tablas que
     audita el trigger de la migracion 006 (es un log de entregas, no una
@@ -412,7 +416,7 @@ async def _redactar_payloads_de_webhooks_salientes(
               AND event = 'message.received'
               AND payload -> 'data' ->> 'contact_id' = :contact_id
               AND payload -> 'data' ? 'content'
-              AND payload -> 'data' -> 'content' IS NOT NULL
+              AND jsonb_typeof(payload -> 'data' -> 'content') <> 'null'
         """),
         {
             "contenido": CONTENIDO_ANONIMIZADO,
