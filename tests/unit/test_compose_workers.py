@@ -174,7 +174,9 @@ class TestCredencialesDeCanales:
     """Un worker que responde llama a `get_channel_config()`: sin esto, el canal
     "no esta configurado" y el contacto se queda sin respuesta."""
 
-    @pytest.mark.parametrize("cola", ["ai_inference", "notifications", "media"])
+    # `bulk` entra en la lista desde el Sprint 12: ahi corren las campanas
+    # masivas (`app.tasks.bulk_execute_campaign`), que mandan mensajes.
+    @pytest.mark.parametrize("cola", ["ai_inference", "notifications", "media", "bulk"])
     def test_los_workers_que_envian_tienen_las_credenciales(
         self, servicios: dict[str, dict[str, Any]], cola: str
     ) -> None:
@@ -271,17 +273,33 @@ NO_SETTINGS_PERMITIDAS = frozenset(
 #: Lo que necesita cada servicio ademas de lo comun, segun el codigo que ejecuta.
 REQUERIDAS_POR_SERVICIO: dict[str, frozenset[str]] = {
     # `auto_close` resuelve el tenant con DEFAULT_CLIENT_ID; `tenant_cloner`
-    # (Sprint 10) copia archivos de Storage al clonar documentos.
+    # (Sprint 10) copia archivos de Storage al clonar documentos; y el envio de
+    # campanas (Sprint 12) aplica aca su limite de mensajes por segundo.
     "celery-bulk": frozenset(
-        {"DEFAULT_CLIENT_ID", "SUPABASE_URL", "SUPABASE_SECRET_KEY", "SUPABASE_STORAGE_BUCKET"}
+        {
+            "DEFAULT_CLIENT_ID",
+            "SUPABASE_URL",
+            "SUPABASE_SECRET_KEY",
+            "SUPABASE_STORAGE_BUCKET",
+            "CAMPAIGN_MAX_MESSAGES_PER_SECOND",
+        }
     ),
     # `document_pipeline` descarga el archivo subido desde Supabase Storage.
     "celery-documents": frozenset(
         {"SUPABASE_URL", "SUPABASE_SECRET_KEY", "SUPABASE_STORAGE_BUCKET", "OPENAI_EMBEDDING_MODEL"}
     ),
-    # El agente de agendamiento usa Google Calendar; el modelo de chat lo lee `_tenant`.
+    # El agente de agendamiento usa Google Calendar; el modelo de chat lo lee
+    # `_tenant`; y el agente financiero (Sprint 12) habla con la DIAN desde el
+    # grafo, que corre en este worker.
     "celery-ai": frozenset(
-        {"GOOGLE_CALENDAR_CREDENTIALS_JSON", "GOOGLE_CALENDAR_ID", "OPENAI_CHAT_MODEL"}
+        {
+            "GOOGLE_CALENDAR_CREDENTIALS_JSON",
+            "GOOGLE_CALENDAR_ID",
+            "OPENAI_CHAT_MODEL",
+            "DIAN_API_URL",
+            "DIAN_API_TOKEN",
+            "DIAN_TIMEOUT_SECONDS",
+        }
     ),
     # El engine de webhooks salientes corre entero en este worker (Sprint 11).
     "celery-notifications": frozenset(
