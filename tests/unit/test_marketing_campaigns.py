@@ -50,6 +50,9 @@ class _Resultado:
     def scalar_one_or_none(self):
         return self._filas[0] if self._filas else None
 
+    def all(self):
+        return list(self._filas)
+
 
 class _SesionFalsa:
     def __init__(self, resultados: list[_Resultado] | None = None) -> None:
@@ -350,7 +353,7 @@ class TestEnvioMasivo:
         contactos = [_contacto() for _ in range(3)]
         progreso: list[dict] = []
 
-        async def _enviar(client_id, contacto, camp, provider, config):
+        async def _enviar(client_id, contacto, camp, provider, config, identificador):
             if contacto is contactos[1]:
                 raise RuntimeError("sin identificador")
 

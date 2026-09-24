@@ -66,17 +66,18 @@ from app.services.segmentation import CriterioInvalidoError, resolver_segmento
 
 # Ventana en la que no se repite una campana al mismo segmento y canal — mismo
 # valor que `marketing_tools.VENTANA_ANTIDUPLICADOS_HORAS`, repetido aca a
-# proposito (ver `CampanaNoEnviable` mas abajo) en vez de importado, para no
+# proposito (ver `CampanaNoEnviableError` mas abajo) en vez de importado, para no
 # encadenar un modulo de tasks a uno de tools LangChain.
 VENTANA_ANTIDUPLICADOS_HORAS = 24
 
 
-class CampanaNoEnviable(RuntimeError):
+class CampanaNoEnviableError(RuntimeError):
     """La campana no se puede lanzar tal como esta configurada ahora mismo.
 
     No es un fallo transitorio: reintentar con la misma configuracion da el
     mismo resultado. `_ejecutar()` la trata igual que `CriterioInvalidoError`.
     """
+
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +188,7 @@ async def _marcar_en_envio(client_id: UUID, campaign_id: UUID) -> Campaign | Non
         ya no es lanzable (otra ejecucion se le adelanto, o la cancelaron).
 
     Raises:
-        CampanaNoEnviable: Si la plantilla ya no esta aprobada o el mismo
+        CampanaNoEnviableError: Si la plantilla ya no esta aprobada o el mismo
             segmento/canal ya recibio una campana en las ultimas 24 horas.
     """
     async with tenant_session(client_id) as session:
@@ -211,13 +212,13 @@ async def _marcar_en_envio(client_id: UUID, campaign_id: UUID) -> Campaign | Non
         if campana.channel == "whatsapp" and not await _plantilla_aprobada(
             session, client_id, campana.message_template
         ):
-            raise CampanaNoEnviable(
+            raise CampanaNoEnviableError(
                 "La plantilla de WhatsApp ya no esta aprobada para este tenant."
             )
 
         duplicada = await _campana_duplicada(session, client_id, campana)
         if duplicada is not None:
-            raise CampanaNoEnviable(
+            raise CampanaNoEnviableError(
                 f"El mismo segmento y canal ya recibio la campana '{duplicada.name}' "
                 f"en las ultimas {VENTANA_ANTIDUPLICADOS_HORAS} horas."
             )
@@ -367,7 +368,7 @@ async def _ejecutar(client_id_str: str, campaign_id_str: str) -> dict[str, Any]:
 
     try:
         # Adentro del try: si la plantilla ya no esta aprobada o el segmento
-        # esta duplicado, _marcar_en_envio() levanta CampanaNoEnviable, y se
+        # esta duplicado, _marcar_en_envio() levanta CampanaNoEnviableError, y se
         # maneja igual que CriterioInvalidoError/ChannelNotConfiguredError mas
         # abajo (marca CAMPAIGN_FAILED con el motivo, no reintenta).
         campana = await _marcar_en_envio(client_id, campaign_id)
@@ -416,7 +417,7 @@ async def _ejecutar(client_id_str: str, campaign_id_str: str) -> dict[str, Any]:
             if transcurrido < 1.0 and inicio + por_segundo < len(contactos):
                 await asyncio.sleep(1.0 - transcurrido)
 
-    except (CriterioInvalidoError, ChannelNotConfiguredError, CampanaNoEnviable) as exc:
+    except (CriterioInvalidoError, ChannelNotConfiguredError, CampanaNoEnviableError) as exc:
         # La campana no se puede ejecutar tal como esta configurada: no es un
         # fallo transitorio y reintentarla daria el mismo resultado.
         logger.warning("Campana %s no ejecutable: %s", campaign_id, exc)

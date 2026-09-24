@@ -204,7 +204,7 @@ class TestCreateInvoice:
 
     @pytest.mark.asyncio
     async def test_aprobada_guarda_el_cufe(self, monkeypatch) -> None:
-        sesion = _SesionFalsa([_Resultado([6])])
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([6])])
         monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
         monkeypatch.setattr(it, "enviar_factura", AsyncMock(return_value={"cufe": "cufe-abc"}))
 
@@ -224,7 +224,7 @@ class TestCreateInvoice:
 
     @pytest.mark.asyncio
     async def test_sin_dian_queda_pendiente_y_no_inventa_cufe(self, monkeypatch) -> None:
-        sesion = _SesionFalsa([_Resultado([0])])
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([0])])
         monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
         monkeypatch.setattr(
             it, "enviar_factura", AsyncMock(side_effect=DianNoConfiguradaError("sin credenciales"))
@@ -242,7 +242,7 @@ class TestCreateInvoice:
 
     @pytest.mark.asyncio
     async def test_un_fallo_de_la_dian_deja_la_factura_pendiente(self, monkeypatch) -> None:
-        sesion = _SesionFalsa([_Resultado([0])])
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([0])])
         monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
         monkeypatch.setattr(it, "enviar_factura", AsyncMock(side_effect=DianError("timeout")))
 
@@ -255,7 +255,7 @@ class TestCreateInvoice:
 
     @pytest.mark.asyncio
     async def test_sin_cufe_la_dian_la_rechazo(self, monkeypatch) -> None:
-        sesion = _SesionFalsa([_Resultado([0])])
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([0])])
         monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
         monkeypatch.setattr(
             it, "enviar_factura", AsyncMock(return_value={"error": "consecutivo agotado"})
@@ -293,7 +293,7 @@ class TestCreateInvoice:
     async def test_la_dian_se_consulta_antes_de_abrir_la_transaccion(self, monkeypatch) -> None:
         """Una llamada de red de hasta 10s no puede retener una conexion del pooler."""
         orden: list[str] = []
-        sesion = _SesionFalsa([_Resultado([0])])
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([0])])
 
         @asynccontextmanager
         async def _cm(client_id, user_id=None):

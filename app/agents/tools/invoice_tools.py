@@ -359,9 +359,7 @@ async def create_invoice(
             client_id,
             exc_info=True,
         )
-        aviso_dian = (
-            f" La DIAN ya la habia aprobado con CUFE {cufe}." if cufe else ""
-        )
+        aviso_dian = f" La DIAN ya la habia aprobado con CUFE {cufe}." if cufe else ""
         return (
             "No se pudo registrar la factura por un problema tecnico al guardarla."
             f"{aviso_dian} Avisa a soporte con este identificador para revisarlo "

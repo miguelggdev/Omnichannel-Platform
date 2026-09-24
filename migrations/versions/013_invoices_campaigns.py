@@ -126,9 +126,7 @@ def upgrade() -> None:
     op.create_index(op.f("ix_invoices_contact_id"), "invoices", ["contact_id"], unique=False)
     # El consecutivo es unico dentro del tenant, no globalmente: cada tenant
     # tiene su propia numeracion autorizada.
-    op.create_index(
-        "uq_invoices_number", "invoices", ["client_id", "invoice_number"], unique=True
-    )
+    op.create_index("uq_invoices_number", "invoices", ["client_id", "invoice_number"], unique=True)
     op.create_index(
         "idx_invoices_contact_status",
         "invoices",
