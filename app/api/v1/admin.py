@@ -393,7 +393,7 @@ async def _redactar_payloads_de_webhooks_salientes(
     resultado: Any = await session.execute(
         text("""
             UPDATE outgoing_webhook_logs
-            SET payload = jsonb_set(payload, '{data,content}', to_jsonb(:contenido::text))
+            SET payload = jsonb_set(payload, '{data,content}', to_jsonb(CAST(:contenido AS text)))
             WHERE client_id = :client_id
               AND payload -> 'data' ->> 'contact_id' = :contact_id
               AND payload -> 'data' ? 'content'
