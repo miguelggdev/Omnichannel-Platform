@@ -143,6 +143,33 @@ def eventos_emitidos(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, di
     return registrados
 
 
+@pytest.fixture(autouse=True)
+def csat_programada(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    """Corta el encolado de la encuesta CSAT hacia el broker.
+
+    `app.tasks.csat_tasks` registra su handler sobre `conversation.resolved` al
+    importarse (`app.main` lo importa para que el proceso de la API lo tenga),
+    asi que cualquier test que resuelva una conversacion via
+    `EventEmitter.emit()` — no solo los del propio CSAT — dispara
+    `send_csat_survey.apply_async()` de verdad. Mismo motivo y mismo patron que
+    `eventos_emitidos`: es autouse porque el efecto es transversal, no algo que
+    solo le importe a los tests de CSAT.
+
+    Returns:
+        Lista `(client_id, conversation_id)` con lo que se programo.
+    """
+    from app.tasks import csat_tasks
+
+    programadas: list[tuple[str, str]] = []
+
+    def _registrar(*_args: object, **kwargs: object) -> None:
+        datos = kwargs.get("kwargs") or {}
+        programadas.append((datos.get("client_id"), datos.get("conversation_id")))  # type: ignore[arg-type]
+
+    monkeypatch.setattr(csat_tasks.send_csat_survey, "apply_async", _registrar)
+    return programadas
+
+
 # ─── Database Fixtures (requieren --run-db) ─────────────────────────────────
 
 
