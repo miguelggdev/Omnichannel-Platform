@@ -3,11 +3,16 @@
 Contrato: `specs/sprint-06-langgraph.md` §2-3, 12; `specs/sprint-07-scheduling-crm.md`
 §5-6 (nodo `scheduling`, Sprint 7); y `specs/sprint-07-addendum-agent-logging.md`
 §4-5 (cada nodo se registra envuelto en `logged_node()`, que escribe su
-actividad en `agent_action_logs`). Ensambla los 7 nodos en el flujo:
+actividad en `agent_action_logs`); y `specs/sprint-12-agents-advanced.md` §1-2
+y §8 (nodos `financial` y `marketing`, Sprint 12). Ensambla los 9 nodos en el
+flujo:
 
-    token_budget_check -> intent_routing -> [rag_query | respond | human_handoff | scheduling]
+    token_budget_check -> intent_routing -> [rag_query | respond | human_handoff |
+                                               scheduling | financial | marketing]
                                               rag_query    -> [training_mode_approval | respond | human_handoff]
                                               scheduling   -> [respond | human_handoff]
+                                              financial    -> respond
+                                              marketing    -> respond
 
 `app/tasks/ai_processor.py` (Dev B, ya en `main`) es el unico consumidor: llama
 `await get_graph_with_checkpointer()` una vez por mensaje y despues
@@ -50,8 +55,10 @@ from typing import TYPE_CHECKING, Any, cast
 from langgraph.graph import END, StateGraph
 
 from app.agents.middleware.logging_middleware import logged_node
+from app.agents.nodes.financial import financial_node
 from app.agents.nodes.human_handoff import human_handoff_node
 from app.agents.nodes.intent_router import intent_routing_node
+from app.agents.nodes.marketing import marketing_node
 from app.agents.nodes.rag_query import rag_query_node
 from app.agents.nodes.respond import respond_node
 from app.agents.nodes.scheduling import scheduling_node
@@ -72,6 +79,8 @@ NODE_RESPOND = "respond"
 NODE_HUMAN_HANDOFF = "human_handoff"
 NODE_TRAINING_APPROVAL = "training_mode_approval"
 NODE_SCHEDULING = "scheduling"
+NODE_FINANCIAL = "financial"
+NODE_MARKETING = "marketing"
 
 # Intents que `respond_node` contesta sin pasar por RAG (ver app/agents/nodes/respond.py).
 _DIRECT_RESPONSE_INTENTS = frozenset({"greeting", "farewell"})
@@ -115,7 +124,8 @@ def route_after_intent(state: ConversationState) -> str:
         state: Estado tras `intent_routing_node`.
 
     Returns:
-        `"respond"`, `"human_handoff"`, `"scheduling"` o `"rag_query"`.
+        `"respond"`, `"human_handoff"`, `"scheduling"`, `"financial"`,
+        `"marketing"` o `"rag_query"`.
     """
     intent = state.get("intent") or "unknown"
 
@@ -125,6 +135,10 @@ def route_after_intent(state: ConversationState) -> str:
         return "human_handoff"
     if intent == "scheduling":
         return "scheduling"
+    if intent == "financial":
+        return "financial"
+    if intent == "marketing":
+        return "marketing"
     # rag_query y unknown: se intenta RAG primero.
     return "rag_query"
 
@@ -204,6 +218,8 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
         NODE_TRAINING_APPROVAL, _logged(NODE_TRAINING_APPROVAL, "decision", training_approval_node)
     )
     graph.add_node(NODE_SCHEDULING, _logged(NODE_SCHEDULING, "tool_call", scheduling_node))
+    graph.add_node(NODE_FINANCIAL, _logged(NODE_FINANCIAL, "tool_call", financial_node))
+    graph.add_node(NODE_MARKETING, _logged(NODE_MARKETING, "tool_call", marketing_node))
 
     graph.set_entry_point(NODE_TOKEN_BUDGET)
 
@@ -220,6 +236,8 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
             "human_handoff": NODE_HUMAN_HANDOFF,
             "respond": NODE_RESPOND,
             "scheduling": NODE_SCHEDULING,
+            "financial": NODE_FINANCIAL,
+            "marketing": NODE_MARKETING,
         },
     )
     graph.add_conditional_edges(
@@ -236,6 +254,12 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
         route_after_scheduling,
         {"respond": NODE_RESPOND, "human_handoff": NODE_HUMAN_HANDOFF},
     )
+
+    # Los agentes especializados siempre terminan en `respond`: sus tools ya
+    # devuelven texto util y no tienen una via de escalamiento propia como la
+    # que tiene el agendamiento con Google Calendar.
+    graph.add_edge(NODE_FINANCIAL, NODE_RESPOND)
+    graph.add_edge(NODE_MARKETING, NODE_RESPOND)
 
     graph.add_edge(NODE_RESPOND, END)
     graph.add_edge(NODE_HUMAN_HANDOFF, END)

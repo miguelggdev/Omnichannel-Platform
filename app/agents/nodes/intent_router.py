@@ -49,6 +49,9 @@ BASE_INTENTS: tuple[str, ...] = (
 AGENT_INTENTS: dict[str, str] = {
     "rag": "rag_query",
     "scheduling": "scheduling",
+    # Sprint 12: solo se le ofrecen al clasificador si el tenant los habilito.
+    "financial": "financial",
+    "marketing": "marketing",
 }
 
 INTENT_DESCRIPTIONS: dict[str, str] = {
@@ -56,6 +59,14 @@ INTENT_DESCRIPTIONS: dict[str, str] = {
     "farewell": "Despedida, agradecimiento de cierre o confirmacion final.",
     "rag_query": "Pregunta sobre el negocio: horarios, precios, servicios, politicas.",
     "scheduling": "Pide una cita, una reserva, o cambiar o cancelar una ya agendada.",
+    "financial": (
+        "Facturacion: pide una factura, consulta su estado, valida un NIT o "
+        "pregunta por su historial de facturas."
+    ),
+    "marketing": (
+        "Campanas masivas: crear o enviar una campana, segmentar contactos o "
+        "consultar las metricas de un envio."
+    ),
     "complaint": "Queja, reclamo o expresion clara de molestia con el servicio.",
     "human_request": "Pide explicitamente hablar con una persona o un agente humano.",
     "unknown": "No encaja con ninguna de las categorias anteriores.",
@@ -77,6 +88,8 @@ class IntentClassification(BaseModel):
         "farewell",
         "rag_query",
         "scheduling",
+        "financial",
+        "marketing",
         "complaint",
         "human_request",
         "unknown",
