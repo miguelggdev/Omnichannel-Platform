@@ -370,13 +370,27 @@ async def _redactar_payloads_de_webhooks_salientes(
     """Redacta el texto de mensaje dentro de `outgoing_webhook_logs.payload`.
 
     Pendiente anotado en ADR-065: `payload` guarda el evento completo, que en
-    `message.received`/`message.sent` incluye el texto del mensaje — dato
+    `message.received` incluye el texto que escribio el contacto — dato
     personal que el borrado RGPD tiene que alcanzar, igual que ya hace con
     `messages.content` (`CONTENIDO_ANONIMIZADO`). Se sobreescribe solo la clave
     `data.content` con `jsonb_set`, no el payload entero: el resto (evento,
     ids, timestamp) es el rastro de que el envio ocurrio, no un dato personal,
     y algunos eventos (`conversation.resolved`, `appointment.created`) ni
     siquiera tienen `content`.
+
+    Solo `message.received`, nunca `message.sent`: igual que el bloque de
+    mensajes de `gdpr_delete_contact()` mas arriba filtra
+    `Message.direction == "inbound"` y deja intactos los salientes ("lo que
+    respondio la empresa"), esta redaccion tiene que respetar la misma
+    frontera — `message.sent` tambien lleva `data.content` (lo que el bot le
+    escribio al contacto) y `data.contact_id` del mismo contacto, y redactarlo
+    borraria el rastro de lo que la empresa dijo, no un dato del contacto.
+
+    `payload -> 'data' -> 'content' IS NOT NULL` ademas de `? 'content'`: el
+    operador `?` de JSONB solo verifica que la clave exista, no que su valor
+    no sea `null` — un mensaje de solo medios sin caption serializa
+    `data.content` como `null`, y sin este chequeo la redaccion lo
+    sobreescribiria con el aviso de "eliminado" aunque nunca hubo texto.
 
     No pasa por `audit_logs`: `outgoing_webhook_logs` no esta en las tablas que
     audita el trigger de la migracion 006 (es un log de entregas, no una
@@ -395,8 +409,10 @@ async def _redactar_payloads_de_webhooks_salientes(
             UPDATE outgoing_webhook_logs
             SET payload = jsonb_set(payload, '{data,content}', to_jsonb(CAST(:contenido AS text)))
             WHERE client_id = :client_id
+              AND event = 'message.received'
               AND payload -> 'data' ->> 'contact_id' = :contact_id
               AND payload -> 'data' ? 'content'
+              AND payload -> 'data' -> 'content' IS NOT NULL
         """),
         {
             "contenido": CONTENIDO_ANONIMIZADO,
