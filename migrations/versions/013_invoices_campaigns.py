@@ -1,5 +1,11 @@
 """invoices y campaigns — Sprint 12: agentes financiero y de marketing.
 
+Renumerada de 012 a 013 (hallazgo de /code-review sobre el PR #42): esta rama
+partio de `main` antes de que el PR #43 (Sprint 11, Dev B) se mergeara, y las
+dos usaron el numero 012 para migraciones distintas
+(`012_satisfaction_surveys`, ya en `main`). Mismo tipo de choque que la
+renumeracion de Sprint 7/8 documentada en PROGRESS.md.
+
 Dos tablas multi-tenant normales: `client_id` + FORCE RLS, mismo patron que
 004/005/011.
 
@@ -18,8 +24,8 @@ Dos decisiones que se apartan del pseudocodigo del spec:
    identificadores de contacto desde la migracion 008: es el documento fiscal
    de un tercero.
 
-Revision ID: 012_invoices_campaigns
-Revises: 011_outgoing_webhooks
+Revision ID: 013_invoices_campaigns
+Revises: 012_satisfaction_surveys
 Create Date: 2026-09-24
 """
 
@@ -30,8 +36,8 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = "012_invoices_campaigns"
-down_revision: str | None = "011_outgoing_webhooks"
+revision: str = "013_invoices_campaigns"
+down_revision: str | None = "012_satisfaction_surveys"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
