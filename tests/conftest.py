@@ -292,11 +292,25 @@ async def rls_harness(db_engine, tenant_a_id, tenant_b_id) -> dict:
         "tenant_b": tenant_b_id,
     }
 
-    # Cleanup: rollback ambas transacciones
-    await trans_a.rollback()
-    await trans_b.rollback()
-    await session_a.close()
-    await session_b.close()
+    # Cleanup: rollback ambas transacciones.
+    #
+    # Las sesiones se cierran SIEMPRE, pase lo que pase con el rollback. Si un
+    # test deja su transaccion cerrada por su cuenta (p.ej. llamando a
+    # `session.rollback()`), `trans.rollback()` lanza ResourceClosedError; sin
+    # este `finally` la excepcion abortaba el teardown y las dos conexiones se
+    # quedaban "idle in transaction" reteniendo la fila de `clients` que inserta
+    # este fixture. El siguiente test bloqueaba para siempre en su
+    # `INSERT ... ON CONFLICT` sobre esa fila y la suite entera colgaba hasta el
+    # limite de 6 h de GitHub Actions, sin un solo mensaje de error.
+    #
+    # `AsyncSession.close()` deshace cualquier transaccion viva y devuelve la
+    # conexion al pool, asi que el aislamiento entre tests se mantiene igual.
+    try:
+        await trans_a.rollback()
+        await trans_b.rollback()
+    finally:
+        await session_a.close()
+        await session_b.close()
 
 
 # ─── HTTP Client Fixture ────────────────────────────────────────────────────

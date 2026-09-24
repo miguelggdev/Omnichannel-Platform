@@ -822,25 +822,42 @@ class TestRLSAgentesEspecializados:
         assert descifrado == "890903938-8"
 
     async def test_el_total_tiene_que_cuadrar(self, rls_harness: dict) -> None:
-        """`ck_invoices_total`: la base no acepta una factura cuyo total no sume."""
+        """`ck_invoices_total`: la base no acepta una factura cuyo total no sume.
+
+        El INSERT va dentro de un SAVEPOINT (`begin_nested`), no directamente
+        sobre la transaccion de `rls_harness`. La violacion del CHECK aborta la
+        transaccion en curso, y hay que deshacerla para que la sesion vuelva a
+        aceptar SQL; si eso se hace con `session.rollback()` se cierra la
+        transaccion que abrio el fixture, su teardown revienta con
+        ResourceClosedError antes de cerrar las sesiones, y las dos conexiones
+        quedan "idle in transaction" reteniendo la fila de `clients`. El
+        siguiente test se bloquea para siempre en su INSERT ... ON CONFLICT
+        contra esa misma fila: asi es como esta suite colgo 6 h en CI.
+
+        Con el SAVEPOINT solo se deshace el INSERT fallido y la transaccion
+        externa sigue viva y en manos del fixture.
+        """
         sa = rls_harness["session_a"]
 
         with pytest.raises(DBAPIError):
-            await sa.execute(
-                text("""
-                    INSERT INTO invoices (id, client_id, invoice_number, buyer_nit, buyer_name,
-                                          items, subtotal_cents, tax_total_cents, total_cents)
-                    VALUES (:id, :cid, 'FE-000003', pgp_sym_encrypt(:nit, :clave), 'ACME SAS',
-                            '[]'::jsonb, 100000, 19000, 999999)
-                """),
-                {
-                    "id": str(uuid.uuid4()),
-                    "cid": str(rls_harness["tenant_a"]),
-                    "nit": "890903938-8",
-                    "clave": get_settings().ENCRYPTION_KEY,
-                },
-            )
-        await sa.rollback()
+            async with sa.begin_nested():
+                await sa.execute(
+                    text("""
+                        INSERT INTO invoices (id, client_id, invoice_number, buyer_nit, buyer_name,
+                                              items, subtotal_cents, tax_total_cents, total_cents)
+                        VALUES (:id, :cid, 'FE-000003', pgp_sym_encrypt(:nit, :clave), 'ACME SAS',
+                                '[]'::jsonb, 100000, 19000, 999999)
+                    """),
+                    {
+                        "id": str(uuid.uuid4()),
+                        "cid": str(rls_harness["tenant_a"]),
+                        "nit": "890903938-8",
+                        "clave": get_settings().ENCRYPTION_KEY,
+                    },
+                )
+
+        # La transaccion del fixture sigue utilizable: el savepoint absorbio el fallo.
+        assert await sa.scalar(text("SELECT 1")) == 1
 
     async def test_campaigns(self, rls_harness: dict) -> None:
         """campaigns: las campanas de un tenant no son visibles para otro."""

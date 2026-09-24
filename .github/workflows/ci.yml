@@ -26,6 +26,7 @@ jobs:
   lint:
     name: "Lint & Format"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -47,6 +48,7 @@ jobs:
   typecheck:
     name: "Type Check (mypy)"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: lint
     steps:
       - uses: actions/checkout@v4
@@ -68,6 +70,7 @@ jobs:
   test-unit:
     name: "Unit Tests"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: lint
     steps:
       - uses: actions/checkout@v4
@@ -101,6 +104,7 @@ jobs:
   test-integration:
     name: "Integration Tests (RLS + DB)"
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     needs: [typecheck, test-unit]
     services:
       postgres:
@@ -197,6 +201,7 @@ jobs:
   migration-check:
     name: "Alembic Migration Check"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: lint
     services:
       postgres:
@@ -251,6 +256,7 @@ jobs:
   security:
     name: "Security Scan"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: lint
     steps:
       - uses: actions/checkout@v4
@@ -314,6 +320,7 @@ jobs:
   docker-build:
     name: "Docker Build (smoke)"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [test-integration, security, migration-check]
     steps:
       - uses: actions/checkout@v4
@@ -348,6 +355,7 @@ jobs:
   frontend:
     name: "Frontend Checks"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: |
       contains(github.event.pull_request.title, 'frontend') ||
       contains(github.event.pull_request.title, 'sprint-15') ||
@@ -382,6 +390,7 @@ jobs:
   ci-pass:
     name: "CI Pass"
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: always()
     needs: [lint, typecheck, test-unit, test-integration, security, migration-check, docker-build]
     steps:
