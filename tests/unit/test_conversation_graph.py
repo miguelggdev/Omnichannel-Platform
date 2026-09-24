@@ -91,7 +91,8 @@ class TestRouteAfterScheduling:
 
 
 class TestBuildConversationGraph:
-    """El grafo se arma y compila con los 7 nodos (6 de Sprint 6 + scheduling)."""
+    """El grafo se arma y compila con los 9 nodos (6 de Sprint 6, scheduling y los
+    dos agentes especializados del Sprint 12)."""
 
     def test_compila_sin_checkpointer(self) -> None:
         """Compilar sin checkpointer no debe fallar ni abrir ninguna conexion."""

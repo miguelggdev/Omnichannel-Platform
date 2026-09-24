@@ -196,7 +196,7 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
     """Arma el grafo de conversacion, sin compilar.
 
     Returns:
-        `StateGraph` con los 7 nodos (envueltos en `logged_node()`) y el
+        `StateGraph` con los 9 nodos (envueltos en `logged_node()`) y el
         routing condicional del sprint.
     """
     graph = StateGraph(ConversationState)
