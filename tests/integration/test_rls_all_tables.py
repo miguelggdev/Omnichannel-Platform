@@ -23,6 +23,7 @@ import uuid
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from app.core.config import get_settings
 from tests.integration.identifiers import params_identificador
@@ -757,6 +758,105 @@ class TestRLSOutgoingWebhooks:
                 "id": str(uuid.uuid4()),
                 "client_id": cid_a,
                 "webhook_id": webhook_id,
+            },
+        )
+
+
+# ─── Tests por tabla: agentes financiero y de marketing (Sprint 12) ─────────
+
+
+class TestRLSAgentesEspecializados:
+    """Aislamiento RLS de las dos tablas de los agentes especializados."""
+
+    async def test_invoices(self, rls_harness: dict) -> None:
+        """invoices: un tenant no ve las facturas del otro."""
+        await assert_rls_isolation(
+            rls_harness["session_a"],
+            rls_harness["session_b"],
+            table="invoices",
+            # `buyer_nit` es BYTEA cifrado con pgcrypto (migracion 012).
+            insert_sql="""
+                INSERT INTO invoices (id, client_id, invoice_number, buyer_nit, buyer_name,
+                                      items, subtotal_cents, tax_total_cents, total_cents)
+                VALUES (:id, :client_id, 'FE-000001', pgp_sym_encrypt(:nit, :clave), 'ACME SAS',
+                        '[]'::jsonb, 100000, 19000, 119000)
+            """,
+            params={
+                "id": str(uuid.uuid4()),
+                "client_id": str(rls_harness["tenant_a"]),
+                "nit": "890903938-8",
+                "clave": get_settings().ENCRYPTION_KEY,
+            },
+        )
+
+    async def test_el_nit_del_comprador_no_queda_en_claro(self, rls_harness: dict) -> None:
+        """El documento fiscal de un tercero se guarda cifrado, como los identificadores."""
+        sa = rls_harness["session_a"]
+        invoice_id = str(uuid.uuid4())
+        clave = get_settings().ENCRYPTION_KEY
+
+        await sa.execute(
+            text("""
+                INSERT INTO invoices (id, client_id, invoice_number, buyer_nit, buyer_name,
+                                      items, subtotal_cents, tax_total_cents, total_cents)
+                VALUES (:id, :cid, 'FE-000002', pgp_sym_encrypt(:nit, :clave), 'ACME SAS',
+                        '[]'::jsonb, 100000, 19000, 119000)
+            """),
+            {
+                "id": invoice_id,
+                "cid": str(rls_harness["tenant_a"]),
+                "nit": "890903938-8",
+                "clave": clave,
+            },
+        )
+
+        crudo = await sa.scalar(
+            text("SELECT buyer_nit::text FROM invoices WHERE id = :id"), {"id": invoice_id}
+        )
+        descifrado = await sa.scalar(
+            text("SELECT pgp_sym_decrypt(buyer_nit, :clave) FROM invoices WHERE id = :id"),
+            {"id": invoice_id, "clave": clave},
+        )
+
+        assert "890903938" not in (crudo or "")
+        assert descifrado == "890903938-8"
+
+    async def test_el_total_tiene_que_cuadrar(self, rls_harness: dict) -> None:
+        """`ck_invoices_total`: la base no acepta una factura cuyo total no sume."""
+        sa = rls_harness["session_a"]
+
+        with pytest.raises(DBAPIError):
+            await sa.execute(
+                text("""
+                    INSERT INTO invoices (id, client_id, invoice_number, buyer_nit, buyer_name,
+                                          items, subtotal_cents, tax_total_cents, total_cents)
+                    VALUES (:id, :cid, 'FE-000003', pgp_sym_encrypt(:nit, :clave), 'ACME SAS',
+                            '[]'::jsonb, 100000, 19000, 999999)
+                """),
+                {
+                    "id": str(uuid.uuid4()),
+                    "cid": str(rls_harness["tenant_a"]),
+                    "nit": "890903938-8",
+                    "clave": get_settings().ENCRYPTION_KEY,
+                },
+            )
+        await sa.rollback()
+
+    async def test_campaigns(self, rls_harness: dict) -> None:
+        """campaigns: las campanas de un tenant no son visibles para otro."""
+        await assert_rls_isolation(
+            rls_harness["session_a"],
+            rls_harness["session_b"],
+            table="campaigns",
+            insert_sql="""
+                INSERT INTO campaigns (id, client_id, name, channel, segment_criteria,
+                                       message_template)
+                VALUES (:id, :client_id, 'Promo', 'whatsapp', '{"tags": ["vip"]}'::jsonb,
+                        'Hola {{contact_name}}')
+            """,
+            params={
+                "id": str(uuid.uuid4()),
+                "client_id": str(rls_harness["tenant_a"]),
             },
         )
 
