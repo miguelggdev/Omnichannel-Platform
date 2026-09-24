@@ -32,6 +32,10 @@ PUBLIC_PATHS: set[str] = {
     "/api/openapi.json",
     "/api/v1/auth/login",
     "/api/v1/auth/refresh",
+    # Link de un clic en el email de la encuesta CSAT (Sprint 11, Dev B): quien
+    # hace click no tiene JWT. La seguridad la da `survey_id`, no la sesion —
+    # ver el docstring de `app/api/v1/csat.py`.
+    "/api/v1/csat/respond",
 }
 
 # Prefijos de rutas con autenticación propia (firma, no JWT)

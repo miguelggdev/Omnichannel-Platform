@@ -28,6 +28,7 @@ TASK_MODULES = (
     "app.tasks.maintenance",
     "app.tasks.tenant_operations",
     "app.tasks.outgoing_webhooks",
+    "app.tasks.csat_tasks",
 )
 
 celery_app.conf.update(imports=TASK_MODULES)

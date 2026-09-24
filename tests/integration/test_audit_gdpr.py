@@ -13,6 +13,7 @@ sobre `users` — y son los que deciden si esa tabla puede llevar trigger de
 auditoria. Ver `TestLoginBajoRls` y `TestFuncionDeBusqueda`.
 """
 
+import json
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -170,6 +171,9 @@ async def _limpiar(client_id: uuid.UUID) -> None:
             "conversations",
             "contact_identifiers",
             "quick_replies",
+            # `outgoing_webhook_logs` cae por ON DELETE CASCADE al borrar
+            # `tenant_webhooks` (migracion 011); solo hace falta esta.
+            "tenant_webhooks",
             "contacts",
         ):
             await session.execute(
@@ -603,6 +607,165 @@ class TestRgpd:
             )
 
         assert respuesta.status_code == 404
+
+
+# ─── RGPD alcanza los payloads de webhooks salientes (Sprint 11, Dev B) ──────
+
+
+class TestRgpdWebhookLogs:
+    """`_redactar_payloads_de_webhooks_salientes()`: pendiente anotado en ADR-065.
+
+    `outgoing_webhook_logs.payload` guarda el evento completo, que en
+    `message.received`/`message.sent` incluye el texto del mensaje. El borrado
+    RGPD tiene que alcanzarlo igual que ya alcanza `messages.content`.
+    """
+
+    async def _sembrar_log(
+        self,
+        escenario: Escenario,
+        contact_id: uuid.UUID,
+        con_content: bool = True,
+        event: str = "message.received",
+        content: str | None = "mi telefono es 600123123",
+    ) -> uuid.UUID:
+        """Inserta un `tenant_webhooks` y un `outgoing_webhook_logs` para el escenario.
+
+        Args:
+            escenario: Tenant sembrado.
+            contact_id: Contacto que aparece en `payload.data.contact_id`.
+            con_content: Si el payload lleva la clave `data.content` (como
+                `message.received`) o no (como `conversation.resolved`).
+            event: Nombre del evento del payload.
+            content: Valor de `data.content` cuando `con_content=True`. `None`
+                simula un mensaje de solo medios sin caption (la clave existe,
+                el valor es JSON `null`), no lo mismo que `con_content=False`
+                (la clave ni siquiera existe).
+
+        Returns:
+            Id de la fila de `outgoing_webhook_logs` insertada.
+        """
+        log_id = uuid.uuid4()
+        async with tenant_session(escenario.client_id) as session:  # type: ignore[attr-defined]
+            webhook_id = await session.scalar(
+                text(
+                    "INSERT INTO tenant_webhooks (client_id, url, secret, events) "
+                    "VALUES (:cid, 'https://ejemplo.com/hook', "
+                    "pgp_sym_encrypt(:secret, :clave), ARRAY['message.received']) "
+                    "RETURNING id"
+                ),
+                {
+                    "cid": str(escenario.client_id),  # type: ignore[attr-defined]
+                    "secret": "secreto-de-prueba",
+                    "clave": get_settings().ENCRYPTION_KEY,
+                },
+            )
+            data: dict[str, Any] = {"contact_id": str(contact_id)}
+            if con_content:
+                data["content"] = content
+            payload = {"event": event, "data": data}
+            await session.execute(
+                text(
+                    "INSERT INTO outgoing_webhook_logs "
+                    "(id, client_id, webhook_id, event, payload, status) "
+                    "VALUES (:id, :cid, :wid, :event, CAST(:payload AS jsonb), 'success')"
+                ),
+                {
+                    "id": str(log_id),
+                    "cid": str(escenario.client_id),  # type: ignore[attr-defined]
+                    "wid": str(webhook_id),
+                    "event": event,
+                    "payload": json.dumps(payload),
+                },
+            )
+        return log_id
+
+    async def _payload(self, escenario: Escenario, log_id: uuid.UUID) -> dict[str, Any]:
+        async with tenant_session(escenario.client_id) as session:  # type: ignore[attr-defined]
+            return await session.scalar(
+                text("SELECT payload FROM outgoing_webhook_logs WHERE id = :id"),
+                {"id": str(log_id)},
+            )
+
+    async def test_redacta_el_content_del_contacto_borrado(self, escenario: Escenario) -> None:
+        log_id = await self._sembrar_log(escenario, escenario.contact_id)  # type: ignore[attr-defined]
+
+        async with _cliente(escenario) as client:
+            respuesta = await client.delete(
+                f"{ADMIN}/{escenario.contact_id}/gdpr-delete"  # type: ignore[attr-defined]
+            )
+        assert respuesta.status_code == 200
+
+        payload = await self._payload(escenario, log_id)
+        assert payload["data"]["content"] == "[CONTENIDO ELIMINADO POR SOLICITUD RGPD]"
+        # El resto del payload (evento, contact_id) es el rastro de que el
+        # envio ocurrio, no un dato personal: se conserva.
+        assert payload["event"] == "message.received"
+        assert payload["data"]["contact_id"] == str(escenario.contact_id)  # type: ignore[attr-defined]
+
+    async def test_no_toca_logs_de_otro_contacto(self, escenario: Escenario) -> None:
+        otro_contacto = uuid.uuid4()
+        log_id = await self._sembrar_log(escenario, otro_contacto)
+
+        async with _cliente(escenario) as client:
+            await client.delete(f"{ADMIN}/{escenario.contact_id}/gdpr-delete")  # type: ignore[attr-defined]
+
+        payload = await self._payload(escenario, log_id)
+        assert payload["data"]["content"] == "mi telefono es 600123123"
+
+    async def test_no_falla_si_el_evento_no_tiene_content(self, escenario: Escenario) -> None:
+        """`conversation.resolved`/`appointment.created` no llevan `data.content`."""
+        log_id = await self._sembrar_log(
+            escenario,
+            escenario.contact_id,
+            con_content=False,  # type: ignore[attr-defined]
+        )
+
+        async with _cliente(escenario) as client:
+            respuesta = await client.delete(
+                f"{ADMIN}/{escenario.contact_id}/gdpr-delete"  # type: ignore[attr-defined]
+            )
+
+        assert respuesta.status_code == 200
+        payload = await self._payload(escenario, log_id)
+        assert "content" not in payload["data"]
+
+    async def test_no_redacta_mensajes_salientes(self, escenario: Escenario) -> None:
+        """`message.sent` es lo que la empresa le dijo al contacto, no al reves.
+
+        `gdpr_delete_contact()` preserva a proposito `messages.content` de los
+        mensajes salientes (`test_conserva_el_mensaje_saliente_y_borra_el_entrante`
+        mas arriba); la redaccion de `outgoing_webhook_logs.payload` tiene que
+        respetar la misma frontera.
+        """
+        log_id = await self._sembrar_log(
+            escenario,
+            escenario.contact_id,  # type: ignore[attr-defined]
+            event="message.sent",
+            content="Gracias, lo anotamos.",
+        )
+
+        async with _cliente(escenario) as client:
+            await client.delete(f"{ADMIN}/{escenario.contact_id}/gdpr-delete")  # type: ignore[attr-defined]
+
+        payload = await self._payload(escenario, log_id)
+        assert payload["data"]["content"] == "Gracias, lo anotamos."
+
+    async def test_content_null_no_se_sobreescribe(self, escenario: Escenario) -> None:
+        """Un mensaje de solo medios sin caption no debe aparentar texto redactado."""
+        log_id = await self._sembrar_log(
+            escenario,
+            escenario.contact_id,  # type: ignore[attr-defined]
+            content=None,
+        )
+
+        async with _cliente(escenario) as client:
+            respuesta = await client.delete(
+                f"{ADMIN}/{escenario.contact_id}/gdpr-delete"  # type: ignore[attr-defined]
+            )
+
+        assert respuesta.status_code == 200
+        payload = await self._payload(escenario, log_id)
+        assert payload["data"]["content"] is None
 
 
 # ─── Quick replies contra la base real ───────────────────────────────────────

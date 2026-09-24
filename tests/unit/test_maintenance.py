@@ -7,6 +7,8 @@ colgado para siempre.
 """
 
 import subprocess
+import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -191,3 +193,94 @@ class TestEjecucion:
         assert resultado["script"] == "backup.sh"
         assert resultado["returncode"] == 0
         assert "Backup completado" in resultado["output"]
+
+
+# ─── Purga de outgoing_webhook_logs (Sprint 11, Dev B) ───────────────────────
+
+
+class TestRegistroDePurga:
+    """Nombre, cola y entrada de Beat de la purga de logs de webhooks salientes."""
+
+    def test_esta_registrada(self) -> None:
+        assert "app.tasks.bulk_purge_outgoing_webhook_logs" in celery_app.tasks
+
+    def test_va_a_la_cola_bulk(self) -> None:
+        assert celery_app.tasks["app.tasks.bulk_purge_outgoing_webhook_logs"].queue == "bulk"
+
+    def test_beat_la_programa_fuera_de_la_ventana_del_backup(self) -> None:
+        purga = celery_app.conf.beat_schedule["purge-outgoing-webhook-logs"]
+        backup = celery_app.conf.beat_schedule["daily-backup"]["schedule"]
+        assert purga["task"] == "app.tasks.bulk_purge_outgoing_webhook_logs"
+        assert purga["options"]["queue"] == "bulk"
+        assert min(purga["schedule"].hour) != min(backup.hour)
+
+
+class _ResultadoRowcount:
+    def __init__(self, rowcount: int) -> None:
+        self.rowcount = rowcount
+
+
+class _SesionDePurga:
+    def __init__(self, filas: int) -> None:
+        self._filas = filas
+
+    async def execute(self, *_a: object, **_k: object) -> _ResultadoRowcount:
+        return _ResultadoRowcount(self._filas)
+
+
+def _tenant_session_por_tenant(por_tenant: dict[object, int]):
+    @asynccontextmanager
+    async def _cm(client_id: object, user_id: object = None):
+        yield _SesionDePurga(por_tenant[client_id])
+
+    return _cm
+
+
+def _fake_load(client_ids: list) -> Any:
+    async def _load() -> list:
+        return client_ids
+
+    return _load
+
+
+class TestPurgarLogs:
+    """Orquestacion de `_purgar_outgoing_webhook_logs`: recorrido por tenant."""
+
+    @pytest.mark.asyncio
+    async def test_suma_las_filas_borradas_de_cada_tenant(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
+        monkeypatch.setattr(
+            maintenance_module, "_load_active_client_ids", _fake_load([tenant_a, tenant_b])
+        )
+        monkeypatch.setattr(
+            maintenance_module,
+            "tenant_session",
+            _tenant_session_por_tenant({tenant_a: 5, tenant_b: 2}),
+        )
+
+        resultado = await maintenance_module._purgar_outgoing_webhook_logs()
+
+        assert resultado == {"deleted": 7, "tenants": 2, "tenants_failed": 0}
+
+    @pytest.mark.asyncio
+    async def test_un_tenant_con_error_no_corta_el_recorrido(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        tenant_a, tenant_b = uuid.uuid4(), uuid.uuid4()
+        monkeypatch.setattr(
+            maintenance_module, "_load_active_client_ids", _fake_load([tenant_a, tenant_b])
+        )
+
+        @asynccontextmanager
+        async def _falla_en_a(client_id: object, user_id: object = None):
+            if client_id == tenant_a:
+                raise RuntimeError("conexion perdida")
+            yield _SesionDePurga(3)
+
+        monkeypatch.setattr(maintenance_module, "tenant_session", _falla_en_a)
+
+        resultado = await maintenance_module._purgar_outgoing_webhook_logs()
+
+        assert resultado == {"deleted": 3, "tenants": 2, "tenants_failed": 1}

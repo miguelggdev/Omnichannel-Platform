@@ -19,9 +19,16 @@ recepcion de mensajes durante esa hora.
 
 import logging
 import subprocess  # nosec B404 — se invoca con lista fija, sin shell
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import delete
+
+from app.core.config import get_settings
+from app.core.database import run_isolated, tenant_session
+from app.models.outgoing_webhook_log import OutgoingWebhookLog
+from app.tasks.auto_close import _load_active_client_ids
 from app.tasks.celery_config import celery_app
 
 logger = logging.getLogger(__name__)
@@ -131,3 +138,60 @@ def run_restore_test() -> dict[str, Any]:
         RuntimeError: Si la restauracion o alguna comprobacion falla.
     """
     return _ejecutar(RESTORE_TEST_SCRIPT, RESTORE_TEST_TIMEOUT)
+
+
+async def _purgar_outgoing_webhook_logs() -> dict[str, int]:
+    """Borra las filas de `outgoing_webhook_logs` mas viejas que el plazo de retencion.
+
+    Pendiente anotado en ADR-065 (Sprint 11): el payload guarda el evento
+    completo (a veces con el texto de un mensaje, ya redactado por RGPD si el
+    contacto lo pidio — ver `_redactar_payloads_de_webhooks_salientes()` en
+    `app/api/v1/admin.py`) y la tabla no tenia ninguna politica de retencion.
+    Mismo patron por tenant que `auto_close`/`expire_old_surveys`: el rol de la
+    aplicacion esta sujeto a RLS, asi que se recorre `_load_active_client_ids()`
+    en vez de un DELETE cross-tenant.
+
+    Returns:
+        Cuantas filas se borraron y cuantos tenants se recorrieron.
+    """
+    corte = datetime.now(timezone.utc) - timedelta(
+        days=get_settings().OUTGOING_WEBHOOK_LOG_RETENTION_DAYS
+    )
+    client_ids = await _load_active_client_ids()
+    borradas = 0
+    tenants_con_error = 0
+
+    for client_id in client_ids:
+        try:
+            async with tenant_session(client_id) as session:
+                resultado: Any = await session.execute(
+                    delete(OutgoingWebhookLog).where(
+                        OutgoingWebhookLog.client_id == client_id,
+                        OutgoingWebhookLog.created_at < corte,
+                    )
+                )
+                borradas += int(resultado.rowcount or 0)
+        except Exception:
+            tenants_con_error += 1
+            logger.exception("Purga de outgoing_webhook_logs fallida para el tenant %s", client_id)
+
+    return {"deleted": borradas, "tenants": len(client_ids), "tenants_failed": tenants_con_error}
+
+
+@celery_app.task(
+    name="app.tasks.bulk_purge_outgoing_webhook_logs",
+    queue="bulk",
+    acks_late=True,
+    time_limit=300,
+    soft_time_limit=270,
+)
+def purge_outgoing_webhook_logs() -> dict[str, int]:
+    """Borra los logs de webhooks salientes mas viejos que el plazo de retencion.
+
+    Corre por Celery Beat. No reintenta: la siguiente pasada vuelve a encontrar
+    las mismas filas (la condicion es por antiguedad).
+
+    Returns:
+        Conteo de filas borradas y tenants recorridos.
+    """
+    return run_isolated(_purgar_outgoing_webhook_logs())
