@@ -20,6 +20,7 @@ from app.api.v1.agent_logs import router as agent_logs_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.contacts import router as contacts_router
 from app.api.v1.conversations import router as conversations_router
+from app.api.v1.csat import router as csat_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.notes import router as notes_router
 from app.api.v1.quick_replies import router as quick_replies_router
@@ -27,6 +28,7 @@ from app.api.v1.tags import contact_tags_router
 from app.api.v1.tags import router as tags_router
 from app.api.v1.webchat import router as webchat_router
 from app.api.v1.webhooks import router as webhooks_router
+from app.api.v1.webhooks_config import router as webhooks_config_router
 from app.core.config import get_settings
 from app.core.database import dispose_db, engine, init_db
 from app.core.exceptions import (
@@ -39,6 +41,13 @@ from app.core.telemetry import setup_telemetry, shutdown_telemetry
 from app.middleware.audit import AuditContextMiddleware
 from app.middleware.observability import ObservabilityMiddleware
 from app.middleware.tenant_context import TenantContextMiddleware
+
+# Se importa por su efecto: registra `_on_conversation_resolved` como handler
+# de `EventEmitter.on(EVENT_CONVERSATION_RESOLVED, ...)` (Sprint 11, Dev B).
+# `conversation.resolved` lo emite este proceso (la API, en
+# `PUT /conversations/{id}/status`), no el worker de Celery — sin este import
+# el CSAT nunca se programa, aunque el modulo si este en `TASK_MODULES`.
+from app.tasks import csat_tasks  # noqa: F401
 
 # Loguru sustituye a `logging.basicConfig()` (Sprint 8): `setup_logging()` deja
 # un InterceptHandler en la raiz de `logging`, asi que los ~40 modulos que usan
@@ -156,9 +165,17 @@ def create_app() -> FastAPI:
     app.include_router(contact_tags_router, prefix="/api/v1/contacts", tags=["tags"])
     app.include_router(tags_router, prefix="/api/v1/tags", tags=["tags"])
     app.include_router(conversations_router, prefix="/api/v1/conversations", tags=["conversations"])
+    app.include_router(csat_router, prefix="/api/v1/csat", tags=["csat"])
     app.include_router(agent_logs_router, prefix="/api/v1/agent-logs", tags=["agent-logs"])
     app.include_router(quick_replies_router, prefix="/api/v1/quick-replies", tags=["quick-replies"])
     app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
+    # NO "/api/v1/webhooks/outgoing" (el path del spec): TenantContextMiddleware
+    # trata cualquier ruta bajo "/api/v1/webhooks/" como webhook entrante (firma
+    # HMAC, no JWT) y la salta por completo — un CRUD ahi quedaria sin
+    # autenticacion. "outgoing-webhooks" evita la colision (ver ADR-065).
+    app.include_router(
+        webhooks_config_router, prefix="/api/v1/outgoing-webhooks", tags=["outgoing-webhooks"]
+    )
 
     return app
 
