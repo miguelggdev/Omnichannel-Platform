@@ -47,6 +47,11 @@ from app.services.segmentation import CriterioInvalidoError, contar_segmento, re
 
 logger = logging.getLogger(__name__)
 
+# `CANALES_VALIDOS` se reexporta (app/agents/nodes/marketing.py lo importa de
+# aca): mypy con `implicit_reexport = False` exige `__all__` para cualquier
+# nombre que un modulo importa y no define el mismo.
+__all__ = ["CANALES_VALIDOS", "MARKETING_TOOLS"]
+
 # Ventana en la que no se repite una campana al mismo segmento.
 
 # Cuantos contactos de ejemplo se muestran al segmentar.
