@@ -97,6 +97,15 @@ ignore_missing_imports = true
 module = "kombu.*"
 ignore_missing_imports = true
 
+# Re-ranking del RAG (Sprint 12): ninguno de los dos publica py.typed.
+[[tool.mypy.overrides]]
+module = "onnxruntime.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tokenizers.*"
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = "langchain.*"
 ignore_missing_imports = true

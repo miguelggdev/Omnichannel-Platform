@@ -36,6 +36,8 @@ from sqlalchemy import text as sql_text
 from app.core.database import tenant_session
 from app.core.metrics import Cronometro, record_rag_retrieval
 from app.services.embedding import EmbeddingService
+from app.services.reranker import DEFAULT_INITIAL_TOP_K
+from app.services.reranker import rerank as rerank_resultados
 
 # Defaults documentados en la spec: RAG general es mas permisivo (0.75) que los
 # few-shot examples (0.80), que deben ser casi identicos a la pregunta para
@@ -87,6 +89,8 @@ class RAGService:
         top_k: int = DEFAULT_TOP_K,
         threshold: float = DEFAULT_THRESHOLD,
         document_ids: list[UUID] | None = None,
+        rerank: bool = False,
+        initial_top_k: int | None = None,
     ) -> list[RetrievalResult]:
         """Recupera los chunks mas relevantes para una query.
 
@@ -97,6 +101,11 @@ class RAGService:
             top_k: Maximo de resultados a devolver.
             threshold: Similaridad minima (0.0 - 1.0) para considerar un chunk.
             document_ids: Si se da, acota la busqueda a esos documentos.
+            rerank: Si se reordenan los candidatos con el cross-encoder antes
+                de recortar a `top_k`. Con el modelo no disponible, el orden
+                queda como lo dejaron los embeddings (ver `services/reranker.py`).
+            initial_top_k: Cuantos candidatos traer de la base cuando hay
+                reranking; por defecto, el del reranker.
 
         Returns:
             Chunks ordenados por similaridad descendente, con su citacion. Lista
@@ -117,10 +126,15 @@ class RAGService:
               AND d.status = 'completed'
               AND 1 - (dc.embedding <=> (:query_embedding)::vector) > :threshold
         """
+        # Con reranking se traen mas candidatos de los que se van a devolver: el
+        # cross-encoder necesita material para reordenar. Sin reranking, el
+        # LIMIT es directamente el `top_k` pedido.
+        candidatos = max(top_k, initial_top_k or DEFAULT_INITIAL_TOP_K) if rerank else top_k
+
         params: dict[str, Any] = {
             "query_embedding": str(query_embedding),
             "threshold": threshold,
-            "top_k": top_k,
+            "top_k": candidatos,
         }
 
         if document_ids:
@@ -150,6 +164,9 @@ class RAGService:
                     citation=f"[Fuente: {row.document_title}, pag. {page_number}]",
                 )
             )
+
+        if rerank:
+            return await rerank_resultados(query, results, top_k)
         return results
 
     async def retrieve_few_shot_examples(

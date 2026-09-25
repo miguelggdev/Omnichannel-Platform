@@ -54,6 +54,22 @@ logger = logging.getLogger(__name__)
 # Tasas de IVA que reconoce la DIAN, en porcentaje.
 TASAS_IVA_VALIDAS: tuple[float, ...] = (0.0, 5.0, 19.0)
 
+#: Respuesta cuando la conversacion no tiene contacto identificado.
+#:
+#: `get_invoice_status()`/`list_invoices()` filtraban por contacto solo si
+#: `contact_id` venia en el config (`if contact_id is not None`), asi que una
+#: conversacion sin contacto — un canal anonimo, un webchat antes de
+#: identificarse — dejaba las dos tools con alcance de TENANT: el agente
+#: listaba razon social, NIT y totales de los clientes de la empresa a quien
+#: estuviera del otro lado. El modulo dice seguir "el mismo contrato de
+#: seguridad que calendar_tools.py", pero alli `_contact_id()` es obligatorio
+#: y falla si no esta. Ahora el filtro es incondicional y sin contacto no se
+#: consulta nada. Hallazgo de /code-review sobre el PR #42.
+SIN_CONTACTO = (
+    "No puedo consultar facturas en esta conversacion porque todavia no se "
+    "identifico al contacto. Pidele sus datos para poder ubicarlas."
+)
+
 PREFIJO_CONSECUTIVO = "FE-"
 DIGITOS_CONSECUTIVO = 6
 
@@ -389,14 +405,17 @@ async def get_invoice_status(invoice_number: str, config: RunnableConfig) -> str
     contact_id = _contact_id(config)
     numero = invoice_number.strip().upper()
 
+    if contact_id is None:
+        return SIN_CONTACTO
+
     async with tenant_session(client_id) as session:
-        stmt = select(Invoice).where(
-            Invoice.client_id == client_id, Invoice.invoice_number == numero
-        )
         # Un contacto solo puede consultar sus propias facturas, igual que en
-        # las tools de agendamiento.
-        if contact_id is not None:
-            stmt = stmt.where(Invoice.contact_id == contact_id)
+        # las tools de agendamiento. El filtro es incondicional: ver SIN_CONTACTO.
+        stmt = select(Invoice).where(
+            Invoice.client_id == client_id,
+            Invoice.invoice_number == numero,
+            Invoice.contact_id == contact_id,
+        )
         factura = (await session.execute(stmt)).scalar_one_or_none()
 
         if factura is None:
@@ -431,9 +450,10 @@ async def list_invoices(
     client_id = _client_id(config)
     contact_id = _contact_id(config)
 
-    stmt = select(Invoice).where(Invoice.client_id == client_id)
-    if contact_id is not None:
-        stmt = stmt.where(Invoice.contact_id == contact_id)
+    if contact_id is None:
+        return SIN_CONTACTO
+
+    stmt = select(Invoice).where(Invoice.client_id == client_id, Invoice.contact_id == contact_id)
 
     if status:
         if status not in INVOICE_STATUSES:

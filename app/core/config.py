@@ -192,6 +192,12 @@ class Settings(BaseSettings):
     # Campanas masivas — Sprint 12
     CAMPAIGN_MAX_MESSAGES_PER_SECOND: int = 100
 
+    # Re-ranking del RAG con cross-encoder — Sprint 12
+    # Directorio con `model.onnx` y `tokenizer.json` del cross-encoder, que el
+    # Dockerfile descarga en tiempo de build. Vacia = sin re-ranking: el RAG
+    # devuelve el orden de los embeddings, como antes del Sprint 12.
+    RERANKER_MODEL_PATH: str = "/app/models/reranker"
+
     # Webhooks salientes — Sprint 11
     OUTGOING_WEBHOOK_TIMEOUT_SECONDS: float = 10.0
     # Permitir URLs que resuelven a direcciones privadas/loopback. Solo para

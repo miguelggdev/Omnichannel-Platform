@@ -96,6 +96,8 @@ async def rag_query_node(state: ConversationState) -> dict[str, Any]:
         client_id=tenant_id,
         top_k=settings.rag_top_k,
         threshold=settings.rag_threshold,
+        rerank=settings.rag_rerank,
+        initial_top_k=settings.rag_initial_top_k,
     )
     if not chunks:
         logger.info(
