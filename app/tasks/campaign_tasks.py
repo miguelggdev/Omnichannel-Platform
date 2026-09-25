@@ -32,7 +32,7 @@ contadores y `error_log`.
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -50,7 +50,6 @@ from app.core.config import get_settings
 from app.core.database import run_isolated, tenant_session
 from app.core.events import EVENT_MESSAGE_SENT, EventEmitter
 from app.core.metrics import record_message
-from app.models.agent_config import AgentConfig
 from app.models.campaign import (
     CAMPAIGN_COMPLETED,
     CAMPAIGN_FAILED,
@@ -61,15 +60,19 @@ from app.models.campaign import (
 )
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
+from app.services.campaigns import (
+    VENTANA_ANTIDUPLICADOS_HORAS,
+    campana_duplicada,
+    plantilla_aprobada,
+)
 from app.services.messaging.base import MessageContent
 from app.services.messaging.factory import get_messaging_provider
 from app.services.segmentation import CriterioInvalidoError, resolver_segmento
 
-# Ventana en la que no se repite una campana al mismo segmento y canal — mismo
-# valor que `marketing_tools.VENTANA_ANTIDUPLICADOS_HORAS`, repetido aca a
-# proposito (ver `CampanaNoEnviableError` mas abajo) en vez de importado, para no
-# encadenar un modulo de tasks a uno de tools LangChain.
-VENTANA_ANTIDUPLICADOS_HORAS = 24
+# Las dos reglas (plantilla aprobada, anti-duplicado) se siguen evaluando aca,
+# en el chokepoint por el que pasa cualquier envio; lo que ya no se repite es la
+# consulta. Vive en `services/campaigns.py`, la capa de la que dependen tanto
+# este modulo como las tools, asi que sigue sin encadenar tasks con LangChain.
 
 
 class CampanaNoEnviableError(RuntimeError):
@@ -107,67 +110,6 @@ def resolver_plantilla(plantilla: str, contacto: Contact) -> str:
     for clave, valor in valores.items():
         resuelta = resuelta.replace(f"{{{{{clave}}}}}", valor)
     return resuelta
-
-
-async def _plantilla_aprobada(session: AsyncSession, client_id: UUID, template: str) -> bool:
-    """Si `template` esta en la lista de plantillas de WhatsApp del tenant.
-
-    Misma lectura que `marketing_tools._plantillas_aprobadas()`, repetida aca
-    a proposito: es el chequeo que de verdad protege, porque corre en el
-    chokepoint por el que pasa cualquier envio, no solo el que dispara la
-    tool de LangChain.
-
-    Args:
-        session: Sesion con contexto de tenant ya aplicado.
-        client_id: Tenant dueno de la configuracion.
-        template: Texto de la plantilla de la campana.
-
-    Returns:
-        `True` si la plantilla sigue aprobada.
-    """
-    config = (
-        await session.execute(
-            select(AgentConfig)
-            .where(AgentConfig.client_id == client_id, AgentConfig.is_active.is_(True))
-            .order_by(AgentConfig.created_at.asc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    marketing = ((config.config or {}) if config else {}).get("marketing", {})
-    aprobadas = marketing.get("approved_templates", [])
-    return template in aprobadas if isinstance(aprobadas, list) else False
-
-
-async def _campana_duplicada(
-    session: AsyncSession, client_id: UUID, campana: Campaign
-) -> Campaign | None:
-    """Si el mismo segmento y canal ya recibio una campana en las ultimas 24h.
-
-    Misma consulta que `marketing_tools.send_campaign()`, repetida aca por el
-    mismo motivo que `_plantilla_aprobada()`: el chequeo de la tool es una
-    UX barata, este es el que de verdad protege de saturar al mismo segmento.
-
-    Args:
-        session: Sesion con contexto de tenant ya aplicado.
-        client_id: Tenant dueno de las campanas.
-        campana: Campana que se quiere lanzar.
-
-    Returns:
-        La campana duplicada, o `None` si no hay ninguna en la ventana.
-    """
-    desde = datetime.now(timezone.utc) - timedelta(hours=VENTANA_ANTIDUPLICADOS_HORAS)
-    return (
-        await session.execute(
-            select(Campaign).where(
-                Campaign.client_id == client_id,
-                Campaign.id != campana.id,
-                Campaign.channel == campana.channel,
-                Campaign.segment_criteria == campana.segment_criteria,
-                Campaign.status.in_((CAMPAIGN_SENDING, CAMPAIGN_COMPLETED)),
-                Campaign.started_at >= desde,
-            )
-        )
-    ).scalar_one_or_none()
 
 
 async def _marcar_en_envio(client_id: UUID, campaign_id: UUID) -> Campaign | None:
@@ -212,14 +154,14 @@ async def _marcar_en_envio(client_id: UUID, campaign_id: UUID) -> Campaign | Non
             )
             return None
 
-        if campana.channel == "whatsapp" and not await _plantilla_aprobada(
+        if campana.channel == "whatsapp" and not await plantilla_aprobada(
             session, client_id, campana.message_template
         ):
             raise CampanaNoEnviableError(
                 "La plantilla de WhatsApp ya no esta aprobada para este tenant."
             )
 
-        duplicada = await _campana_duplicada(session, client_id, campana)
+        duplicada = await campana_duplicada(session, client_id, campana)
         if duplicada is not None:
             raise CampanaNoEnviableError(
                 f"El mismo segmento y canal ya recibio la campana '{duplicada.name}' "

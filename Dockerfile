@@ -12,11 +12,27 @@ WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Instalar dependencias Python en prefijo separado
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# Cross-encoder de re-ranking del RAG (Sprint 12), en la etapa de build: un
+# contenedor de produccion no sale a internet a buscar pesos la primera vez que
+# alguien pregunta algo. Si la descarga falla, la imagen se construye igual y el
+# re-ranking queda desactivado — `services/reranker.py` degrada al orden de los
+# embeddings en vez de tumbar el RAG.
+ARG RERANKER_REPO=cross-encoder/ms-marco-MiniLM-L-6-v2
+ARG RERANKER_BASE=https://huggingface.co/${RERANKER_REPO}/resolve/main
+RUN mkdir -p /install/models/reranker \
+    && { curl -fsSL -o /install/models/reranker/model.onnx \
+            "${RERANKER_BASE}/onnx/model.onnx" \
+         && curl -fsSL -o /install/models/reranker/tokenizer.json \
+            "${RERANKER_BASE}/tokenizer.json"; } \
+    || { echo "AVISO: sin cross-encoder; el re-ranking quedara desactivado" \
+         && rm -f /install/models/reranker/*; }
 
 # ============ RUNNER ============
 FROM python:3.12-slim AS runner
@@ -36,6 +52,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copiar dependencias Python compiladas desde builder
 COPY --from=builder /install /usr/local
+
+# El cross-encoder viaja dentro de /install; queda en la ruta que espera
+# RERANKER_MODEL_PATH.
+RUN mkdir -p /app/models/reranker \
+    && cp -r /usr/local/models/reranker/. /app/models/reranker/ \
+    || echo "AVISO: imagen sin cross-encoder; el re-ranking quedara desactivado"
 
 # Crear usuario no-root para seguridad
 RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser

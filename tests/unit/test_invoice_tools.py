@@ -4,7 +4,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import ClassVar
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -382,3 +382,49 @@ class TestConsultas:
         respuesta = await it.list_invoices.ainvoke({"date_from": "24/09/2026"}, config=CONFIG)
 
         assert "invalida" in respuesta
+
+
+class TestSinContactoIdentificado:
+    """Sin contacto en la conversacion no se consultan facturas de nadie.
+
+    El filtro por contacto era condicional (`if contact_id is not None`), asi
+    que una conversacion anonima dejaba las dos tools con alcance de tenant y
+    el agente podia recitar las facturas de los demas clientes de la empresa.
+    """
+
+    CONFIG_ANONIMO: ClassVar[dict[str, Any]] = {"configurable": {"client_id": CLIENT_ID}}
+
+    @pytest.mark.asyncio
+    async def test_get_invoice_status_no_consulta_la_base(self, monkeypatch) -> None:
+        sesion = _SesionFalsa([_Resultado([_factura()])])
+        monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
+
+        respuesta = await it.get_invoice_status.ainvoke(
+            {"invoice_number": "FE-000007"}, config=self.CONFIG_ANONIMO
+        )
+
+        assert "no se identifico al contacto" in respuesta
+        assert "FE-000007" not in respuesta
+        assert sesion.ejecutadas == [], "no debe tocar la base sin contacto"
+
+    @pytest.mark.asyncio
+    async def test_list_invoices_no_consulta_la_base(self, monkeypatch) -> None:
+        sesion = _SesionFalsa([_Resultado([_factura(), _factura(invoice_number="FE-000008")])])
+        monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
+
+        respuesta = await it.list_invoices.ainvoke({}, config=self.CONFIG_ANONIMO)
+
+        assert "no se identifico al contacto" in respuesta
+        assert "FE-000007" not in respuesta
+        assert sesion.ejecutadas == [], "no debe tocar la base sin contacto"
+
+    @pytest.mark.asyncio
+    async def test_con_contacto_sigue_funcionando(self, monkeypatch) -> None:
+        sesion = _SesionFalsa([_Resultado([_factura()])])
+        monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
+
+        respuesta = await it.get_invoice_status.ainvoke(
+            {"invoice_number": "FE-000007"}, config=CONFIG
+        )
+
+        assert "FE-000007" in respuesta
