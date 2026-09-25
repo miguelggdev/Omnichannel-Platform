@@ -99,6 +99,30 @@ def _contact_id(config: RunnableConfig) -> UUID | None:
     return UUID(valor) if valor else None
 
 
+def _contact_id_o_mensaje(config: RunnableConfig) -> UUID | str:
+    """Como `_contact_id()`, pero exige que haya contacto o corta con `SIN_CONTACTO`.
+
+    Punto unico del guard "sin contacto identificado, no se consulta nada"
+    para las tools que solo pueden operar sobre un contacto conocido
+    (`get_invoice_status()`, `list_invoices()`) — a diferencia de
+    `create_invoice()`, donde el contacto es opcional (una factura puede
+    emitirse sin contacto vinculado en el CRM), asi que `_contact_id()` no
+    puede exigirlo incondicionalmente como en `calendar_tools.py`. Antes el
+    `if contact_id is None: return SIN_CONTACTO` vivia duplicado en cada tool;
+    una tool nueva que reusara `_contact_id()` sin copiar ese guard
+    reintroduciria el mismo alcance-de-tenant que este modulo cerro. Hallazgo
+    de /code-review sobre el PR #46.
+
+    Args:
+        config: Config que inyecta LangChain.
+
+    Returns:
+        El UUID del contacto, o el string `SIN_CONTACTO` si no hay ninguno.
+    """
+    contact_id = _contact_id(config)
+    return contact_id if contact_id is not None else SIN_CONTACTO
+
+
 def _conversation_id(config: RunnableConfig) -> UUID | None:
     """Extrae el `conversation_id` de la conversacion en curso.
 
@@ -402,11 +426,11 @@ async def get_invoice_status(invoice_number: str, config: RunnableConfig) -> str
         invoice_number: Numero de la factura, por ejemplo FE-000012.
     """
     client_id = _client_id(config)
-    contact_id = _contact_id(config)
+    contact_id = _contact_id_o_mensaje(config)
     numero = invoice_number.strip().upper()
 
-    if contact_id is None:
-        return SIN_CONTACTO
+    if isinstance(contact_id, str):
+        return contact_id
 
     async with tenant_session(client_id) as session:
         # Un contacto solo puede consultar sus propias facturas, igual que en
@@ -448,10 +472,10 @@ async def list_invoices(
         status: Estado a filtrar: draft, pending_dian, approved o rejected.
     """
     client_id = _client_id(config)
-    contact_id = _contact_id(config)
+    contact_id = _contact_id_o_mensaje(config)
 
-    if contact_id is None:
-        return SIN_CONTACTO
+    if isinstance(contact_id, str):
+        return contact_id
 
     stmt = select(Invoice).where(Invoice.client_id == client_id, Invoice.contact_id == contact_id)
 

@@ -333,14 +333,13 @@ async def recalcular_score(
         update(Contact)
         .where(Contact.id == contact_id, Contact.client_id == client_id)
         .values(
-            metadata_=func.jsonb_set(
-                func.jsonb_set(
-                    func.coalesce(Contact.metadata_, vacio),
-                    text("'{score}'"),
-                    func.to_jsonb(score),
-                ),
-                text("'{score_updated_at}'"),
-                func.to_jsonb(momento.isoformat()),
+            # `||` en vez de `jsonb_set` anidado por clave: para claves de
+            # primer nivel el resultado es el mismo (crea o reemplaza sin
+            # tocar el resto), pero agregar una tercera clave el dia de manana
+            # no exige otro nivel de anidamiento. Hallazgo de /code-review
+            # sobre el PR #46.
+            metadata_=func.coalesce(Contact.metadata_, vacio).op("||")(
+                func.jsonb_build_object("score", score, "score_updated_at", momento.isoformat())
             )
         )
         .execution_options(synchronize_session=False)

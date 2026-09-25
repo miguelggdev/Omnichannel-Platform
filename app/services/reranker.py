@@ -80,7 +80,11 @@ class _Motor:
     tokenizer: Any
 
 
-_candado = threading.Lock()
+#: Protege solo la carga perezosa del motor (una vez por proceso), no la
+#: inferencia: `InferenceSession.run()` es seguro entre hilos sobre una
+#: sesion compartida (documentado por ONNX Runtime), asi que serializarlo
+#: tambien anularia el paralelismo que da el executor.
+_candado_carga = threading.Lock()
 
 
 @lru_cache(maxsize=1)
@@ -165,6 +169,30 @@ def disponible() -> bool:
     return _cargar_motor() is not None
 
 
+async def _obtener_motor() -> _Motor | None:
+    """Resuelve el motor sin bloquear el event loop.
+
+    `_cargar_motor()` esta cacheado con `lru_cache`, pero el primer llamado
+    tras un arranque de worker (deploy, autoscale, restart) hace I/O de disco
+    y construye la `InferenceSession` — cerca de un segundo, segun el
+    docstring del modulo. Llamarlo directo desde una corrutina para el event
+    loop del worker entero durante ese segundo (regla 4 de CLAUDE.md, mismo
+    hallazgo que el `socket.getaddrinfo()` del PR #40); por eso va en un
+    executor igual que la inferencia. `_candado_carga` evita que dos consultas
+    concurrentes en cache-miss carguen el modelo (y su InferenceSession) dos
+    veces a la vez.
+
+    Returns:
+        El motor listo, o `None` si el reranking esta degradado.
+    """
+
+    def _cargar() -> _Motor | None:
+        with _candado_carga:
+            return _cargar_motor()
+
+    return await asyncio.get_running_loop().run_in_executor(None, _cargar)
+
+
 async def rerank(query: str, candidatos: list[Any], top_k: int = DEFAULT_FINAL_TOP_K) -> list[Any]:
     """Reordena los candidatos por relevancia real y devuelve los mejores.
 
@@ -183,26 +211,32 @@ async def rerank(query: str, candidatos: list[Any], top_k: int = DEFAULT_FINAL_T
     if not candidatos or len(candidatos) <= 1:
         return candidatos[:top_k]
 
-    motor = _cargar_motor()
+    motor = await _obtener_motor()
     if motor is None:
         return candidatos[:top_k]
 
     textos = [getattr(c, "content", "") or "" for c in candidatos]
     try:
         # El executor evita que la inferencia sincrona (decenas de ms) pare el
-        # event loop del worker entero. El candado serializa las corridas: una
-        # `InferenceSession` compartida entre hilos no da garantias, y de paso
-        # evita que N consultas simultaneas peleen por los mismos nucleos.
-        def _correr() -> list[float]:
-            with _candado:
-                return _puntuar(motor, query, textos)
-
-        puntajes = await asyncio.get_running_loop().run_in_executor(None, _correr)
+        # event loop del worker entero. Sin candado: `InferenceSession.run()`
+        # es seguro entre hilos sobre una sesion compartida (ver comentario de
+        # `_candado_carga`), y serializar aca anularia el paralelismo que da
+        # el executor bajo consultas concurrentes.
+        puntajes = await asyncio.get_running_loop().run_in_executor(
+            None, _puntuar, motor, query, textos
+        )
+        # `strict=True` adentro del try: si el modelo devuelve un batch de
+        # longitud distinta a la de `textos` (export distinto, sesion
+        # corrupta), es una falla de inferencia igual que una excepcion del
+        # propio `run()` — degrada al orden de los embeddings, no tumba el
+        # turno del RAG.
+        ordenados = sorted(
+            zip(candidatos, puntajes, strict=True), key=lambda par: par[1], reverse=True
+        )
     except Exception:
         logger.exception("Fallo el re-ranking; se devuelve el orden de los embeddings")
         return candidatos[:top_k]
 
-    ordenados = sorted(zip(candidatos, puntajes, strict=True), key=lambda par: par[1], reverse=True)
     return [candidato for candidato, _ in ordenados[:top_k]]
 
 
@@ -229,11 +263,21 @@ def config_del_tenant(config_agente: dict[str, Any] | None) -> tuple[bool, int]:
         return True, DEFAULT_INITIAL_TOP_K
 
     usar = rag.get("use_reranking", True)
-    inicial = rag.get("initial_top_k", DEFAULT_INITIAL_TOP_K)
 
-    # Un tenant puede escribir cualquier cosa en su JSONB; un valor raro
-    # degrada al default en vez de tumbar la consulta.
-    if not isinstance(inicial, int) or isinstance(inicial, bool) or inicial < 1:
+    # Misma coercion que `_as_int()` de `_tenant.py` (acepta un numero en
+    # string, "20"), no importada por el ciclo `_tenant.py` -> `reranker.py`
+    # ya existente: `_tenant.py` importa `config_del_tenant` de este modulo.
+    # Un `bool` no cuenta como int valido aunque `int(True)` no falle, y un
+    # valor <1 tampoco tiene sentido como cantidad de candidatos.
+    crudo = rag.get("initial_top_k", DEFAULT_INITIAL_TOP_K)
+    if isinstance(crudo, bool):
         inicial = DEFAULT_INITIAL_TOP_K
+    else:
+        try:
+            inicial = int(crudo)
+        except (TypeError, ValueError):
+            inicial = DEFAULT_INITIAL_TOP_K
+        if inicial < 1:
+            inicial = DEFAULT_INITIAL_TOP_K
 
     return bool(usar), inicial

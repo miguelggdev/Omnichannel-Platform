@@ -189,7 +189,7 @@ class TestCargarMetricas:
 
 class TestRecalcularScore:
     @pytest.mark.asyncio
-    async def test_escribe_con_jsonb_set_y_no_reescribe_el_metadata_entero(self) -> None:
+    async def test_escribe_por_concatenacion_jsonb_y_no_reescribe_el_metadata_entero(self) -> None:
         """Un UPDATE que pisara `metadata` completo borraria lo que el tenant
         guarda ahi por la API del CRM."""
         fila = SimpleNamespace(ultima_actividad=AHORA, entrantes=10, salientes=10, conversiones=1)
@@ -201,7 +201,7 @@ class TestRecalcularScore:
         assert 0.0 <= score <= 100.0
 
         sql = str(sesion.ejecutadas[-1]).lower()
-        assert "jsonb_set" in sql, "el metadata debe actualizarse por clave, no entero"
+        assert "jsonb_build_object" in sql, "el metadata debe actualizarse por clave, no entero"
         assert "update contacts" in sql
 
     @pytest.mark.asyncio

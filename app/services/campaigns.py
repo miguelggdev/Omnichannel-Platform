@@ -35,6 +35,12 @@ logger = logging.getLogger(__name__)
 #: Ventana en la que no se repite una campana al mismo segmento y canal.
 VENTANA_ANTIDUPLICADOS_HORAS = 24
 
+#: Canales que soporta una campana masiva. Una sola definicion para que el
+#: CRUD (`api/v1/campaigns.py`, vía `schemas/campaign.py`) y la tool del
+#: agente (`marketing_tools.py`) no puedan divergir sobre que canal aceptan.
+#: Hallazgo de /code-review sobre el PR #46: cada uno tenia su propia copia.
+CANALES_VALIDOS: tuple[str, ...] = ("whatsapp", "telegram", "email", "instagram", "facebook")
+
 
 async def plantillas_aprobadas(session: AsyncSession, client_id: UUID) -> list[str]:
     """Lee las plantillas de WhatsApp que el tenant declaro aprobadas.

@@ -7,13 +7,9 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.campaign import CAMPAIGN_STATUSES
+from app.services.campaigns import CANALES_VALIDOS
 
-#: Canales por los que se puede lanzar una campana.
-#:
-#: Es el mismo conjunto que resuelve `get_messaging_provider()`. Se valida aca
-#: y no solo en la task para que el tenant se entere al crear la campana, no
-#: media hora despues cuando el worker la marque `failed`.
-CANALES_VALIDOS: tuple[str, ...] = ("whatsapp", "instagram", "facebook", "telegram", "email")
+__all__ = ["CANALES_VALIDOS"]
 
 
 class CampaignCreate(BaseModel):

@@ -199,3 +199,9 @@ class TestConfigDelTenant:
         _, inicial = rr.config_del_tenant({"rag": {"initial_top_k": True}})
 
         assert inicial == rr.DEFAULT_INITIAL_TOP_K
+
+    def test_un_numero_en_string_se_acepta(self) -> None:
+        """Misma coercion que `_as_int()` de `_tenant.py` para `rag_top_k`."""
+        _, inicial = rr.config_del_tenant({"rag": {"initial_top_k": "30"}})
+
+        assert inicial == 30

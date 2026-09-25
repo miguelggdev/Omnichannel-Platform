@@ -38,6 +38,7 @@ from app.models.campaign import (
     Campaign,
 )
 from app.services.campaigns import (
+    CANALES_VALIDOS,
     VENTANA_ANTIDUPLICADOS_HORAS,
     campana_duplicada,
     plantillas_aprobadas,
@@ -45,9 +46,6 @@ from app.services.campaigns import (
 from app.services.segmentation import CriterioInvalidoError, contar_segmento, resolver_segmento
 
 logger = logging.getLogger(__name__)
-
-# Canales por los que se puede lanzar una campana.
-CANALES_VALIDOS: tuple[str, ...] = ("whatsapp", "telegram", "email", "instagram", "facebook")
 
 # Ventana en la que no se repite una campana al mismo segmento.
 
