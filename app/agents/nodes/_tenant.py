@@ -37,6 +37,7 @@ from app.core.database import tenant_session
 from app.models.agent_config import AgentConfig
 from app.models.contact_identifier import ContactIdentifier
 from app.services.rag import DEFAULT_THRESHOLD, DEFAULT_TOP_K, FEW_SHOT_THRESHOLD
+from app.services.reranker import DEFAULT_INITIAL_TOP_K, config_del_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,9 @@ class AgentSettings:
         training_mode: Si el modo entrenamiento (ADR-005) esta activo.
         few_shot_threshold: Similaridad minima para inyectar un few-shot.
         rag_threshold: Similaridad minima de los chunks de contexto.
-        rag_top_k: Maximo de chunks a recuperar.
+        rag_top_k: Maximo de chunks a recuperar (el `final_top_k` del spec).
+        rag_rerank: Si se reordenan los candidatos con el cross-encoder.
+        rag_initial_top_k: Candidatos a traer por embeddings antes de reordenar.
         enabled_agents: Agentes habilitados del tenant.
     """
 
@@ -101,6 +104,8 @@ class AgentSettings:
     few_shot_threshold: float = FEW_SHOT_THRESHOLD
     rag_threshold: float = DEFAULT_THRESHOLD
     rag_top_k: int = DEFAULT_TOP_K
+    rag_rerank: bool = True
+    rag_initial_top_k: int = DEFAULT_INITIAL_TOP_K
     enabled_agents: tuple[str, ...] = DEFAULT_ENABLED_AGENTS
 
 
@@ -185,6 +190,7 @@ async def get_agent_settings(client_id: UUID) -> AgentSettings:
             return AgentSettings(model=default_model)
 
         extra: dict[str, Any] = config.config or {}
+        rag_rerank, rag_initial_top_k = config_del_tenant(extra)
         return AgentSettings(
             name=config.name,
             model=config.model or default_model,
@@ -196,6 +202,8 @@ async def get_agent_settings(client_id: UUID) -> AgentSettings:
             few_shot_threshold=float(config.similarity_threshold),
             rag_threshold=_as_float(extra.get("rag_threshold"), DEFAULT_THRESHOLD),
             rag_top_k=_as_int(extra.get("rag_top_k"), DEFAULT_TOP_K),
+            rag_rerank=rag_rerank,
+            rag_initial_top_k=rag_initial_top_k,
             enabled_agents=_as_agents(extra.get("enabled_agents")),
         )
 

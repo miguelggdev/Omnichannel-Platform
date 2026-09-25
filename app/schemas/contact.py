@@ -91,3 +91,17 @@ class ContactDetailResponse(ContactResponse):
     identifiers: list[IdentifierResponse] = []
     tags: list[ContactTagResponse] = []
     notes: list[ContactNoteResponse] = []
+
+
+class ContactScoreResponse(BaseModel):
+    """Resultado de recalcular el score predictivo de un contacto.
+
+    Attributes:
+        contact_id: Contacto recalculado.
+        score: Score de 0 a 100.
+        score_updated_at: Momento del calculo, en UTC.
+    """
+
+    contact_id: UUID
+    score: float
+    score_updated_at: datetime

@@ -22,7 +22,7 @@ dentro del grafo dejaria la conversacion del usuario esperando minutos.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -31,14 +31,16 @@ from langchain_core.tools import tool
 from sqlalchemy import select
 
 from app.core.database import tenant_session
-from app.models.agent_config import AgentConfig
 from app.models.campaign import (
-    CAMPAIGN_COMPLETED,
     CAMPAIGN_DRAFT,
     CAMPAIGN_LANZABLE,
     CAMPAIGN_SCHEDULED,
-    CAMPAIGN_SENDING,
     Campaign,
+)
+from app.services.campaigns import (
+    VENTANA_ANTIDUPLICADOS_HORAS,
+    campana_duplicada,
+    plantillas_aprobadas,
 )
 from app.services.segmentation import CriterioInvalidoError, contar_segmento, resolver_segmento
 
@@ -48,7 +50,6 @@ logger = logging.getLogger(__name__)
 CANALES_VALIDOS: tuple[str, ...] = ("whatsapp", "telegram", "email", "instagram", "facebook")
 
 # Ventana en la que no se repite una campana al mismo segmento.
-VENTANA_ANTIDUPLICADOS_HORAS = 24
 
 # Cuantos contactos de ejemplo se muestran al segmentar.
 EJEMPLOS_SEGMENTO = 5
@@ -67,28 +68,19 @@ def _client_id(config: RunnableConfig) -> UUID:
 
 
 async def _plantillas_aprobadas(client_id: UUID) -> list[str]:
-    """Lee las plantillas de WhatsApp que el tenant declaro aprobadas.
+    """Lee las plantillas de WhatsApp aprobadas del tenant, en su propia sesion.
+
+    La consulta vive en `services/campaigns.py`, compartida con la task; aca
+    solo se le abre la sesion con contexto de tenant.
 
     Args:
         client_id: Tenant dueno de la configuracion.
 
     Returns:
-        Nombres o textos de plantilla aprobados; lista vacia si no declaro
-        ninguna.
+        Plantillas aprobadas; lista vacia si no declaro ninguna.
     """
     async with tenant_session(client_id) as session:
-        config = (
-            await session.execute(
-                select(AgentConfig)
-                .where(AgentConfig.client_id == client_id, AgentConfig.is_active.is_(True))
-                .order_by(AgentConfig.created_at.asc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-
-    marketing = ((config.config or {}) if config else {}).get("marketing", {})
-    aprobadas = marketing.get("approved_templates", [])
-    return [str(plantilla) for plantilla in aprobadas] if isinstance(aprobadas, list) else []
+        return await plantillas_aprobadas(session, client_id)
 
 
 @tool(parse_docstring=True)
@@ -231,19 +223,7 @@ async def send_campaign(campaign_id: str, config: RunnableConfig) -> str:
                 "y ya no se puede lanzar."
             )
 
-        desde = datetime.now(timezone.utc) - timedelta(hours=VENTANA_ANTIDUPLICADOS_HORAS)
-        duplicada = (
-            await session.execute(
-                select(Campaign).where(
-                    Campaign.client_id == client_id,
-                    Campaign.id != campana_uuid,
-                    Campaign.channel == campana.channel,
-                    Campaign.segment_criteria == campana.segment_criteria,
-                    Campaign.status.in_((CAMPAIGN_SENDING, CAMPAIGN_COMPLETED)),
-                    Campaign.started_at >= desde,
-                )
-            )
-        ).scalar_one_or_none()
+        duplicada = await campana_duplicada(session, client_id, campana)
 
         if duplicada is not None:
             return (

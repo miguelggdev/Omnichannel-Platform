@@ -36,11 +36,13 @@ from app.schemas.contact import (
     ContactListResponse,
     ContactNoteResponse,
     ContactResponse,
+    ContactScoreResponse,
     ContactTagResponse,
     ContactUpdate,
     IdentifierResponse,
 )
 from app.schemas.conversation import ConversationListResponse, ConversationResponse
+from app.services.contact_scoring import recalcular_score
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,8 @@ UNIFIER_UNAVAILABLE = "UNIFIER_UNAVAILABLE"
 
 _READ_ROLES = ("super_admin", "admin", "supervisor", "agent")
 _WRITE_ROLES = ("super_admin", "admin", "supervisor", "agent")
+#: El score alimenta las campanas masivas, no la atencion diaria.
+_SCORE_ROLES = ("super_admin", "admin")
 _MERGE_ROLES = ("super_admin", "admin")
 
 
@@ -463,3 +467,43 @@ async def list_contact_conversations(
             page=page,
             page_size=page_size,
         )
+
+
+@router.put("/{contact_id}/score", response_model=ContactScoreResponse)
+async def recalculate_contact_score(
+    contact_id: UUID,
+    user: dict[str, Any] = Depends(require_role(*_SCORE_ROLES)),
+) -> ContactScoreResponse:
+    """Recalcula el score predictivo de un contacto y lo guarda en su metadata.
+
+    El score queda en `contacts.metadata->>'score'`, que es de donde lo lee el
+    filtro `score_min` de la segmentacion de campanas: recalcular aca es lo
+    que hace que ese filtro encuentre gente.
+
+    A diferencia del resto del router, este endpoint es solo para
+    administradores (no supervisores ni agentes): el score alimenta a quien
+    decide a quien se le manda una campana masiva, no la atencion del dia a
+    dia.
+
+    Args:
+        contact_id: Contacto a recalcular.
+        user: Usuario autenticado.
+
+    Returns:
+        El score recien calculado y el momento del calculo.
+
+    Raises:
+        AppException: 404 si el contacto no existe en el tenant.
+    """
+    client_id: UUID = user["client_id"]
+
+    async with tenant_session(client_id) as session:
+        # Valida que el contacto exista en ESTE tenant antes de calcular nada;
+        # sin esto, un id de otro tenant devolveria un score de cero metricas
+        # en vez de un 404, confirmando de paso que el id no existe aca.
+        await get_contact_or_404(session, contact_id, client_id)
+
+        score, momento = await recalcular_score(session, client_id, contact_id)
+
+    logger.info("Score recalculado para el contacto %s: %.2f", contact_id, score)
+    return ContactScoreResponse(contact_id=contact_id, score=score, score_updated_at=momento)
