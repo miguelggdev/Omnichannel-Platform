@@ -45,7 +45,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, func, select, text, update
+from sqlalchemy import ColumnElement, case, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
@@ -107,6 +107,25 @@ class MetricasDelContacto:
     salientes: int
     conversiones: int
     sentimiento: float | None = None
+
+
+def puntaje_de_sentimiento() -> ColumnElement[Any]:
+    """Expresion SQL con el puntaje 0-100 del sentimiento de un mensaje.
+
+    Traduce `messages.metadata->'sentiment'->>'level'` con
+    `PUNTAJE_SENTIMIENTO`; un mensaje sin medir da `NULL`, asi que `AVG` lo
+    ignora en vez de contarlo como neutral. La comparten el scoring y el
+    criterio `sentiment_avg` de la segmentacion, para que un "60" signifique lo
+    mismo en los dos lados.
+
+    Returns:
+        La expresion `CASE`, para usar dentro de un `SELECT` sobre `messages`.
+    """
+    nivel = Message.metadata_["sentiment"]["level"].astext
+    return case(
+        *((nivel == nombre, valor) for nombre, valor in PUNTAJE_SENTIMIENTO.items()),
+        else_=None,
+    )
 
 
 def _score_recencia(ultima_actividad: datetime | None, ahora: datetime) -> float:
@@ -281,13 +300,8 @@ async def cargar_metricas(
     # Promedio del sentimiento de los mensajes entrantes medidos en la ventana
     # (`sentiment_analysis_node`). AVG ignora los NULL: los mensajes sin medir
     # no cuentan como neutrales, y si no hay ninguno el resultado es NULL.
-    nivel = Message.metadata_["sentiment"]["level"].astext
-    puntaje = case(
-        *((nivel == nombre, valor) for nombre, valor in PUNTAJE_SENTIMIENTO.items()),
-        else_=None,
-    )
     sentimiento = (
-        select(func.avg(puntaje))
+        select(func.avg(puntaje_de_sentimiento()))
         .where(
             Message.client_id == client_id,
             Message.conversation_id.in_(conversaciones),
