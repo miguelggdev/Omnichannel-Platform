@@ -45,6 +45,7 @@ from app.services.campaigns import (
     bloquear_campana,
     campana_duplicada,
     debe_salir_ya,
+    plantilla_aprobada,
     plantillas_aprobadas,
 )
 from app.services.segmentation import CriterioInvalidoError, contar_segmento, resolver_segmento
@@ -245,6 +246,18 @@ async def send_campaign(campaign_id: str, config: RunnableConfig) -> str:
             return (
                 f"La campana '{campana.name}' esta en estado {campana.status} "
                 "y ya no se puede lanzar."
+            )
+
+        # Mismo chequeo que el CRUD al confirmar: la plantilla pudo dejar de
+        # estar aprobada desde que se creo la campana. Sin esto, la tool
+        # respondia "encolada" y la campana fallaba despues en el worker, sin
+        # que el agente pudiera decirselo al usuario.
+        if campana.channel == "whatsapp" and not await plantilla_aprobada(
+            session, client_id, campana.message_template
+        ):
+            return (
+                f"La plantilla de la campana '{campana.name}' ya no esta entre las aprobadas "
+                "por Meta para este tenant. Actualiza la plantilla antes de enviarla."
             )
 
         duplicada = await campana_duplicada(session, client_id, campana)

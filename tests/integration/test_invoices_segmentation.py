@@ -46,10 +46,6 @@ async def tenant() -> AsyncGenerator[uuid.UUID, None]:
             )
         await session.execute(text("DELETE FROM clients WHERE id = :cid"), {"cid": str(client_id)})
 
-    # Liberar el pool en ESTE loop: si lo hace el test siguiente, desde otro
-    # loop, cada conexion vieja deja un "Exception closing connection".
-    await engine.dispose()
-
 
 def _config(client_id: uuid.UUID) -> dict[str, Any]:
     return {"configurable": {"client_id": str(client_id), "contact_id": None}}
@@ -135,6 +131,10 @@ async def test_el_consecutivo_sigue_al_mayor_aunque_falten_numeros(tenant: uuid.
         ({"nivel": 1}, {"nivel": 1.0}, True),
         ({"plan": "gold"}, {"plan": "gold"}, True),
         ({"plan": "gold"}, {"plan": "silver"}, False),
+        # Escrito como texto por la API del CRM: el criterio escalar lo encuentra.
+        ({"nivel": "5"}, {"nivel": 5}, True),
+        ({"vip": "true"}, {"vip": True}, True),
+        ({"vip": "false"}, {"vip": True}, False),
     ],
 )
 async def test_el_filtro_metadata_respeta_los_tipos_json(

@@ -161,6 +161,28 @@ class TestSegmentacion:
         assert "contacts.metadata @> " in str(compilado)
         assert {"vip": valor} in compilado.params.values()
 
+    @pytest.mark.parametrize(("valor", "texto"), [(True, "true"), (7, "7"), (1.5, "1.5")])
+    def test_metadata_escalar_tambien_acepta_el_valor_guardado_como_texto(
+        self, valor: object, texto: str
+    ) -> None:
+        """El CRM puede guardar `"7"` o `"true"`; el criterio los sigue encontrando."""
+        from sqlalchemy.dialects import postgresql
+
+        compilado = construir_query(uuid4(), {"metadata": {"k": valor}}).compile(
+            dialect=postgresql.dialect()
+        )
+
+        assert {"k": texto} in compilado.params.values()
+
+    def test_metadata_texto_no_agrega_la_variante(self) -> None:
+        from sqlalchemy.dialects import postgresql
+
+        compilado = construir_query(uuid4(), {"metadata": {"plan": "gold"}}).compile(
+            dialect=postgresql.dialect()
+        )
+
+        assert " OR " not in str(compilado)
+
     def test_nunca_entran_fusionados_ni_borrados_por_rgpd(self) -> None:
         sql = " ".join(str(construir_query(uuid4(), {}).compile()).split())
 
@@ -176,6 +198,27 @@ class TestSegmentacion:
 
 
 class TestToolsDeMarketing:
+    @pytest.fixture(autouse=True)
+    def _plantilla_aprobada(self, monkeypatch) -> None:
+        """Por defecto la plantilla de WhatsApp sigue aprobada al confirmar."""
+        monkeypatch.setattr(mt, "plantilla_aprobada", AsyncMock(return_value=True))
+
+    @pytest.mark.asyncio
+    async def test_enviar_con_plantilla_ya_no_aprobada_no_encola(self, monkeypatch) -> None:
+        """Antes respondia "encolada" y la campana fallaba despues en el worker."""
+        campana = _campana(channel="whatsapp")
+        monkeypatch.setattr(mt, "tenant_session", _sesion(_SesionFalsa([_Resultado([campana])])))
+        monkeypatch.setattr(mt, "plantilla_aprobada", AsyncMock(return_value=False))
+
+        with patch("app.tasks.campaign_tasks.execute_campaign.delay") as mock_delay:
+            respuesta = await mt.send_campaign.ainvoke(
+                {"campaign_id": str(campana.id)}, config=CONFIG
+            )
+
+        mock_delay.assert_not_called()
+        assert campana.status == CAMPAIGN_DRAFT
+        assert "ya no esta entre las aprobadas" in respuesta
+
     def test_el_llm_no_ve_el_client_id(self) -> None:
         for herramienta in MARKETING_TOOLS:
             assert "config" not in herramienta.args
