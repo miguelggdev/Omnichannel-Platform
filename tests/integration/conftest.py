@@ -19,6 +19,23 @@ from sqlalchemy import text
 # (crea el engine y llama a `get_settings()`) haria fallar la coleccion.
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _liberar_pool_al_terminar() -> AsyncGenerator[None, None]:
+    """Libera el pool del engine de la app en el loop del test que lo uso.
+
+    pytest-asyncio abre un loop por test. Si el pool se libera recien en el
+    test siguiente (el `engine.dispose()` del inicio de `webhook_tenant`),
+    cada conexion vieja se cierra desde otro loop y deja un
+    "Exception closing connection" en el log: cientos por corrida de la
+    suite, que tapaban cualquier error real. Import perezoso por la misma
+    razon que el resto de este archivo.
+    """
+    yield
+    from app.core.database import engine
+
+    await engine.dispose()
+
+
 @pytest_asyncio.fixture
 async def webhook_tenant(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[uuid.UUID, None]:
     """Crea un tenant commiteado y lo deja como DEFAULT_CLIENT_ID del worker.
