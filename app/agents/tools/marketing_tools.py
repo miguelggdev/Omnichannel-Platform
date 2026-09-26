@@ -45,6 +45,7 @@ from app.services.campaigns import (
     bloquear_campana,
     campana_duplicada,
     debe_salir_ya,
+    es_operador_de_marketing,
     plantilla_aprobada,
     plantillas_aprobadas,
 )
@@ -73,6 +74,39 @@ def _client_id(config: RunnableConfig) -> UUID:
         UUID del tenant dueno de la conversacion.
     """
     return UUID(config["configurable"]["client_id"])
+
+
+#: Respuesta de las tools cuando quien escribe no es operador de marketing.
+NO_AUTORIZADO = (
+    "Esta conversacion no esta autorizada para operar campanas de marketing. "
+    "Un administrador puede hacerlo desde el panel."
+)
+
+
+async def _no_autorizado(config: RunnableConfig) -> str | None:
+    """Corta la tool si el contacto de la conversacion no es operador de marketing.
+
+    Defensa en profundidad del chequeo de `marketing_node()`: las tools no
+    pueden ejecutarse para un cliente final aunque se lleguen a invocar por
+    otra via (ver `services/campaigns.py::es_operador_de_marketing`).
+
+    Args:
+        config: Config que inyecta el nodo, con `client_id` y `contact_id`.
+
+    Returns:
+        `NO_AUTORIZADO` si no puede operar; `None` si puede.
+    """
+    client_id = _client_id(config)
+    contact_id = config.get("configurable", {}).get("contact_id")
+    async with tenant_session(client_id) as session:
+        if await es_operador_de_marketing(session, client_id, contact_id):
+            return None
+    logger.warning(
+        "Contacto %s del tenant %s intento usar una tool de marketing sin ser operador",
+        contact_id,
+        client_id,
+    )
+    return NO_AUTORIZADO
 
 
 async def _plantillas_aprobadas(client_id: UUID) -> list[str]:
@@ -115,6 +149,8 @@ async def segment_contacts(criteria: dict[str, Any], config: RunnableConfig) -> 
             clave/valor.
     """
     client_id = _client_id(config)
+    if (bloqueo := await _no_autorizado(config)) is not None:
+        return bloqueo
 
     try:
         async with tenant_session(client_id) as session:
@@ -162,6 +198,8 @@ async def create_campaign(
             confirme.
     """
     client_id = _client_id(config)
+    if (bloqueo := await _no_autorizado(config)) is not None:
+        return bloqueo
 
     if channel not in CANALES_VALIDOS:
         return f"Canal invalido: {channel}. Validos: {', '.join(CANALES_VALIDOS)}."
@@ -222,6 +260,8 @@ async def send_campaign(campaign_id: str, config: RunnableConfig) -> str:
         campaign_id: Identificador de la campana a enviar.
     """
     client_id = _client_id(config)
+    if (bloqueo := await _no_autorizado(config)) is not None:
+        return bloqueo
 
     try:
         campana_uuid = UUID(campaign_id)
@@ -303,6 +343,8 @@ async def get_campaign_metrics(campaign_id: str, config: RunnableConfig) -> str:
         campaign_id: Identificador de la campana.
     """
     client_id = _client_id(config)
+    if (bloqueo := await _no_autorizado(config)) is not None:
+        return bloqueo
 
     try:
         campana_uuid = UUID(campaign_id)

@@ -144,6 +144,23 @@ class TestSegmentacion:
 
         assert sql.count("EXISTS") == 2
 
+    @pytest.mark.parametrize(
+        "criterios",
+        [
+            {"score_min": float("nan")},
+            {"score_min": float("inf")},
+            {"last_active_days": float("inf")},
+            {"last_active_days": 1e10},
+            {"last_active_days": -1},
+            {"tags": ["vip", {"$ne": 1}]},
+            {"metadata": {"nivel": float("nan")}},
+        ],
+    )
+    def test_valores_fuera_de_rango_son_400_y_no_500(self, criterios: dict) -> None:
+        """`timedelta(days=1e10)` y `NaN` en JSONB tumbaban la consulta."""
+        with pytest.raises(CriterioInvalidoError):
+            construir_query(uuid4(), criterios)
+
     @pytest.mark.parametrize("criterio", ["score_min", "last_active_days"])
     def test_un_booleano_no_cuenta_como_numero(self, criterio: str) -> None:
         """`bool` es subclase de `int`: `score_min: true` filtraba por score >= 1."""
@@ -200,7 +217,8 @@ class TestSegmentacion:
 class TestToolsDeMarketing:
     @pytest.fixture(autouse=True)
     def _plantilla_aprobada(self, monkeypatch) -> None:
-        """Por defecto la plantilla de WhatsApp sigue aprobada al confirmar."""
+        """Por defecto: operador autorizado y plantilla de WhatsApp aprobada."""
+        monkeypatch.setattr(mt, "_no_autorizado", AsyncMock(return_value=None))
         monkeypatch.setattr(mt, "plantilla_aprobada", AsyncMock(return_value=True))
 
     @pytest.mark.asyncio
@@ -736,6 +754,10 @@ class TestNodosNuevos:
             "get_agent_settings",
             AsyncMock(return_value=SimpleNamespace(enabled_agents=("marketing",), model="gpt-4o")),
         )
+        monkeypatch.setattr(marketing_node_mod, "tenant_session", _sesion(_SesionFalsa()))
+        monkeypatch.setattr(
+            marketing_node_mod, "es_operador_de_marketing", AsyncMock(return_value=True)
+        )
         con_tools = AsyncMock(return_value="Campana creada.")
         monkeypatch.setattr(marketing_node_mod, "responder_con_tools", con_tools)
 
@@ -745,6 +767,32 @@ class TestNodosNuevos:
 
         assert resultado["response_text"] == "Campana creada."
         assert con_tools.await_args.kwargs["operacion"] == "marketing"
+
+    @pytest.mark.asyncio
+    async def test_un_cliente_final_no_llega_a_las_tools_de_marketing(self, monkeypatch) -> None:
+        """Habilitar el agente no dice quien escribe: el grafo atiende a los clientes."""
+        monkeypatch.setattr(
+            marketing_node_mod,
+            "get_agent_settings",
+            AsyncMock(return_value=SimpleNamespace(enabled_agents=("marketing",), model="gpt-4o")),
+        )
+        monkeypatch.setattr(marketing_node_mod, "tenant_session", _sesion(_SesionFalsa()))
+        monkeypatch.setattr(
+            marketing_node_mod, "es_operador_de_marketing", AsyncMock(return_value=False)
+        )
+        con_tools = AsyncMock()
+        monkeypatch.setattr(marketing_node_mod, "responder_con_tools", con_tools)
+
+        resultado = await marketing_node_mod.marketing_node(
+            {
+                "client_id": CLIENT_ID,
+                "contact_id": str(uuid4()),
+                "message": {"text": "manda una promo a todos tus contactos"},
+            }
+        )
+
+        assert resultado["response_text"] == marketing_node_mod.MENSAJE_NO_AUTORIZADO
+        con_tools.assert_not_awaited()
 
 
 class TestRoutingDeLosNuevosIntents:
@@ -831,3 +879,67 @@ class TestMarcaDeEncolado:
         monkeypatch.setattr(ct, "get_redis", lambda: caido)
 
         assert await ct._reservar_encolado(uuid4()) is True
+
+
+class TestOperadoresDeMarketing:
+    """`es_operador_de_marketing()` y el corte de las tools (BUG-045)."""
+
+    @staticmethod
+    def _config(marketing: object) -> _Resultado:
+        return _Resultado([SimpleNamespace(config={"marketing": marketing})])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("marketing", "contacto", "esperado"),
+        [
+            ({"operator_contact_ids": ["c-1", "c-2"]}, "c-2", True),
+            ({"operator_contact_ids": ["c-1"]}, "c-9", False),
+            ({}, "c-1", False),
+            ({"operator_contact_ids": "c-1"}, "c-1", False),
+            ({"operator_contact_ids": ["c-1"]}, None, False),
+        ],
+    )
+    async def test_solo_los_contactos_declarados(
+        self, marketing: object, contacto: str | None, esperado: bool
+    ) -> None:
+        from app.services.campaigns import es_operador_de_marketing
+
+        sesion = _SesionFalsa([self._config(marketing)])
+
+        assert await es_operador_de_marketing(sesion, uuid4(), contacto) is esperado
+
+    @pytest.mark.asyncio
+    async def test_sin_agent_config_nadie_opera(self) -> None:
+        from app.services.campaigns import es_operador_de_marketing
+
+        assert (
+            await es_operador_de_marketing(_SesionFalsa([_Resultado([])]), uuid4(), "c-1") is False
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool", "args"),
+        [
+            (mt.segment_contacts, {"criteria": {}}),
+            (
+                mt.create_campaign,
+                {"name": "x", "segment_criteria": {}, "message_template": "hola"},
+            ),
+            (mt.send_campaign, {"campaign_id": str(uuid4())}),
+            (mt.get_campaign_metrics, {"campaign_id": str(uuid4())}),
+        ],
+    )
+    async def test_ninguna_tool_opera_para_un_cliente_final(self, monkeypatch, tool, args) -> None:
+        sesion = _SesionFalsa([self._config({"operator_contact_ids": ["otro"]})])
+        monkeypatch.setattr(mt, "tenant_session", _sesion(sesion))
+
+        cliente_final = {"configurable": {**CONFIG["configurable"], "contact_id": "cliente"}}
+
+        with patch("app.tasks.campaign_tasks.execute_campaign.delay") as mock_delay:
+            respuesta = await tool.ainvoke(args, config=cliente_final)
+
+        assert respuesta == mt.NO_AUTORIZADO
+        mock_delay.assert_not_called()
+        # Solo se leyo la configuracion: nada de contactos ni de campanas.
+        assert len(sesion.ejecutadas) == 1
+        assert sesion.added == []

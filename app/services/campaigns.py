@@ -36,6 +36,7 @@ horizontalmente y hay una sola definicion de cada regla.
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select, text
@@ -120,6 +121,62 @@ def debe_salir_ya(campana: Campaign, ahora: datetime | None = None) -> bool:
     return campana.scheduled_for <= (ahora or datetime.now(timezone.utc))
 
 
+async def _config_marketing(session: AsyncSession, client_id: UUID) -> dict[str, Any]:
+    """Lee `agent_configs.config.marketing` de la configuracion activa del tenant.
+
+    Args:
+        session: Sesion con el contexto de tenant ya aplicado.
+        client_id: Tenant dueno de la configuracion.
+
+    Returns:
+        El objeto `marketing`, o un dict vacio si el tenant no declaro nada.
+    """
+    config = (
+        await session.execute(
+            select(AgentConfig)
+            .where(AgentConfig.client_id == client_id, AgentConfig.is_active.is_(True))
+            .order_by(AgentConfig.created_at.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    marketing = ((config.config or {}) if config else {}).get("marketing", {})
+    return marketing if isinstance(marketing, dict) else {}
+
+
+async def es_operador_de_marketing(
+    session: AsyncSession, client_id: UUID, contact_id: str | None
+) -> bool:
+    """Si el contacto de la conversacion puede operar el agente de marketing.
+
+    El agente de marketing vive en el mismo grafo que atiende a los clientes
+    finales del tenant: habilitarlo en `enabled_agents` no dice nada de *quien*
+    le habla. Sin este chequeo, cualquier contacto que escribiera por WhatsApp
+    "manda una promo a todos" podia segmentar la base (y ver nombres de otros
+    contactos), crear una campana y lanzar un envio masivo (BUG-045).
+
+    Solo operan los contactos declarados en
+    `agent_configs.config.marketing.operator_contact_ids` — por ejemplo, el
+    WhatsApp del propio administrador del negocio. Sin lista, nadie: es el
+    lado correcto en el que equivocarse, igual que con las plantillas
+    aprobadas. Los administradores siguen teniendo el CRUD `/api/v1/campaigns`.
+
+    Args:
+        session: Sesion con el contexto de tenant ya aplicado.
+        client_id: Tenant dueno de la conversacion.
+        contact_id: Contacto de la conversacion, si lo hay.
+
+    Returns:
+        `True` si el contacto esta en la lista de operadores del tenant.
+    """
+    if not contact_id:
+        return False
+    operadores = (await _config_marketing(session, client_id)).get("operator_contact_ids", [])
+    if not isinstance(operadores, list):
+        return False
+    return str(contact_id) in {str(operador) for operador in operadores}
+
+
 async def plantillas_aprobadas(session: AsyncSession, client_id: UUID) -> list[str]:
     """Lee las plantillas de WhatsApp que el tenant declaro aprobadas.
 
@@ -136,17 +193,7 @@ async def plantillas_aprobadas(session: AsyncSession, client_id: UUID) -> list[s
     Returns:
         Plantillas aprobadas; lista vacia si no declaro ninguna.
     """
-    config = (
-        await session.execute(
-            select(AgentConfig)
-            .where(AgentConfig.client_id == client_id, AgentConfig.is_active.is_(True))
-            .order_by(AgentConfig.created_at.asc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-
-    marketing = ((config.config or {}) if config else {}).get("marketing", {})
-    aprobadas = marketing.get("approved_templates", [])
+    aprobadas = (await _config_marketing(session, client_id)).get("approved_templates", [])
     return [str(plantilla) for plantilla in aprobadas] if isinstance(aprobadas, list) else []
 
 

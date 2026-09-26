@@ -29,6 +29,7 @@ contacte.
 
 import json
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -48,6 +49,10 @@ logger = logging.getLogger(__name__)
 CRITERIOS_SOPORTADOS: frozenset[str] = frozenset(
     {"tags", "channel", "last_active_days", "score_min", "metadata"}
 )
+
+
+#: Tope de `last_active_days`: un siglo.
+MAX_DIAS_ACTIVIDAD = 36_500
 
 
 class CriterioInvalidoError(ValueError):
@@ -71,7 +76,10 @@ def _validar(criterios: dict[str, Any]) -> None:
             f"Validos: {', '.join(sorted(CRITERIOS_SOPORTADOS))}"
         )
 
-    if "tags" in criterios and not isinstance(criterios["tags"], list):
+    if "tags" in criterios and (
+        not isinstance(criterios["tags"], list)
+        or not all(isinstance(tag, str) for tag in criterios["tags"])
+    ):
         raise CriterioInvalidoError("`tags` tiene que ser una lista de nombres de etiqueta")
     if "metadata" in criterios and not isinstance(criterios["metadata"], dict):
         raise CriterioInvalidoError("`metadata` tiene que ser un objeto clave/valor")
@@ -80,9 +88,23 @@ def _validar(criterios: dict[str, Any]) -> None:
         # `bool` es subclase de `int` en Python: sin excluirlo, `score_min: true`
         # pasaba la validacion y filtraba por `score >= 1.0`.
         if numerico in criterios and (
-            isinstance(valor, bool) or not isinstance(valor, (int, float))
+            isinstance(valor, bool)
+            or not isinstance(valor, (int, float))
+            or not math.isfinite(valor)
         ):
             raise CriterioInvalidoError(f"`{numerico}` tiene que ser un numero")
+    # `timedelta(days=1e10)` levanta OverflowError y `NaN`/`inf` no son JSON
+    # valido para PostgreSQL: los dos tumbaban la consulta con un 500 en vez de
+    # un 400 (BUG-045). Un segmento por actividad de mas de un siglo no tiene
+    # sentido, y uno negativo tampoco.
+    dias = criterios.get("last_active_days")
+    if dias is not None and not 0 <= dias <= MAX_DIAS_ACTIVIDAD:
+        raise CriterioInvalidoError(
+            f"`last_active_days` tiene que estar entre 0 y {MAX_DIAS_ACTIVIDAD}"
+        )
+    for clave, valor in (criterios.get("metadata") or {}).items():
+        if isinstance(valor, float) and not math.isfinite(valor):
+            raise CriterioInvalidoError(f"`metadata.{clave}` tiene que ser un numero finito")
 
 
 def _coincide_metadata(clave: str, valor: Any) -> ColumnElement[bool]:
