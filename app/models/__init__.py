@@ -9,8 +9,10 @@ from app.models.agent_config import AgentConfig
 from app.models.approved_response import ApprovedResponse
 from app.models.audit_log import AuditLog
 from app.models.base import Base, TenantBaseModel
+from app.models.call_record import CallRecord
 from app.models.campaign import Campaign
 from app.models.client import Client
+from app.models.clinical_record import ClinicalRecord
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.contact_tag import ContactTag
@@ -40,8 +42,10 @@ __all__ = [
     "ApprovedResponse",
     "AuditLog",
     "Base",
+    "CallRecord",
     "Campaign",
     "Client",
+    "ClinicalRecord",
     "Contact",
     "ContactIdentifier",
     "ContactTag",
