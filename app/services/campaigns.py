@@ -121,8 +121,12 @@ def debe_salir_ya(campana: Campaign, ahora: datetime | None = None) -> bool:
     return campana.scheduled_for <= (ahora or datetime.now(timezone.utc))
 
 
-async def _config_marketing(session: AsyncSession, client_id: UUID) -> dict[str, Any]:
+async def leer_config_marketing(session: AsyncSession, client_id: UUID) -> dict[str, Any]:
     """Lee `agent_configs.config.marketing` de la configuracion activa del tenant.
+
+    La "configuracion activa" es la misma que usa todo el grafo
+    (`_tenant.get_agent_settings`): la `agent_config` activa mas antigua. La
+    escribe `PUT /api/v1/marketing/settings`.
 
     Args:
         session: Sesion con el contexto de tenant ya aplicado.
@@ -171,7 +175,7 @@ async def es_operador_de_marketing(
     """
     if not contact_id:
         return False
-    operadores = (await _config_marketing(session, client_id)).get("operator_contact_ids", [])
+    operadores = (await leer_config_marketing(session, client_id)).get("operator_contact_ids", [])
     if not isinstance(operadores, list):
         return False
     return str(contact_id) in {str(operador) for operador in operadores}
@@ -193,7 +197,7 @@ async def plantillas_aprobadas(session: AsyncSession, client_id: UUID) -> list[s
     Returns:
         Plantillas aprobadas; lista vacia si no declaro ninguna.
     """
-    aprobadas = (await _config_marketing(session, client_id)).get("approved_templates", [])
+    aprobadas = (await leer_config_marketing(session, client_id)).get("approved_templates", [])
     return [str(plantilla) for plantilla in aprobadas] if isinstance(aprobadas, list) else []
 
 
