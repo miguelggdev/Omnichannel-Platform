@@ -296,3 +296,73 @@ async def test_flujo_de_templates_bajo_rls(
     avance = await root.get(f"/api/v1/admin/templates/instantiations/{instantiation_id}")
     assert avance.status_code == 200
     assert avance.json()["status"] == "pending"
+
+
+# ─── Pendientes de la Fase 2 (ADR-070) ───────────────────────────────────────
+
+
+async def test_la_configuracion_de_marketing_autoriza_al_operador(
+    escenario: Escenario, api_client: Any
+) -> None:
+    """PUT /marketing/settings escribe en `config.marketing` sin pisar el resto."""
+    from app.core.database import tenant_session
+    from app.services.campaigns import es_operador_de_marketing
+
+    await _insertar(
+        escenario.origen,
+        'UPDATE agent_configs SET config = \'{"enabled_agents": ["rag", "marketing"]}\'::jsonb '
+        "WHERE client_id = :cid",
+        {"cid": str(escenario.origen)},
+    )
+    admin = _cliente(api_client, role="admin", client_id=escenario.origen, user_id=uuid.uuid4())
+
+    ajeno = await admin.put(
+        "/api/v1/marketing/settings", json={"operator_contact_ids": [str(uuid.uuid4())]}
+    )
+    assert ajeno.status_code == 400
+
+    response = await admin.put(
+        "/api/v1/marketing/settings",
+        json={"operator_contact_ids": [str(escenario.contacto)], "approved_templates": ["Hola"]},
+    )
+    assert response.status_code == 200, response.text
+
+    async with tenant_session(escenario.origen) as session:
+        config = (
+            await session.execute(
+                text("SELECT config FROM agent_configs WHERE client_id = :cid"),
+                {"cid": str(escenario.origen)},
+            )
+        ).scalar_one()
+        autorizado = await es_operador_de_marketing(
+            session, escenario.origen, str(escenario.contacto)
+        )
+
+    assert config["enabled_agents"] == ["rag", "marketing"], "no puede pisar el resto del config"
+    assert config["marketing"]["approved_templates"] == ["Hola"]
+    assert autorizado is True
+
+
+async def test_sentiment_avg_segmenta_por_el_promedio_medido(escenario: Escenario) -> None:
+    from app.core.database import tenant_session
+    from app.services.segmentation import contar_segmento
+
+    await _mensaje(escenario, "s1", "pesimo")
+    await _mensaje(escenario, "s2", "horrible")
+    async with tenant_session(escenario.origen) as session:
+        await session.execute(
+            text(
+                "UPDATE messages SET metadata = metadata || "
+                '\'{"sentiment": {"level": "negative"}}\'::jsonb '
+                "WHERE external_message_id IN ('s1', 's2')"
+            )
+        )
+
+    async with tenant_session(escenario.origen) as session:
+        descontentos = await contar_segmento(
+            session, escenario.origen, {"sentiment_avg": {"max": 30}}
+        )
+        contentos = await contar_segmento(session, escenario.origen, {"sentiment_avg": 60})
+
+    # Promedio 20 (dos "negative"): entra en los descontentos, no en los contentos.
+    assert (descontentos, contentos) == (1, 0)
