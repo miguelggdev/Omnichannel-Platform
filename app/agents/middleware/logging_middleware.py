@@ -51,6 +51,7 @@ _OUTPUT_SUMMARY_FIELDS: tuple[str, ...] = (
     "requires_handoff",
     "handoff_reason",
     "budget_status",
+    "current_sentiment",
 )
 
 # Campos que se guardan tal cual en `details` (JSONB), sin resumir a texto.
@@ -63,6 +64,9 @@ _DETAIL_FIELDS: frozenset[str] = frozenset(
         "requires_handoff",
         "handoff_reason",
         "training_mode",
+        "current_sentiment",
+        "sentiment_score",
+        "consecutive_very_negative",
     }
 )
 

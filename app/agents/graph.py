@@ -4,11 +4,13 @@ Contrato: `specs/sprint-06-langgraph.md` §2-3, 12; `specs/sprint-07-scheduling-
 §5-6 (nodo `scheduling`, Sprint 7); y `specs/sprint-07-addendum-agent-logging.md`
 §4-5 (cada nodo se registra envuelto en `logged_node()`, que escribe su
 actividad en `agent_action_logs`); y `specs/sprint-12-agents-advanced.md` §1-2
-y §8 (nodos `financial` y `marketing`, Sprint 12). Ensambla los 9 nodos en el
+y §8 (nodos `financial` y `marketing`, Sprint 12); y `specs/sprint-10-templates.md`
+§5-6 (nodo `sentiment_analysis`, Sprint 10). Ensambla los 10 nodos en el
 flujo:
 
-    token_budget_check -> intent_routing -> [rag_query | respond | human_handoff |
-                                               scheduling | financial | marketing]
+    token_budget_check -> intent_routing -> sentiment_analysis
+                       -> [rag_query | respond | human_handoff |
+                           scheduling | financial | marketing]
                                               rag_query    -> [training_mode_approval | respond | human_handoff]
                                               scheduling   -> [respond | human_handoff]
                                               financial    -> respond
@@ -62,6 +64,7 @@ from app.agents.nodes.marketing import marketing_node
 from app.agents.nodes.rag_query import rag_query_node
 from app.agents.nodes.respond import respond_node
 from app.agents.nodes.scheduling import scheduling_node
+from app.agents.nodes.sentiment import sentiment_analysis_node
 from app.agents.nodes.token_budget import token_budget_check_node
 from app.agents.nodes.training_approval import training_approval_node
 from app.agents.state import ConversationState
@@ -81,6 +84,7 @@ NODE_TRAINING_APPROVAL = "training_mode_approval"
 NODE_SCHEDULING = "scheduling"
 NODE_FINANCIAL = "financial"
 NODE_MARKETING = "marketing"
+NODE_SENTIMENT = "sentiment_analysis"
 
 # Intents que `respond_node` contesta sin pasar por RAG (ver app/agents/nodes/respond.py).
 _DIRECT_RESPONSE_INTENTS = frozenset({"greeting", "farewell"})
@@ -143,6 +147,24 @@ def route_after_intent(state: ConversationState) -> str:
     return "rag_query"
 
 
+def route_after_sentiment(state: ConversationState) -> str:
+    """Enruta tras `sentiment_analysis_node`.
+
+    Si el sentimiento sostenido forzo el escalamiento, va a un humano; si no,
+    sigue exactamente el camino que habria tomado por su intent.
+
+    Args:
+        state: Estado tras `sentiment_analysis_node`.
+
+    Returns:
+        `"human_handoff"` si hay que escalar; si no, lo que diga
+        `route_after_intent()`.
+    """
+    if state.get("requires_handoff"):
+        return "human_handoff"
+    return route_after_intent(state)
+
+
 def route_after_rag(state: ConversationState) -> str:
     """Decide si responder, escalar o retener para aprobacion tras el RAG.
 
@@ -196,7 +218,7 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
     """Arma el grafo de conversacion, sin compilar.
 
     Returns:
-        `StateGraph` con los 9 nodos (envueltos en `logged_node()`) y el
+        `StateGraph` con los 10 nodos (envueltos en `logged_node()`) y el
         routing condicional del sprint.
     """
     graph = StateGraph(ConversationState)
@@ -220,6 +242,7 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
     graph.add_node(NODE_SCHEDULING, _logged(NODE_SCHEDULING, "tool_call", scheduling_node))
     graph.add_node(NODE_FINANCIAL, _logged(NODE_FINANCIAL, "tool_call", financial_node))
     graph.add_node(NODE_MARKETING, _logged(NODE_MARKETING, "tool_call", marketing_node))
+    graph.add_node(NODE_SENTIMENT, _logged(NODE_SENTIMENT, "decision", sentiment_analysis_node))
 
     graph.set_entry_point(NODE_TOKEN_BUDGET)
 
@@ -228,9 +251,10 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
         route_after_budget_check,
         {"continue": NODE_INTENT_ROUTING, "exceeded": NODE_HUMAN_HANDOFF},
     )
+    graph.add_edge(NODE_INTENT_ROUTING, NODE_SENTIMENT)
     graph.add_conditional_edges(
-        NODE_INTENT_ROUTING,
-        route_after_intent,
+        NODE_SENTIMENT,
+        route_after_sentiment,
         {
             "rag_query": NODE_RAG_QUERY,
             "human_handoff": NODE_HUMAN_HANDOFF,
