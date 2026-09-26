@@ -124,6 +124,12 @@ class Settings(BaseSettings):
     # Validez del token del stream: se usa segundos despues de emitirlo.
     VOICE_STREAM_TOKEN_TTL_SECONDS: int = 60
     VOICE_WELCOME_MESSAGE: str = "Hola, gracias por llamar. ¿En qué le puedo ayudar?"
+    VOICE_OUTBOUND_WELCOME_MESSAGE: str = "Hola, le llamamos de parte de nuestro equipo."
+    # Lo dice Twilio si el stream de audio se cierra de nuestro lado (error,
+    # tope de llamadas, fin del tiempo maximo).
+    VOICE_UNAVAILABLE_MESSAGE: str = (
+        "Lo sentimos, no podemos continuar la llamada en este momento. Intente más tarde."
+    )
     # Idioma y voz del saludo, que lo dice Twilio (`<Say>`) antes del stream.
     VOICE_TWIML_LANGUAGE: str = "es-MX"
     VOICE_TWIML_VOICE: str = "Polly.Mia"

@@ -29,6 +29,8 @@ from app.api.v1.quick_replies import router as quick_replies_router
 from app.api.v1.tags import contact_tags_router
 from app.api.v1.tags import router as tags_router
 from app.api.v1.templates import router as templates_router
+from app.api.v1.voice import router as voice_router
+from app.api.v1.voice_ws import router as voice_ws_router
 from app.api.v1.webchat import router as webchat_router
 from app.api.v1.webhooks import router as webhooks_router
 from app.api.v1.webhooks_config import router as webhooks_config_router
@@ -160,6 +162,10 @@ def create_app() -> FastAPI:
     # HMAC. El prefijo debe coincidir con WEBHOOK_PATHS_PREFIX del middleware.
     app.include_router(webhooks_router, prefix="/api/v1/webhooks", tags=["webhooks"])
     app.include_router(webchat_router, prefix="/api/v1/webchat", tags=["webchat"])
+    # Voz (Sprint 13): `/twilio/*` se autentica con la firma de Twilio (exento del
+    # JWT en el middleware); `/stream` es el WebSocket de audio, con token propio.
+    app.include_router(voice_router, prefix="/api/v1/voice", tags=["voice"])
+    app.include_router(voice_ws_router, prefix="/api/v1/voice", tags=["voice"])
     app.include_router(documents_router, prefix="/api/v1/documents", tags=["documents"])
     app.include_router(contacts_router, prefix="/api/v1/contacts", tags=["contacts"])
     # Notas y etiquetas de un contacto cuelgan del propio contacto:
