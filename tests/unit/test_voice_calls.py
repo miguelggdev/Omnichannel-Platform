@@ -707,3 +707,43 @@ class TestWebSocket:
             assert media["streamSid"] == "MZ1"
             assert marca == {"event": "mark", "streamSid": "MZ1", "mark": {"name": "m1"}}
             ws.send_json({"event": "stop"})
+
+
+class TestRespuestaHablada:
+    def test_texto_para_voz_quita_markdown_y_urls(self) -> None:
+        texto = "**Horario:** lunes a viernes. Mira [la web](https://x.co/a) o https://y.co\n# Nota"
+        assert cm.texto_para_voz(texto) == "Horario: lunes a viernes. Mira la web o Nota"
+
+    async def test_una_respuesta_larga_se_sintetiza_y_se_manda_por_oraciones(
+        self, ajustes: Any, redis: FakeRedis, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """La primera oracion suena mientras se sintetiza la siguiente."""
+        monkeypatch.setattr(cm, "TTS_CHUNK_CHARS", 20)
+        arnes = _Sesion(audio_tts=b"\xff" * 160)
+        orden: list[str] = []
+
+        async def _sintetizar(texto: str, client_id: str) -> bytes:
+            orden.append(f"tts:{texto}")
+            return b"\xff" * 160
+
+        async def _enviar(evento: dict[str, Any]) -> None:
+            orden.append(evento["event"])
+            arnes.enviados.append(evento)
+
+        arnes.sesion._synthesize = _sintetizar
+        arnes.sesion._send = _enviar
+        await arnes.sesion.start()
+        await redis.publish(
+            canal_de_salida(TENANT, CLIENTE),
+            '{"type": "say", "message_id": "m1", "text": "Primera oracion. Segunda oracion."}',
+        )
+        await _esperar(lambda: arnes.eventos("mark"))
+        await arnes.sesion.close("stop")
+
+        assert orden == [
+            "tts:Primera oracion.",
+            "media",
+            "tts:Segunda oracion.",
+            "media",
+            "mark",
+        ]

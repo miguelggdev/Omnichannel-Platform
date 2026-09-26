@@ -32,6 +32,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from functools import partial
@@ -50,7 +51,7 @@ from app.services.voice.stt_streaming import (
     UtteranceSegmenter,
     transcribir_con_whisper,
 )
-from app.services.voice.tts_service import synthesize_mulaw
+from app.services.voice.tts_service import split_text, synthesize_mulaw
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,35 @@ DEDUP_CHANNEL = "voice"
 
 #: Turnos de la transcripcion que se guardan como maximo en `call_records`.
 MAX_TRANSCRIPT_TURNS = 500
+
+#: Caracteres por trozo de sintesis: una o dos oraciones. Mas corto = antes suena
+#: la primera palabra; mas largo = menos llamadas a la API.
+TTS_CHUNK_CHARS = 280
+
+_ENLACE_MARKDOWN = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_URL = re.compile(r"https?://\S+")
+_MARCAS_MARKDOWN = re.compile(r"[*_#`>|~]+")
+_ESPACIOS = re.compile(r"\s+")
+
+
+def texto_para_voz(texto: str) -> str:
+    """Quita del texto lo que el TTS leeria en voz alta sin sentido.
+
+    Las respuestas del agente se escriben para chat: pueden traer negritas,
+    titulos, listas o enlaces. Dicho por telefono, "asterisco asterisco" o una
+    URL deletreada no ayudan a nadie. La transcripcion guarda el texto original.
+
+    Args:
+        texto: Respuesta del agente.
+
+    Returns:
+        El texto sin marcas de markdown ni URLs.
+    """
+    limpio = _ENLACE_MARKDOWN.sub(r"\1", texto)
+    limpio = _URL.sub("", limpio)
+    limpio = _MARCAS_MARKDOWN.sub(" ", limpio)
+    return _ESPACIOS.sub(" ", limpio).strip()
+
 
 Enviar = Callable[[dict[str, Any]], Awaitable[None]]
 Sintetizar = Callable[[str, str], Awaitable[bytes]]
@@ -309,31 +339,42 @@ class CallSession:
             await asyncio.wait({self._hablando})
 
     async def _decir(self, texto: str, message_id: str) -> None:
-        """Sintetiza una respuesta y la manda a Twilio.
+        """Sintetiza una respuesta por oraciones y la manda a Twilio.
+
+        Cada trozo se manda apenas esta sintetizado: el cliente empieza a oir la
+        primera oracion mientras se sintetiza la segunda, en vez de esperar la
+        respuesta entera. Si falla un trozo, se corta ahi: saltarselo y seguir
+        dejaria una respuesta sin sentido.
 
         Args:
             texto: Respuesta del agente.
             message_id: Id del mensaje, usado como nombre de la marca.
         """
-        try:
-            audio = await self._synthesize(texto, self.claims.client_id)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Voz: no se pudo sintetizar una respuesta en %s", self.claims.call_sid)
-            return
-        self._marcas_pendientes.add(message_id)
-        for trama in frames(audio):
+        mando_audio = False
+        for trozo in split_text(texto_para_voz(texto), limit=TTS_CHUNK_CHARS):
+            try:
+                audio = await self._synthesize(trozo, self.claims.client_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "Voz: no se pudo sintetizar una respuesta en %s", self.claims.call_sid
+                )
+                break
+            self._marcas_pendientes.add(message_id)
+            mando_audio = True
+            for trama in frames(audio):
+                await self._enviar(
+                    {
+                        "event": "media",
+                        "streamSid": self.stream_sid,
+                        "media": {"payload": base64.b64encode(trama).decode("ascii")},
+                    }
+                )
+        if mando_audio:
             await self._enviar(
-                {
-                    "event": "media",
-                    "streamSid": self.stream_sid,
-                    "media": {"payload": base64.b64encode(trama).decode("ascii")},
-                }
+                {"event": "mark", "streamSid": self.stream_sid, "mark": {"name": message_id}}
             )
-        await self._enviar(
-            {"event": "mark", "streamSid": self.stream_sid, "mark": {"name": message_id}}
-        )
 
     # ─── Utilidades ──────────────────────────────────────────────────────────
 
