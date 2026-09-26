@@ -56,6 +56,10 @@ HANDOFF_MESSAGES: dict[str, str] = {
     "transcription_failed": (
         "No pude escuchar tu audio. Te comunico con una persona del equipo para que te ayude."
     ),
+    "negative_sentiment": (
+        "Siento mucho la molestia. Te comunico con una persona del equipo para que "
+        "revise tu caso directamente."
+    ),
     "scheduling_unavailable": (
         "Hubo un problema al gestionar tu cita. Te transfiero con un agente humano "
         "para ayudarte a agendarla."

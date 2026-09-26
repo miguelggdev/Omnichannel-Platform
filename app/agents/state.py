@@ -44,6 +44,12 @@ class ConversationState(TypedDict, total=False):
         partial_results: Resultados de tools que si se ejecutaron antes de un
             error en el mismo turno (ej. `scheduling_node` con varias
             tool_calls), para que un handoff no pierda esa informacion.
+        current_sentiment: Sentimiento del mensaje actual (`positive`,
+            `neutral`, `negative`, `very_negative`), si el tenant lo mide.
+        sentiment_score: Confianza de esa clasificacion (0.0 - 1.0).
+        consecutive_very_negative: Mensajes `very_negative` seguidos. A
+            diferencia del resto, sobrevive entre turnos: el checkpointer lo
+            persiste y `ai_processor._initial_state()` no lo pisa (Sprint 10).
     """
 
     client_id: str
@@ -72,3 +78,7 @@ class ConversationState(TypedDict, total=False):
 
     error: str | None
     partial_results: list[str] | None
+
+    current_sentiment: str | None
+    sentiment_score: float | None
+    consecutive_very_negative: int

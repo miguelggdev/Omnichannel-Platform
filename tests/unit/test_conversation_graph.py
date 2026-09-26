@@ -17,6 +17,7 @@ from app.agents.graph import (
     route_after_intent,
     route_after_rag,
     route_after_scheduling,
+    route_after_sentiment,
 )
 from tests.unit.agent_doubles import estado
 
@@ -100,8 +101,8 @@ class TestBuildConversationGraph:
 
         assert compiled is not None
 
-    def test_tiene_los_nueve_nodos(self) -> None:
-        """Los 6 de Sprint 6, `scheduling` (Sprint 7) y los dos agentes del Sprint 12."""
+    def test_tiene_los_diez_nodos(self) -> None:
+        """Los 6 de Sprint 6, `scheduling` (7), los agentes del 12 y `sentiment_analysis` (10)."""
         graph = build_conversation_graph()
 
         assert set(graph.nodes.keys()) == {
@@ -114,7 +115,30 @@ class TestBuildConversationGraph:
             "scheduling",
             "financial",
             "marketing",
+            "sentiment_analysis",
         }
+
+    def test_el_sentimiento_va_entre_el_intent_y_el_destino(self) -> None:
+        graph = build_conversation_graph()
+
+        assert ("intent_routing", "sentiment_analysis") in graph.edges
+
+
+class TestRouteAfterSentiment:
+    """`route_after_sentiment`: el enojo sostenido manda a humano; si no, manda el intent."""
+
+    def test_si_el_sentimiento_forzo_el_handoff_va_a_humano(self) -> None:
+        assert (
+            route_after_sentiment(estado(intent="rag_query", requires_handoff=True))
+            == "human_handoff"
+        )
+
+    @pytest.mark.parametrize(
+        ("intent", "destino"),
+        [("scheduling", "scheduling"), ("greeting", "respond"), ("rag_query", "rag_query")],
+    )
+    def test_sin_handoff_sigue_el_camino_del_intent(self, intent: str, destino: str) -> None:
+        assert route_after_sentiment(estado(intent=intent)) == destino
 
 
 class TestGetGraphWithCheckpointer:

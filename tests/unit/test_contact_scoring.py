@@ -34,9 +34,56 @@ class TestPesos:
     def test_los_pesos_suman_uno(self) -> None:
         assert round(sum(cs.PESOS.values()), 6) == 1.0
 
-    def test_no_queda_componente_de_sentimiento(self) -> None:
-        """El sentimiento se saco a proposito: no hay de donde leerlo."""
+    def test_sin_datos_de_sentimiento_no_hay_componente(self) -> None:
+        """Sin mensajes medidos, un "neutral por defecto" no distinguiria a nadie."""
         assert "sentiment" not in cs.PESOS
+
+    def test_con_sentimiento_se_usan_los_pesos_del_spec(self) -> None:
+        assert cs.PESOS_CON_SENTIMIENTO == {
+            "recency": 0.25,
+            "frequency": 0.25,
+            "sentiment": 0.20,
+            "engagement": 0.15,
+            "conversion": 0.15,
+        }
+        assert round(sum(cs.PESOS_CON_SENTIMIENTO.values()), 6) == 1.0
+
+
+class TestSentimiento:
+    """El quinto componente, que desde el Sprint 10 tiene de donde leerse."""
+
+    def test_sin_mensajes_medidos_el_score_no_cambia(self) -> None:
+        """Un tenant que no mide sentimiento conserva exactamente su score."""
+        base = _metricas(ultima_actividad=AHORA, entrantes=7, salientes=9, conversiones=1)
+
+        assert calcular_score(base, AHORA) == calcular_score(
+            _metricas(
+                ultima_actividad=AHORA, entrantes=7, salientes=9, conversiones=1, sentimiento=None
+            ),
+            AHORA,
+        )
+
+    def test_mejor_sentimiento_da_mejor_score(self) -> None:
+        comun = {"ultima_actividad": AHORA, "entrantes": 7, "salientes": 9, "conversiones": 1}
+
+        enojado = calcular_score(_metricas(**comun, sentimiento=0.0), AHORA)
+        contento = calcular_score(_metricas(**comun, sentimiento=100.0), AHORA)
+
+        assert contento - enojado == pytest.approx(100.0 * 0.20, abs=0.01)
+
+    def test_contacto_ideal_con_sentimiento_sigue_dando_cien(self) -> None:
+        score = calcular_score(
+            _metricas(
+                ultima_actividad=AHORA,
+                entrantes=30,
+                salientes=30,
+                conversiones=5,
+                sentimiento=100.0,
+            ),
+            AHORA,
+        )
+
+        assert score == pytest.approx(100.0)
 
     def test_recencia_y_frecuencia_pesan_igual(self) -> None:
         """El spec les da el mismo peso; el reparto no debe romper eso."""
@@ -164,20 +211,28 @@ class TestCargarMetricas:
     @pytest.mark.asyncio
     async def test_una_sola_consulta(self) -> None:
         """Las cuatro metricas salen en un SELECT, no en cinco."""
-        fila = SimpleNamespace(ultima_actividad=AHORA, entrantes=3, salientes=6, conversiones=2)
+        fila = SimpleNamespace(
+            ultima_actividad=AHORA, entrantes=3, salientes=6, conversiones=2, sentimiento=62.5
+        )
         sesion = _SesionFalsa(fila)
 
         metricas = await cs.cargar_metricas(sesion, uuid4(), uuid4(), AHORA)
 
         assert len(sesion.ejecutadas) == 1
         assert metricas == MetricasDelContacto(
-            ultima_actividad=AHORA, entrantes=3, salientes=6, conversiones=2
+            ultima_actividad=AHORA, entrantes=3, salientes=6, conversiones=2, sentimiento=62.5
         )
+        sql = str(sesion.ejecutadas[0]).lower()
+        assert "avg(" in sql, "el sentimiento se promedia en la misma consulta"
 
     @pytest.mark.asyncio
     async def test_nulos_de_la_base_se_vuelven_cero(self) -> None:
         fila = SimpleNamespace(
-            ultima_actividad=None, entrantes=None, salientes=None, conversiones=None
+            ultima_actividad=None,
+            entrantes=None,
+            salientes=None,
+            conversiones=None,
+            sentimiento=None,
         )
 
         metricas = await cs.cargar_metricas(_SesionFalsa(fila), uuid4(), uuid4(), AHORA)
@@ -192,7 +247,9 @@ class TestRecalcularScore:
     async def test_escribe_por_concatenacion_jsonb_y_no_reescribe_el_metadata_entero(self) -> None:
         """Un UPDATE que pisara `metadata` completo borraria lo que el tenant
         guarda ahi por la API del CRM."""
-        fila = SimpleNamespace(ultima_actividad=AHORA, entrantes=10, salientes=10, conversiones=1)
+        fila = SimpleNamespace(
+            ultima_actividad=AHORA, entrantes=10, salientes=10, conversiones=1, sentimiento=None
+        )
         sesion = _SesionFalsa(fila)
 
         score, momento = await cs.recalcular_score(sesion, uuid4(), uuid4(), AHORA)
@@ -206,7 +263,9 @@ class TestRecalcularScore:
 
     @pytest.mark.asyncio
     async def test_filtra_por_client_id_ademas_de_rls(self) -> None:
-        fila = SimpleNamespace(ultima_actividad=None, entrantes=0, salientes=0, conversiones=0)
+        fila = SimpleNamespace(
+            ultima_actividad=None, entrantes=0, salientes=0, conversiones=0, sentimiento=None
+        )
         sesion = _SesionFalsa(fila)
 
         await cs.recalcular_score(sesion, uuid4(), uuid4(), AHORA)
