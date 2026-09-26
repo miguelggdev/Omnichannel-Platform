@@ -28,12 +28,12 @@ llamada saliente solo la puede pedir un usuario de ese tenant: el numero de
 Twilio es de el.
 """
 
+import html
 import logging
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl
 from uuid import UUID
-from xml.sax.saxutils import escape, quoteattr
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import func, select
@@ -160,6 +160,34 @@ def _wss(settings: Settings) -> str:
     return f"{'wss' if esquema == 'https' else 'ws'}://{resto}/api/v1/voice/stream"
 
 
+def _texto_xml(valor: str) -> str:
+    """Escapa texto para el contenido de un elemento TwiML.
+
+    `html.escape` y no `xml.sax.saxutils`: el resultado es el mismo escapado
+    valido en XML, sin importar un modulo de parseo XML (bandit B406) en un
+    endpoint que solo genera XML y nunca lo lee.
+
+    Args:
+        valor: Texto a escapar.
+
+    Returns:
+        El texto con `&`, `<` y `>` escapados.
+    """
+    return html.escape(valor, quote=False)
+
+
+def _atributo_xml(valor: str) -> str:
+    """Escapa y entrecomilla un valor de atributo TwiML.
+
+    Args:
+        valor: Valor del atributo.
+
+    Returns:
+        El valor entre comillas dobles, con comillas y `&<>` escapados.
+    """
+    return f'"{html.escape(valor, quote=True)}"'
+
+
 def twiml_de_llamada(settings: Settings, saludo: str, token: str) -> str:
     """TwiML que saluda, conecta el stream de audio y se despide si se corta.
 
@@ -175,15 +203,15 @@ def twiml_de_llamada(settings: Settings, saludo: str, token: str) -> str:
     Returns:
         El documento TwiML.
     """
-    voz = f"language={quoteattr(settings.VOICE_TWIML_LANGUAGE)} voice={quoteattr(settings.VOICE_TWIML_VOICE)}"
+    voz = f"language={_atributo_xml(settings.VOICE_TWIML_LANGUAGE)} voice={_atributo_xml(settings.VOICE_TWIML_VOICE)}"
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
         "<Response>"
-        f"<Say {voz}>{escape(saludo)}</Say>"
-        f"<Connect><Stream url={quoteattr(_wss(settings))}>"
-        f'<Parameter name="token" value={quoteattr(token)}/>'
+        f"<Say {voz}>{_texto_xml(saludo)}</Say>"
+        f"<Connect><Stream url={_atributo_xml(_wss(settings))}>"
+        f'<Parameter name="token" value={_atributo_xml(token)}/>'
         "</Stream></Connect>"
-        f"<Say {voz}>{escape(settings.VOICE_UNAVAILABLE_MESSAGE)}</Say>"
+        f"<Say {voz}>{_texto_xml(settings.VOICE_UNAVAILABLE_MESSAGE)}</Say>"
         "</Response>"
     )
 
