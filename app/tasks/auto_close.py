@@ -25,14 +25,14 @@ a RLS (`FORCE ROW LEVEL SECURITY` en las 18 tablas, y en CI se corre con
 BYPASSRLS; eso es una decision de infraestructura que toca migracion y
 `docker-compose.yml`, y no esta tomada.
 
-Mientras tanto se itera tenant por tenant con `tenant_session()`, que deja la RLS
-activa y genuina. La lista de tenants se intenta leer de `clients`; si la politica
-la bloquea (el caso normal hoy), se cae a `DEFAULT_CLIENT_ID`, que es exactamente
-el tenant que `webhook_processor._resolve_client_id()` usa para *todos* los
-mensajes entrantes del MVP: en la practica, hoy, cubre el 100% de las
-conversaciones que existen. Cuando aparezca el rol de servicio o
-`channel_configs` (Fase 2), el unico punto a cambiar es
-`_load_active_client_ids()`.
+Se itera tenant por tenant con `tenant_session()`, que deja la RLS activa y
+genuina. La lista de tenants sale de `public.list_active_client_ids()`
+(migracion 015, BUG-045), una funcion `SECURITY DEFINER` que solo devuelve los
+UUID de los tenants activos — mismo patron que `auth_lookup_user()` del login.
+Antes se leia `clients` directamente, la RLS lo bloqueaba y se caia siempre a
+`DEFAULT_CLIENT_ID`: las campanas programadas y el auto-cierre de cualquier
+otro tenant no corrian nunca. Esa caida se conserva solo como red para una base
+sin la migracion 015.
 """
 
 import logging
@@ -128,11 +128,11 @@ async def _auto_close() -> dict[str, Any]:
 async def _load_active_client_ids() -> list[UUID]:
     """Devuelve los tenants activos a barrer.
 
-    Intenta el listado completo de `clients`. La politica de RLS de esa tabla
-    filtra por `id = current_setting('app.current_client_id')`, que sin contexto
-    de tenant ni siquiera esta definido: la consulta falla y se cae al
-    `DEFAULT_CLIENT_ID`. Es el comportamiento esperado hoy, por eso el aviso es
-    WARNING y no ERROR.
+    Los lee con `public.list_active_client_ids()` (migracion 015), la unica via
+    sin contexto de tenant hacia `clients`: la politica de RLS de esa tabla
+    filtra por `app.current_client_id`, asi que un `SELECT` directo falla. Si la
+    funcion no existe (base sin la 015) se cae a `DEFAULT_CLIENT_ID` con un
+    ERROR en el log, porque entonces los demas tenants quedan sin barrer.
 
     Returns:
         Lista de UUIDs de tenants; vacia si no hay ninguno alcanzable.
@@ -140,7 +140,7 @@ async def _load_active_client_ids() -> list[UUID]:
     try:
         async with AsyncSessionLocal() as session:
             filas = (
-                await session.execute(text("SELECT id FROM clients WHERE is_active = true"))
+                await session.execute(text("SELECT * FROM public.list_active_client_ids()"))
             ).all()
         client_ids = [
             fila[0] if isinstance(fila[0], UUID) else UUID(str(fila[0])) for fila in filas
@@ -150,9 +150,10 @@ async def _load_active_client_ids() -> list[UUID]:
         logger.warning("No hay tenants activos en `clients`; no hay nada que barrer")
         return []
     except Exception as exc:
-        logger.warning(
-            "No se pudo listar `clients` (esperable: RLS lo bloquea para el rol de la "
-            "aplicacion): %s. Se usa DEFAULT_CLIENT_ID",
+        logger.error(
+            "No se pudo listar los tenants con list_active_client_ids() (falta la "
+            "migracion 015?): %s. Se usa solo DEFAULT_CLIENT_ID; el resto de los "
+            "tenants queda sin barrer",
             exc,
         )
 

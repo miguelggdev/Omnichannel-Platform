@@ -216,21 +216,19 @@ class TestListadoDeTenants:
     """De donde sale la lista de tenants a barrer."""
 
     async def test_usa_clients_cuando_es_legible(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Con un rol que ve `clients`, se barren todos los tenants."""
+        """Con la funcion de la migracion 015, se barren todos los tenants."""
         ids = [uuid.uuid4(), uuid.uuid4()]
         session = CrmSession(resultados=[[(i,) for i in ids]])
         monkeypatch.setattr(auto_close_module, "AsyncSessionLocal", _fabrica_de_sesiones(session))
 
         assert await _load_active_client_ids() == ids
+        # No un SELECT directo sobre `clients`: la RLS lo bloquea (BUG-045).
+        assert "list_active_client_ids()" in str(session.executed[0])
 
     async def test_si_rls_bloquea_clients_cae_a_default_client_id(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Es el caso normal hoy: el rol de la app no puede listar `clients`.
-
-        `webhook_processor` resuelve TODOS los mensajes entrantes a
-        DEFAULT_CLIENT_ID, asi que ese tenant cubre lo que existe en el MVP.
-        """
+        """Red para una base sin la migracion 015: al menos se barre el tenant por defecto."""
 
         def _revienta(*_: Any, **__: Any) -> Any:
             raise RuntimeError("permission denied for table clients")
