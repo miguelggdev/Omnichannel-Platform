@@ -28,7 +28,10 @@ campanas `scheduled` cuya `scheduled_for` ya llego. Tambien recupera la que se
 confirmo para "ahora" y cuya task se perdio (worker caido antes de arrancarla):
 sin esta pasada quedaba en `scheduled` para siempre, sin poder reenviarse ni
 borrarse. Encolar dos veces la misma campana es inocuo: `_marcar_en_envio()`
-la bloquea con `FOR UPDATE` y solo una task la pasa a `sending`.
+la bloquea con `FOR UPDATE` y solo una task la pasa a `sending`. Aun asi, una
+marca en Redis (`SET NX EX`, `VENTANA_REENCOLADO_SEGUNDOS`) evita que, mientras
+una campana larga ocupa el worker de `bulk`, cada pasada de Beat vuelva a
+encolar las vencidas que esperan detras y la cola se llene de no-ops.
 
 Que NO hace
 ------------
@@ -77,6 +80,7 @@ from app.services.campaigns import (
     plantilla_aprobada,
     serializar_lanzamientos,
 )
+from app.services.dedup import get_redis
 from app.services.messaging.base import MessageContent
 from app.services.messaging.factory import get_messaging_provider
 from app.services.segmentation import CriterioInvalidoError, resolver_segmento
@@ -449,6 +453,37 @@ async def _campanas_vencidas(client_id: UUID) -> list[UUID]:
         return [campaign_id for (campaign_id,) in filas.all()]
 
 
+#: Cuanto tarda el despachador en volver a encolar una campana vencida que
+#: sigue en `scheduled`. Una sola pasada basta si el worker de `bulk` esta
+#: libre; si no, la campana espera en la cola y no hace falta otra copia. A
+#: los 10 minutos se reintenta por si la task se perdio.
+VENTANA_REENCOLADO_SEGUNDOS = 600
+
+
+async def _reservar_encolado(campaign_id: UUID) -> bool:
+    """Marca en Redis que la campana se acaba de encolar, si no lo estaba ya.
+
+    Args:
+        campaign_id: Campana a encolar.
+
+    Returns:
+        `True` si hay que encolarla. Ante un fallo de Redis tambien `True`
+        (fail-open): una copia de mas es inocua gracias al `FOR UPDATE` de
+        `_marcar_en_envio()`; una campana que no sale no lo es.
+    """
+    try:
+        return bool(
+            await get_redis().set(
+                f"campaign_dispatch:{campaign_id}", "1", nx=True, ex=VENTANA_REENCOLADO_SEGUNDOS
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "Redis no disponible para el despacho de la campana %s: %s", campaign_id, exc
+        )
+        return True
+
+
 async def _despachar_programadas() -> dict[str, int]:
     """Encola las campanas programadas que ya tienen que salir, en todos los tenants.
 
@@ -465,6 +500,8 @@ async def _despachar_programadas() -> dict[str, int]:
     for client_id in client_ids:
         try:
             for campaign_id in await _campanas_vencidas(client_id):
+                if not await _reservar_encolado(campaign_id):
+                    continue
                 execute_campaign.delay(str(client_id), str(campaign_id))
                 encoladas += 1
         except Exception:

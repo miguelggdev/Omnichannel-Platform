@@ -144,6 +144,23 @@ class TestSegmentacion:
 
         assert sql.count("EXISTS") == 2
 
+    @pytest.mark.parametrize("criterio", ["score_min", "last_active_days"])
+    def test_un_booleano_no_cuenta_como_numero(self, criterio: str) -> None:
+        """`bool` es subclase de `int`: `score_min: true` filtraba por score >= 1."""
+        with pytest.raises(CriterioInvalidoError, match="tiene que ser un numero"):
+            construir_query(uuid4(), {criterio: True})
+
+    @pytest.mark.parametrize("valor", [True, 1.5, 7, "gold", None])
+    def test_metadata_compara_valores_json_con_su_tipo(self, valor: object) -> None:
+        """Antes `str(True)` = "True" contra el "true" de JSON: no encontraba a nadie."""
+        from sqlalchemy.dialects import postgresql
+
+        stmt = construir_query(uuid4(), {"metadata": {"vip": valor}})
+        compilado = stmt.compile(dialect=postgresql.dialect())
+
+        assert "contacts.metadata @> " in str(compilado)
+        assert {"vip": valor} in compilado.params.values()
+
     def test_nunca_entran_fusionados_ni_borrados_por_rgpd(self) -> None:
         sql = " ".join(str(construir_query(uuid4(), {}).compile()).split())
 
@@ -527,6 +544,28 @@ class TestMarcarEnEnvio:
 
 
 class TestDespachoDeProgramadas:
+    @pytest.fixture(autouse=True)
+    def _redis_libre(self, monkeypatch) -> None:
+        """Por defecto ninguna campana tiene marca de encolado reciente."""
+        monkeypatch.setattr(ct, "_reservar_encolado", AsyncMock(return_value=True))
+
+    @pytest.mark.asyncio
+    async def test_no_reencola_una_que_ya_se_encolo_hace_poco(self, monkeypatch) -> None:
+        """Con el worker de bulk ocupado, cada pasada de Beat apilaba otra copia."""
+        tenant = uuid4()
+        ya_encolada, nueva = uuid4(), uuid4()
+        monkeypatch.setattr(ct, "_load_active_client_ids", AsyncMock(return_value=[tenant]))
+        monkeypatch.setattr(ct, "_campanas_vencidas", AsyncMock(return_value=[ya_encolada, nueva]))
+        monkeypatch.setattr(
+            ct, "_reservar_encolado", AsyncMock(side_effect=lambda cid: cid == nueva)
+        )
+
+        with patch.object(ct.execute_campaign, "delay") as mock_delay:
+            resultado = await ct._despachar_programadas()
+
+        assert resultado["enqueued"] == 1
+        mock_delay.assert_called_once_with(str(tenant), str(nueva))
+
     @pytest.mark.asyncio
     async def test_encola_las_vencidas_de_cada_tenant(self, monkeypatch) -> None:
         tenant_a, tenant_b = uuid4(), uuid4()
@@ -715,3 +754,37 @@ class TestContextoFinanciero:
 
         assert "Sin contacto identificado" in contexto
         assert sesion.ejecutadas == []
+
+
+class TestMarcaDeEncolado:
+    """`_reservar_encolado()`: SET NX EX en Redis, fail-open."""
+
+    @pytest.mark.asyncio
+    async def test_la_primera_vez_reserva_con_ttl(self, monkeypatch) -> None:
+        redis = SimpleNamespace(set=AsyncMock(return_value=True))
+        monkeypatch.setattr(ct, "get_redis", lambda: redis)
+        campaign_id = uuid4()
+
+        assert await ct._reservar_encolado(campaign_id) is True
+        redis.set.assert_awaited_once_with(
+            f"campaign_dispatch:{campaign_id}",
+            "1",
+            nx=True,
+            ex=ct.VENTANA_REENCOLADO_SEGUNDOS,
+        )
+
+    @pytest.mark.asyncio
+    async def test_con_marca_vigente_no_reserva(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            ct, "get_redis", lambda: SimpleNamespace(set=AsyncMock(return_value=None))
+        )
+
+        assert await ct._reservar_encolado(uuid4()) is False
+
+    @pytest.mark.asyncio
+    async def test_sin_redis_encola_igual(self, monkeypatch) -> None:
+        """Una copia de mas es inocua (FOR UPDATE); una campana que no sale, no."""
+        caido = SimpleNamespace(set=AsyncMock(side_effect=ConnectionError("redis caido")))
+        monkeypatch.setattr(ct, "get_redis", lambda: caido)
+
+        assert await ct._reservar_encolado(uuid4()) is True

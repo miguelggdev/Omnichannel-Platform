@@ -57,6 +57,10 @@ async def tenant_campanas() -> AsyncGenerator[uuid.UUID, None]:
         )
         await session.execute(text("DELETE FROM clients WHERE id = :cid"), {"cid": str(client_id)})
 
+    # Liberar el pool en ESTE loop: si lo hace el test siguiente, desde otro
+    # loop, cada conexion vieja deja un "Exception closing connection".
+    await engine.dispose()
+
 
 async def _crear_campana(client_id: uuid.UUID, **campos: Any) -> uuid.UUID:
     """Inserta una campana confirmada (`scheduled`) y lista para salir."""

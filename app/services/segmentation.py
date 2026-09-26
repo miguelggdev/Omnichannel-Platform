@@ -75,7 +75,12 @@ def _validar(criterios: dict[str, Any]) -> None:
     if "metadata" in criterios and not isinstance(criterios["metadata"], dict):
         raise CriterioInvalidoError("`metadata` tiene que ser un objeto clave/valor")
     for numerico in ("last_active_days", "score_min"):
-        if numerico in criterios and not isinstance(criterios[numerico], (int, float)):
+        valor = criterios.get(numerico)
+        # `bool` es subclase de `int` en Python: sin excluirlo, `score_min: true`
+        # pasaba la validacion y filtraba por `score >= 1.0`.
+        if numerico in criterios and (
+            isinstance(valor, bool) or not isinstance(valor, (int, float))
+        ):
             raise CriterioInvalidoError(f"`{numerico}` tiene que ser un numero")
 
 
@@ -155,7 +160,13 @@ def construir_query(client_id: UUID, criterios: dict[str, Any]) -> Select[tuple[
         )
 
     for clave, valor in (criterios.get("metadata") or {}).items():
-        stmt = stmt.where(Contact.metadata_[clave].astext == str(valor))
+        # Contencion JSONB (`metadata @> '{"clave": valor}'`), no
+        # `metadata->>'clave' = str(valor)`: el `str()` de Python no es el
+        # texto de JSON, asi que `{"vip": true}` buscaba "True" contra el
+        # "true" guardado y `{"nivel": 1.0}` buscaba "1.0" contra "1" — el
+        # filtro no encontraba a nadie. La contencion compara valores JSON con
+        # su tipo (y los numeros por valor: 1 = 1.0).
+        stmt = stmt.where(Contact.metadata_.contains({clave: valor}))
 
     return stmt
 
