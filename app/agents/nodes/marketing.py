@@ -8,7 +8,10 @@ Quien puede usarlo
 Este agente no atiende clientes finales: opera sobre la base de contactos del
 tenant y dispara envios masivos. Solo se alcanza si el tenant habilito el
 agente `marketing` en `agent_configs.config.enabled_agents`, igual que el
-resto de los agentes del grafo. Las reglas que protegen de un envio indebido
+resto de los agentes del grafo, **y** solo atiende a los contactos declarados
+como operadores en `agent_configs.config.marketing.operator_contact_ids`
+(BUG-045): habilitarlo no dice nada de quien escribe, y este grafo es el mismo
+que contesta a los clientes por WhatsApp. Las reglas que protegen de un envio indebido
 (plantilla de WhatsApp aprobada, sin duplicados en 24 horas, envio siempre por
 la cola `bulk`) viven en las tools, no en el prompt: un prompt lo puede
 ignorar el modelo.
@@ -23,6 +26,8 @@ from app.agents.nodes._agent_tools import responder_con_tools
 from app.agents.nodes._state import ConversationState
 from app.agents.nodes._tenant import get_agent_settings
 from app.agents.tools.marketing_tools import CANALES_VALIDOS, MARKETING_TOOLS
+from app.core.database import tenant_session
+from app.services.campaigns import es_operador_de_marketing
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +38,12 @@ INTENT = "marketing"
 MENSAJE_NO_HABILITADO = (
     "El modulo de marketing no esta habilitado para esta cuenta. "
     "Un administrador puede activarlo desde la configuracion."
+)
+
+#: Respuesta a un contacto que no es operador de marketing del tenant. No
+#: menciona campanas ni envios: quien escribe es, casi siempre, un cliente.
+MENSAJE_NO_AUTORIZADO = (
+    "No puedo ayudarte con eso por este canal. Si tienes otra consulta, con gusto te ayudo."
 )
 
 SYSTEM_PROMPT_TEMPLATE = """Eres un agente de marketing conversacional.
@@ -76,6 +87,20 @@ async def marketing_node(state: ConversationState) -> dict[str, Any]:
     if AGENTE not in ajustes.enabled_agents:
         logger.info("Agente de marketing no habilitado para el tenant %s", client_id)
         return {"response_text": MENSAJE_NO_HABILITADO, "intent": INTENT}
+
+    # Sin gastar una llamada al LLM: un cliente final que pide "manda una
+    # promo a todos" no tiene que llegar a ver las tools.
+    async with tenant_session(UUID(client_id)) as session:
+        autorizado = await es_operador_de_marketing(
+            session, UUID(client_id), state.get("contact_id")
+        )
+    if not autorizado:
+        logger.warning(
+            "Contacto %s del tenant %s pidio el agente de marketing sin ser operador",
+            state.get("contact_id"),
+            client_id,
+        )
+        return {"response_text": MENSAJE_NO_AUTORIZADO, "intent": INTENT}
 
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         canales=", ".join(CANALES_VALIDOS),

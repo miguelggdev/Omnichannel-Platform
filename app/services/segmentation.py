@@ -27,12 +27,14 @@ persona que sobrevivio, y los segundos pidieron expresamente que no se les
 contacte.
 """
 
+import json
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Numeric, Select, and_, case, exists, func, select
+from sqlalchemy import ColumnElement, Numeric, Select, and_, case, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
@@ -47,6 +49,10 @@ logger = logging.getLogger(__name__)
 CRITERIOS_SOPORTADOS: frozenset[str] = frozenset(
     {"tags", "channel", "last_active_days", "score_min", "metadata"}
 )
+
+
+#: Tope de `last_active_days`: un siglo.
+MAX_DIAS_ACTIVIDAD = 36_500
 
 
 class CriterioInvalidoError(ValueError):
@@ -70,13 +76,66 @@ def _validar(criterios: dict[str, Any]) -> None:
             f"Validos: {', '.join(sorted(CRITERIOS_SOPORTADOS))}"
         )
 
-    if "tags" in criterios and not isinstance(criterios["tags"], list):
+    if "tags" in criterios and (
+        not isinstance(criterios["tags"], list)
+        or not all(isinstance(tag, str) for tag in criterios["tags"])
+    ):
         raise CriterioInvalidoError("`tags` tiene que ser una lista de nombres de etiqueta")
     if "metadata" in criterios and not isinstance(criterios["metadata"], dict):
         raise CriterioInvalidoError("`metadata` tiene que ser un objeto clave/valor")
     for numerico in ("last_active_days", "score_min"):
-        if numerico in criterios and not isinstance(criterios[numerico], (int, float)):
+        valor = criterios.get(numerico)
+        # `bool` es subclase de `int` en Python: sin excluirlo, `score_min: true`
+        # pasaba la validacion y filtraba por `score >= 1.0`.
+        if numerico in criterios and (
+            isinstance(valor, bool)
+            or not isinstance(valor, (int, float))
+            or not math.isfinite(valor)
+        ):
             raise CriterioInvalidoError(f"`{numerico}` tiene que ser un numero")
+    # `timedelta(days=1e10)` levanta OverflowError y `NaN`/`inf` no son JSON
+    # valido para PostgreSQL: los dos tumbaban la consulta con un 500 en vez de
+    # un 400 (BUG-045). Un segmento por actividad de mas de un siglo no tiene
+    # sentido, y uno negativo tampoco.
+    dias = criterios.get("last_active_days")
+    if dias is not None and not 0 <= dias <= MAX_DIAS_ACTIVIDAD:
+        raise CriterioInvalidoError(
+            f"`last_active_days` tiene que estar entre 0 y {MAX_DIAS_ACTIVIDAD}"
+        )
+    for clave, valor in (criterios.get("metadata") or {}).items():
+        if isinstance(valor, float) and not math.isfinite(valor):
+            raise CriterioInvalidoError(f"`metadata.{clave}` tiene que ser un numero finito")
+
+
+def _coincide_metadata(clave: str, valor: Any) -> ColumnElement[bool]:
+    """Condicion de un criterio `metadata`: la clave vale `valor`.
+
+    Contencion JSONB (`metadata @> '{"clave": valor}'`), no
+    `metadata->>'clave' = str(valor)`: el `str()` de Python no es el texto de
+    JSON, asi que `{"vip": true}` buscaba "True" contra el "true" guardado y
+    `{"nivel": 1.0}` buscaba "1.0" contra "1" — el filtro no encontraba a
+    nadie (BUG-044). La contencion compara con el tipo, y los numeros por
+    valor (1 = 1.0).
+
+    Pero `contacts.metadata` tambien lo escribe el tenant por la API del CRM, y
+    ahi un numero o un booleano puede llegar como texto (`"5"`, `"true"`). Para
+    un criterio escalar que no es texto se acepta ademas el valor guardado como
+    texto con su representacion JSON (`json.dumps`), que es lo que el tenant
+    escribiria: `{"nivel": 5}` encuentra `5` y `"5"`, y `{"vip": true}`
+    encuentra `true` y `"true"`.
+
+    Args:
+        clave: Clave de primer nivel de `metadata`.
+        valor: Valor buscado, tal como vino en los criterios.
+
+    Returns:
+        La condicion para el WHERE.
+    """
+    por_json = Contact.metadata_.contains({clave: valor})
+    if isinstance(valor, bool | int | float):
+        como_texto = Contact.metadata_.contains({clave: json.dumps(valor)})
+        return or_(por_json, como_texto)
+    return por_json
 
 
 def construir_query(client_id: UUID, criterios: dict[str, Any]) -> Select[tuple[Contact]]:
@@ -155,7 +214,7 @@ def construir_query(client_id: UUID, criterios: dict[str, Any]) -> Select[tuple[
         )
 
     for clave, valor in (criterios.get("metadata") or {}).items():
-        stmt = stmt.where(Contact.metadata_[clave].astext == str(valor))
+        stmt = stmt.where(_coincide_metadata(clave, valor))
 
     return stmt
 

@@ -188,3 +188,45 @@ class TestEnviarFactura:
 
         with pytest.raises(DianError):
             await enviar_factura({"total_cents": 100})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cuerpo", ["<html>502</html>", "[1, 2]"])
+    async def test_un_cuerpo_no_interpretable_es_dian_error(self, monkeypatch, cuerpo) -> None:
+        """Antes `dict(respuesta.json())` escapaba como ValueError y tumbaba la tool."""
+        _configurar(monkeypatch)
+        _respuesta_cruda(monkeypatch, 200, cuerpo)
+
+        with pytest.raises(DianError, match="no interpretable"):
+            await enviar_factura({"total_cents": 100})
+
+
+class TestCuerpoNoInterpretableAlConsultar:
+    @pytest.mark.asyncio
+    async def test_devuelve_none_en_vez_de_propagar(self, monkeypatch) -> None:
+        _configurar(monkeypatch)
+        _respuesta_cruda(monkeypatch, 200, "no es json")
+
+        assert await consultar_contribuyente("900373115") is None
+
+
+def _respuesta_cruda(monkeypatch, status_code: int, cuerpo: str) -> None:
+    """Como `_respuesta`, pero con un cuerpo de texto que `json()` debe parsear."""
+    import json as json_mod
+
+    class _Cliente:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def get(self, url: str):
+            return SimpleNamespace(status_code=status_code, json=lambda: json_mod.loads(cuerpo))
+
+        async def post(self, url: str, json=None):
+            return SimpleNamespace(status_code=status_code, json=lambda: json_mod.loads(cuerpo))
+
+    monkeypatch.setattr(dian.httpx, "AsyncClient", lambda **kwargs: _Cliente())

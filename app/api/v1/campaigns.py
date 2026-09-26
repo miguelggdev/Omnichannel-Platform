@@ -21,6 +21,7 @@ tool del agente.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -42,7 +43,9 @@ from app.schemas.campaign import (
 )
 from app.services.campaigns import (
     VENTANA_ANTIDUPLICADOS_HORAS,
+    bloquear_campana,
     campana_duplicada,
+    debe_salir_ya,
     plantilla_aprobada,
 )
 from app.services.segmentation import CriterioInvalidoError, contar_segmento
@@ -55,7 +58,9 @@ router = APIRouter()
 _ROLES = ("super_admin", "admin")
 
 
-async def _campana_o_404(session: AsyncSession, campaign_id: UUID, client_id: UUID) -> Campaign:
+async def _campana_o_404(
+    session: AsyncSession, campaign_id: UUID, client_id: UUID, bloquear: bool = False
+) -> Campaign:
     """Carga una campana del tenant activo o levanta 404.
 
     El `client_id` va explicito en el WHERE ademas de RLS, que es la convencion
@@ -65,6 +70,8 @@ async def _campana_o_404(session: AsyncSession, campaign_id: UUID, client_id: UU
         session: Sesion con el contexto de tenant ya aplicado.
         campaign_id: Campana buscada.
         client_id: Tenant activo.
+        bloquear: Si se lee con `FOR UPDATE` porque se va a cambiar su estado
+            (ver `services/campaigns.py::bloquear_campana`).
 
     Returns:
         La campana.
@@ -72,11 +79,14 @@ async def _campana_o_404(session: AsyncSession, campaign_id: UUID, client_id: UU
     Raises:
         AppException: 404 si no existe en este tenant.
     """
-    campana = (
-        await session.execute(
-            select(Campaign).where(Campaign.id == campaign_id, Campaign.client_id == client_id)
-        )
-    ).scalar_one_or_none()
+    if bloquear:
+        campana = await bloquear_campana(session, client_id, campaign_id)
+    else:
+        campana = (
+            await session.execute(
+                select(Campaign).where(Campaign.id == campaign_id, Campaign.client_id == client_id)
+            )
+        ).scalar_one_or_none()
 
     if campana is None:
         raise AppException(status_code=404, error_code=NOT_FOUND, message="Campana no encontrada")
@@ -243,7 +253,16 @@ async def send_campaign(
     campaign_id: UUID,
     user: dict[str, Any] = Depends(require_role(*_ROLES)),
 ) -> CampaignSendResponse:
-    """Encola el envio de una campana en la cola `bulk`.
+    """Confirma el envio de una campana y, si ya es la hora, lo encola en `bulk`.
+
+    La campana se lee con `FOR UPDATE`: dos `/send` concurrentes (un doble
+    clic) se serializan y el segundo la encuentra ya en `scheduled` y responde
+    400, en vez de encolar un segundo envio al mismo segmento.
+
+    Con `scheduled_for` en el futuro no se encola nada: la campana queda en
+    `scheduled` y la saca `bulk_dispatch_scheduled_campaigns` cuando llegue la
+    hora. Sin fecha, se fija `scheduled_for` en ahora, que ademas deja que esa
+    misma pasada de Beat la recupere si esta task se pierde.
 
     El `status` se commitea **antes** de encolar, no despues: el worker de
     `bulk` puede levantar el mensaje apenas se publica, y si todavia viera la
@@ -265,7 +284,7 @@ async def send_campaign(
     client_id: UUID = user["client_id"]
 
     async with tenant_session(client_id) as session:
-        campana = await _campana_o_404(session, campaign_id, client_id)
+        campana = await _campana_o_404(session, campaign_id, client_id, bloquear=True)
 
         if campana.status != CAMPAIGN_DRAFT:
             raise AppException(
@@ -301,17 +320,29 @@ async def send_campaign(
             )
 
         campana.status = CAMPAIGN_SCHEDULED
+        if campana.scheduled_for is None:
+            campana.scheduled_for = datetime.now(timezone.utc)
         objetivo = campana.target_count
+        programada = campana.scheduled_for
+        sale_ya = debe_salir_ya(campana)
 
-    # Fuera de la transaccion, ya commiteada: el worker abre su propia conexion
-    # y tiene que poder ver la campana en `scheduled`.
-    from app.tasks.campaign_tasks import execute_campaign
+    if sale_ya:
+        # Fuera de la transaccion, ya commiteada: el worker abre su propia
+        # conexion y tiene que poder ver la campana en `scheduled`.
+        from app.tasks.campaign_tasks import execute_campaign
 
-    execute_campaign.delay(str(client_id), str(campaign_id))
+        execute_campaign.delay(str(client_id), str(campaign_id))
+        logger.info("Campana %s encolada para %d contacto(s)", campaign_id, objetivo)
+    else:
+        logger.info(
+            "Campana %s programada para %s (%d contacto(s))", campaign_id, programada, objetivo
+        )
 
-    logger.info("Campana %s encolada para %d contacto(s)", campaign_id, objetivo)
     return CampaignSendResponse(
-        campaign_id=campaign_id, status=CAMPAIGN_SCHEDULED, target_count=objetivo
+        campaign_id=campaign_id,
+        status=CAMPAIGN_SCHEDULED,
+        target_count=objetivo,
+        scheduled_for=programada,
     )
 
 
@@ -336,7 +367,9 @@ async def delete_campaign(
     client_id: UUID = user["client_id"]
 
     async with tenant_session(client_id) as session:
-        campana = await _campana_o_404(session, campaign_id, client_id)
+        # Con candado: sin el, un `/send` concurrente podia confirmar la
+        # campana y encolarla justo mientras este DELETE la borraba.
+        campana = await _campana_o_404(session, campaign_id, client_id, bloquear=True)
 
         if campana.status != CAMPAIGN_DRAFT:
             raise AppException(

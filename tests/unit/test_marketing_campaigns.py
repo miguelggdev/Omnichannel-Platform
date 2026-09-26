@@ -2,6 +2,7 @@
 
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -69,8 +70,18 @@ class _SesionFalsa:
     def add(self, obj) -> None:
         self.added.append(obj)
 
+    async def flush(self) -> None:
+        return None
+
     def expunge_all(self) -> None:
         return None
+
+
+def _sql(stmt) -> str:
+    """Compila una sentencia con el dialecto de PostgreSQL (ahi vive FOR UPDATE)."""
+    from sqlalchemy.dialects import postgresql
+
+    return str(stmt.compile(dialect=postgresql.dialect()))
 
 
 def _sesion(sesion: _SesionFalsa):
@@ -105,6 +116,7 @@ def _campana(**over):
         "failed_count": 0,
         "read_count": 0,
         "replied_count": 0,
+        "scheduled_for": None,
         "started_at": None,
         "error_log": [],
     }
@@ -132,6 +144,62 @@ class TestSegmentacion:
 
         assert sql.count("EXISTS") == 2
 
+    @pytest.mark.parametrize(
+        "criterios",
+        [
+            {"score_min": float("nan")},
+            {"score_min": float("inf")},
+            {"last_active_days": float("inf")},
+            {"last_active_days": 1e10},
+            {"last_active_days": -1},
+            {"tags": ["vip", {"$ne": 1}]},
+            {"metadata": {"nivel": float("nan")}},
+        ],
+    )
+    def test_valores_fuera_de_rango_son_400_y_no_500(self, criterios: dict) -> None:
+        """`timedelta(days=1e10)` y `NaN` en JSONB tumbaban la consulta."""
+        with pytest.raises(CriterioInvalidoError):
+            construir_query(uuid4(), criterios)
+
+    @pytest.mark.parametrize("criterio", ["score_min", "last_active_days"])
+    def test_un_booleano_no_cuenta_como_numero(self, criterio: str) -> None:
+        """`bool` es subclase de `int`: `score_min: true` filtraba por score >= 1."""
+        with pytest.raises(CriterioInvalidoError, match="tiene que ser un numero"):
+            construir_query(uuid4(), {criterio: True})
+
+    @pytest.mark.parametrize("valor", [True, 1.5, 7, "gold", None])
+    def test_metadata_compara_valores_json_con_su_tipo(self, valor: object) -> None:
+        """Antes `str(True)` = "True" contra el "true" de JSON: no encontraba a nadie."""
+        from sqlalchemy.dialects import postgresql
+
+        stmt = construir_query(uuid4(), {"metadata": {"vip": valor}})
+        compilado = stmt.compile(dialect=postgresql.dialect())
+
+        assert "contacts.metadata @> " in str(compilado)
+        assert {"vip": valor} in compilado.params.values()
+
+    @pytest.mark.parametrize(("valor", "texto"), [(True, "true"), (7, "7"), (1.5, "1.5")])
+    def test_metadata_escalar_tambien_acepta_el_valor_guardado_como_texto(
+        self, valor: object, texto: str
+    ) -> None:
+        """El CRM puede guardar `"7"` o `"true"`; el criterio los sigue encontrando."""
+        from sqlalchemy.dialects import postgresql
+
+        compilado = construir_query(uuid4(), {"metadata": {"k": valor}}).compile(
+            dialect=postgresql.dialect()
+        )
+
+        assert {"k": texto} in compilado.params.values()
+
+    def test_metadata_texto_no_agrega_la_variante(self) -> None:
+        from sqlalchemy.dialects import postgresql
+
+        compilado = construir_query(uuid4(), {"metadata": {"plan": "gold"}}).compile(
+            dialect=postgresql.dialect()
+        )
+
+        assert " OR " not in str(compilado)
+
     def test_nunca_entran_fusionados_ni_borrados_por_rgpd(self) -> None:
         sql = " ".join(str(construir_query(uuid4(), {}).compile()).split())
 
@@ -147,6 +215,28 @@ class TestSegmentacion:
 
 
 class TestToolsDeMarketing:
+    @pytest.fixture(autouse=True)
+    def _plantilla_aprobada(self, monkeypatch) -> None:
+        """Por defecto: operador autorizado y plantilla de WhatsApp aprobada."""
+        monkeypatch.setattr(mt, "_no_autorizado", AsyncMock(return_value=None))
+        monkeypatch.setattr(mt, "plantilla_aprobada", AsyncMock(return_value=True))
+
+    @pytest.mark.asyncio
+    async def test_enviar_con_plantilla_ya_no_aprobada_no_encola(self, monkeypatch) -> None:
+        """Antes respondia "encolada" y la campana fallaba despues en el worker."""
+        campana = _campana(channel="whatsapp")
+        monkeypatch.setattr(mt, "tenant_session", _sesion(_SesionFalsa([_Resultado([campana])])))
+        monkeypatch.setattr(mt, "plantilla_aprobada", AsyncMock(return_value=False))
+
+        with patch("app.tasks.campaign_tasks.execute_campaign.delay") as mock_delay:
+            respuesta = await mt.send_campaign.ainvoke(
+                {"campaign_id": str(campana.id)}, config=CONFIG
+            )
+
+        mock_delay.assert_not_called()
+        assert campana.status == CAMPAIGN_DRAFT
+        assert "ya no esta entre las aprobadas" in respuesta
+
     def test_el_llm_no_ve_el_client_id(self) -> None:
         for herramienta in MARKETING_TOOLS:
             assert "config" not in herramienta.args
@@ -262,6 +352,51 @@ class TestToolsDeMarketing:
 
         mock_delay.assert_called_once_with(CLIENT_ID, str(campana.id))
         assert "encolada" in respuesta
+
+    @pytest.mark.asyncio
+    async def test_enviar_confirma_la_campana_con_la_fila_bloqueada(self, monkeypatch) -> None:
+        """Antes la tool no cambiaba el estado: cada llamada encolaba otro envio."""
+        campana = _campana()
+        sesion = _SesionFalsa([_Resultado([campana]), _Resultado([])])
+        monkeypatch.setattr(mt, "tenant_session", _sesion(sesion))
+
+        with patch("app.tasks.campaign_tasks.execute_campaign.delay"):
+            await mt.send_campaign.ainvoke({"campaign_id": str(campana.id)}, config=CONFIG)
+
+        assert "FOR UPDATE" in _sql(sesion.ejecutadas[0])
+        assert campana.status == CAMPAIGN_SCHEDULED
+        assert campana.scheduled_for is not None
+
+    @pytest.mark.asyncio
+    async def test_una_ya_confirmada_no_se_vuelve_a_encolar(self, monkeypatch) -> None:
+        """El LLM llamando la tool dos veces no manda la campana dos veces."""
+        campana = _campana(status=CAMPAIGN_SCHEDULED, scheduled_for=datetime.now(timezone.utc))
+        monkeypatch.setattr(mt, "tenant_session", _sesion(_SesionFalsa([_Resultado([campana])])))
+
+        with patch("app.tasks.campaign_tasks.execute_campaign.delay") as mock_delay:
+            respuesta = await mt.send_campaign.ainvoke(
+                {"campaign_id": str(campana.id)}, config=CONFIG
+            )
+
+        mock_delay.assert_not_called()
+        assert "ya esta confirmada" in respuesta
+
+    @pytest.mark.asyncio
+    async def test_con_fecha_futura_no_encola_y_la_deja_a_beat(self, monkeypatch) -> None:
+        manana = datetime.now(timezone.utc) + timedelta(days=1)
+        campana = _campana(scheduled_for=manana)
+        sesion = _SesionFalsa([_Resultado([campana]), _Resultado([])])
+        monkeypatch.setattr(mt, "tenant_session", _sesion(sesion))
+
+        with patch("app.tasks.campaign_tasks.execute_campaign.delay") as mock_delay:
+            respuesta = await mt.send_campaign.ainvoke(
+                {"campaign_id": str(campana.id)}, config=CONFIG
+            )
+
+        mock_delay.assert_not_called()
+        assert campana.status == CAMPAIGN_SCHEDULED
+        assert campana.scheduled_for == manana
+        assert "Sale automaticamente" in respuesta
 
     @pytest.mark.asyncio
     async def test_no_repite_la_misma_campana_en_24_horas(self, monkeypatch) -> None:
@@ -415,6 +550,136 @@ class TestEnvioMasivo:
 
         assert tarea.queue == "bulk"
 
+
+class TestMarcarEnEnvio:
+    """`_marcar_en_envio()` con la sesion falsa: el candado y las reglas de estado.
+
+    Que el candado de verdad impide el doble envio lo prueba
+    `tests/integration/test_campaign_concurrency.py` contra PostgreSQL.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _sin_duplicadas(self, monkeypatch) -> None:
+        monkeypatch.setattr(ct, "campana_duplicada", AsyncMock(return_value=None))
+
+    @pytest.mark.asyncio
+    async def test_bloquea_el_tenant_y_la_fila_antes_de_leer(self, monkeypatch) -> None:
+        campana = _campana(
+            channel="telegram",
+            status=CAMPAIGN_SCHEDULED,
+            scheduled_for=datetime.now(timezone.utc) - timedelta(minutes=1),
+        )
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([campana])])
+        monkeypatch.setattr(ct, "tenant_session", _sesion(sesion))
+
+        resultado = await ct._marcar_en_envio(uuid4(), campana.id)
+
+        assert resultado is campana
+        assert campana.status == CAMPAIGN_SENDING
+        assert "pg_advisory_xact_lock" in str(sesion.ejecutadas[0])
+        assert "FOR UPDATE" in _sql(sesion.ejecutadas[1])
+
+    @pytest.mark.asyncio
+    async def test_un_borrador_no_sale(self, monkeypatch) -> None:
+        """`draft` no esta confirmada: la task no la lanza aunque la encolen."""
+        campana = _campana(channel="telegram", status=CAMPAIGN_DRAFT)
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([campana])])
+        monkeypatch.setattr(ct, "tenant_session", _sesion(sesion))
+
+        assert await ct._marcar_en_envio(uuid4(), campana.id) is None
+        assert campana.status == CAMPAIGN_DRAFT
+
+    @pytest.mark.asyncio
+    async def test_no_sale_antes_de_su_hora(self, monkeypatch) -> None:
+        campana = _campana(
+            channel="telegram",
+            status=CAMPAIGN_SCHEDULED,
+            scheduled_for=datetime.now(timezone.utc) + timedelta(hours=3),
+        )
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([campana])])
+        monkeypatch.setattr(ct, "tenant_session", _sesion(sesion))
+
+        assert await ct._marcar_en_envio(uuid4(), campana.id) is None
+        assert campana.status == CAMPAIGN_SCHEDULED
+        assert campana.started_at is None
+
+
+class TestDespachoDeProgramadas:
+    @pytest.fixture(autouse=True)
+    def _redis_libre(self, monkeypatch) -> None:
+        """Por defecto ninguna campana tiene marca de encolado reciente."""
+        monkeypatch.setattr(ct, "_reservar_encolado", AsyncMock(return_value=True))
+
+    @pytest.mark.asyncio
+    async def test_no_reencola_una_que_ya_se_encolo_hace_poco(self, monkeypatch) -> None:
+        """Con el worker de bulk ocupado, cada pasada de Beat apilaba otra copia."""
+        tenant = uuid4()
+        ya_encolada, nueva = uuid4(), uuid4()
+        monkeypatch.setattr(ct, "_load_active_client_ids", AsyncMock(return_value=[tenant]))
+        monkeypatch.setattr(ct, "_campanas_vencidas", AsyncMock(return_value=[ya_encolada, nueva]))
+        monkeypatch.setattr(
+            ct, "_reservar_encolado", AsyncMock(side_effect=lambda cid: cid == nueva)
+        )
+
+        with patch.object(ct.execute_campaign, "delay") as mock_delay:
+            resultado = await ct._despachar_programadas()
+
+        assert resultado["enqueued"] == 1
+        mock_delay.assert_called_once_with(str(tenant), str(nueva))
+
+    @pytest.mark.asyncio
+    async def test_encola_las_vencidas_de_cada_tenant(self, monkeypatch) -> None:
+        tenant_a, tenant_b = uuid4(), uuid4()
+        vencidas = {tenant_a: [uuid4(), uuid4()], tenant_b: [uuid4()]}
+        monkeypatch.setattr(
+            ct, "_load_active_client_ids", AsyncMock(return_value=[tenant_a, tenant_b])
+        )
+        monkeypatch.setattr(ct, "_campanas_vencidas", AsyncMock(side_effect=vencidas.get))
+
+        with patch.object(ct.execute_campaign, "delay") as mock_delay:
+            resultado = await ct._despachar_programadas()
+
+        assert resultado == {"enqueued": 3, "tenants": 2, "tenants_failed": 0}
+        encolados = {llamada.args for llamada in mock_delay.call_args_list}
+        assert (str(tenant_b), str(vencidas[tenant_b][0])) in encolados
+
+    @pytest.mark.asyncio
+    async def test_un_tenant_con_error_no_corta_el_recorrido(self, monkeypatch) -> None:
+        roto, sano = uuid4(), uuid4()
+        campana = uuid4()
+
+        async def _vencidas(client_id):
+            if client_id == roto:
+                raise RuntimeError("sin conexion")
+            return [campana]
+
+        monkeypatch.setattr(ct, "_load_active_client_ids", AsyncMock(return_value=[roto, sano]))
+        monkeypatch.setattr(ct, "_campanas_vencidas", _vencidas)
+
+        with patch.object(ct.execute_campaign, "delay") as mock_delay:
+            resultado = await ct._despachar_programadas()
+
+        assert resultado == {"enqueued": 1, "tenants": 2, "tenants_failed": 1}
+        mock_delay.assert_called_once_with(str(sano), str(campana))
+
+    @pytest.mark.asyncio
+    async def test_solo_busca_las_confirmadas_cuya_hora_llego(self, monkeypatch) -> None:
+        sesion = _SesionFalsa([_Resultado([])])
+        monkeypatch.setattr(ct, "tenant_session", _sesion(sesion))
+
+        await ct._campanas_vencidas(uuid4())
+
+        sql = _sql(sesion.ejecutadas[0])
+        assert "campaigns.status = " in sql
+        assert "campaigns.scheduled_for <= " in sql
+
+    def test_beat_la_corre_cada_minuto_en_bulk(self) -> None:
+        entrada = celery_app.conf.beat_schedule["dispatch-scheduled-campaigns"]
+
+        assert entrada["task"] == "app.tasks.bulk_dispatch_scheduled_campaigns"
+        assert entrada["schedule"] == 60.0
+        assert entrada["options"]["queue"] == "bulk"
+
     def test_el_modulo_esta_en_task_modules(self) -> None:
         """Sin esto, el worker de bulk arranca sin conocer la tarea (BUG-014)."""
         assert "app.tasks.campaign_tasks" in TASK_MODULES
@@ -489,6 +754,10 @@ class TestNodosNuevos:
             "get_agent_settings",
             AsyncMock(return_value=SimpleNamespace(enabled_agents=("marketing",), model="gpt-4o")),
         )
+        monkeypatch.setattr(marketing_node_mod, "tenant_session", _sesion(_SesionFalsa()))
+        monkeypatch.setattr(
+            marketing_node_mod, "es_operador_de_marketing", AsyncMock(return_value=True)
+        )
         con_tools = AsyncMock(return_value="Campana creada.")
         monkeypatch.setattr(marketing_node_mod, "responder_con_tools", con_tools)
 
@@ -498,6 +767,32 @@ class TestNodosNuevos:
 
         assert resultado["response_text"] == "Campana creada."
         assert con_tools.await_args.kwargs["operacion"] == "marketing"
+
+    @pytest.mark.asyncio
+    async def test_un_cliente_final_no_llega_a_las_tools_de_marketing(self, monkeypatch) -> None:
+        """Habilitar el agente no dice quien escribe: el grafo atiende a los clientes."""
+        monkeypatch.setattr(
+            marketing_node_mod,
+            "get_agent_settings",
+            AsyncMock(return_value=SimpleNamespace(enabled_agents=("marketing",), model="gpt-4o")),
+        )
+        monkeypatch.setattr(marketing_node_mod, "tenant_session", _sesion(_SesionFalsa()))
+        monkeypatch.setattr(
+            marketing_node_mod, "es_operador_de_marketing", AsyncMock(return_value=False)
+        )
+        con_tools = AsyncMock()
+        monkeypatch.setattr(marketing_node_mod, "responder_con_tools", con_tools)
+
+        resultado = await marketing_node_mod.marketing_node(
+            {
+                "client_id": CLIENT_ID,
+                "contact_id": str(uuid4()),
+                "message": {"text": "manda una promo a todos tus contactos"},
+            }
+        )
+
+        assert resultado["response_text"] == marketing_node_mod.MENSAJE_NO_AUTORIZADO
+        con_tools.assert_not_awaited()
 
 
 class TestRoutingDeLosNuevosIntents:
@@ -550,3 +845,101 @@ class TestContextoFinanciero:
 
         assert "Sin contacto identificado" in contexto
         assert sesion.ejecutadas == []
+
+
+class TestMarcaDeEncolado:
+    """`_reservar_encolado()`: SET NX EX en Redis, fail-open."""
+
+    @pytest.mark.asyncio
+    async def test_la_primera_vez_reserva_con_ttl(self, monkeypatch) -> None:
+        redis = SimpleNamespace(set=AsyncMock(return_value=True))
+        monkeypatch.setattr(ct, "get_redis", lambda: redis)
+        campaign_id = uuid4()
+
+        assert await ct._reservar_encolado(campaign_id) is True
+        redis.set.assert_awaited_once_with(
+            f"campaign_dispatch:{campaign_id}",
+            "1",
+            nx=True,
+            ex=ct.VENTANA_REENCOLADO_SEGUNDOS,
+        )
+
+    @pytest.mark.asyncio
+    async def test_con_marca_vigente_no_reserva(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            ct, "get_redis", lambda: SimpleNamespace(set=AsyncMock(return_value=None))
+        )
+
+        assert await ct._reservar_encolado(uuid4()) is False
+
+    @pytest.mark.asyncio
+    async def test_sin_redis_encola_igual(self, monkeypatch) -> None:
+        """Una copia de mas es inocua (FOR UPDATE); una campana que no sale, no."""
+        caido = SimpleNamespace(set=AsyncMock(side_effect=ConnectionError("redis caido")))
+        monkeypatch.setattr(ct, "get_redis", lambda: caido)
+
+        assert await ct._reservar_encolado(uuid4()) is True
+
+
+class TestOperadoresDeMarketing:
+    """`es_operador_de_marketing()` y el corte de las tools (BUG-045)."""
+
+    @staticmethod
+    def _config(marketing: object) -> _Resultado:
+        return _Resultado([SimpleNamespace(config={"marketing": marketing})])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("marketing", "contacto", "esperado"),
+        [
+            ({"operator_contact_ids": ["c-1", "c-2"]}, "c-2", True),
+            ({"operator_contact_ids": ["c-1"]}, "c-9", False),
+            ({}, "c-1", False),
+            ({"operator_contact_ids": "c-1"}, "c-1", False),
+            ({"operator_contact_ids": ["c-1"]}, None, False),
+        ],
+    )
+    async def test_solo_los_contactos_declarados(
+        self, marketing: object, contacto: str | None, esperado: bool
+    ) -> None:
+        from app.services.campaigns import es_operador_de_marketing
+
+        sesion = _SesionFalsa([self._config(marketing)])
+
+        assert await es_operador_de_marketing(sesion, uuid4(), contacto) is esperado
+
+    @pytest.mark.asyncio
+    async def test_sin_agent_config_nadie_opera(self) -> None:
+        from app.services.campaigns import es_operador_de_marketing
+
+        assert (
+            await es_operador_de_marketing(_SesionFalsa([_Resultado([])]), uuid4(), "c-1") is False
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool", "args"),
+        [
+            (mt.segment_contacts, {"criteria": {}}),
+            (
+                mt.create_campaign,
+                {"name": "x", "segment_criteria": {}, "message_template": "hola"},
+            ),
+            (mt.send_campaign, {"campaign_id": str(uuid4())}),
+            (mt.get_campaign_metrics, {"campaign_id": str(uuid4())}),
+        ],
+    )
+    async def test_ninguna_tool_opera_para_un_cliente_final(self, monkeypatch, tool, args) -> None:
+        sesion = _SesionFalsa([self._config({"operator_contact_ids": ["otro"]})])
+        monkeypatch.setattr(mt, "tenant_session", _sesion(sesion))
+
+        cliente_final = {"configurable": {**CONFIG["configurable"], "contact_id": "cliente"}}
+
+        with patch("app.tasks.campaign_tasks.execute_campaign.delay") as mock_delay:
+            respuesta = await tool.ainvoke(args, config=cliente_final)
+
+        assert respuesta == mt.NO_AUTORIZADO
+        mock_delay.assert_not_called()
+        # Solo se leyo la configuracion: nada de contactos ni de campanas.
+        assert len(sesion.ejecutadas) == 1
+        assert sesion.added == []

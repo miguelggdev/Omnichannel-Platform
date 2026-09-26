@@ -148,6 +148,31 @@ class TestCalcularTotales:
         with pytest.raises(ValueError, match="al menos una linea"):
             calcular_totales([])
 
+    @pytest.mark.parametrize("precio", ["inf", float("inf"), "nan", "-inf", True])
+    def test_precio_no_finito_da_valueerror_y_no_overflow(self, precio: object) -> None:
+        """`round(inf)` levantaba OverflowError, que la tool no capturaba."""
+        with pytest.raises(ValueError, match="tiene que ser un numero"):
+            calcular_totales(
+                [{"description": "Item", "quantity": 1, "unit_price": precio, "tax_rate": 0}]
+            )
+
+    @pytest.mark.parametrize("cantidad", [2.9, "2.5", True, "dos", None, float("nan")])
+    def test_cantidad_fraccionaria_se_rechaza_en_vez_de_truncar(self, cantidad: object) -> None:
+        """`int(2.9)` facturaba 2 unidades sin avisar."""
+        with pytest.raises(ValueError, match="Cantidad invalida"):
+            calcular_totales(
+                [{"description": "Item", "quantity": cantidad, "unit_price": 10, "tax_rate": 0}]
+            )
+
+    @pytest.mark.parametrize("cantidad", [2, 2.0, "2"])
+    def test_cantidad_entera_en_cualquier_forma(self, cantidad: object) -> None:
+        lineas, subtotal, _, _ = calcular_totales(
+            [{"description": "Item", "quantity": cantidad, "unit_price": 10, "tax_rate": 0}]
+        )
+
+        assert lineas[0]["quantity"] == 2
+        assert subtotal == 2_000
+
 
 class TestContratoDeLasTools:
     def test_el_llm_no_ve_client_id_ni_contact_id(self) -> None:
@@ -197,76 +222,110 @@ class TestValidateNit:
         assert "no encuentra" in respuesta
 
 
+def _update(sesion: _SesionFalsa) -> dict[str, Any]:
+    """Parametros del ultimo UPDATE, por nombre de columna."""
+    updates = [e for e in sesion.ejecutadas if getattr(e, "is_update", False)]
+    assert updates, "la tool no guardo la respuesta de la DIAN"
+    return dict(updates[-1].compile().params)
+
+
 class TestCreateInvoice:
     ITEMS: ClassVar[list[dict]] = [
         {"description": "Consultoria", "quantity": 1, "unit_price": 1000, "tax_rate": 19}
     ]
+    PEDIDO: ClassVar[dict] = {"buyer_nit": "890903938", "buyer_name": "ACME SAS", "items": ITEMS}
+
+    @staticmethod
+    def _sesion_con_ultimo(ultimo: int) -> _SesionFalsa:
+        """Sesion falsa: advisory lock, luego el mayor consecutivo emitido."""
+        return _SesionFalsa([_Resultado([]), _Resultado([ultimo])])
 
     @pytest.mark.asyncio
     async def test_aprobada_guarda_el_cufe(self, monkeypatch) -> None:
-        sesion = _SesionFalsa([_Resultado([]), _Resultado([6])])
+        sesion = self._sesion_con_ultimo(6)
         monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
         monkeypatch.setattr(it, "enviar_factura", AsyncMock(return_value={"cufe": "cufe-abc"}))
 
-        respuesta = await it.create_invoice.ainvoke(
-            {"buyer_nit": "890903938", "buyer_name": "ACME SAS", "items": self.ITEMS},
-            config=CONFIG,
-        )
+        respuesta = await it.create_invoice.ainvoke(self.PEDIDO, config=CONFIG)
 
         factura = sesion.added[0]
-        assert factura.status == INVOICE_APPROVED
-        assert factura.dian_cufe == "cufe-abc"
         assert factura.invoice_number == "FE-000007"
         assert factura.total_cents == 119_000
         assert factura.buyer_nit == "890903938-8"
         assert factura.contact_id == CONTACT_ID or str(factura.contact_id) == CONTACT_ID
+        guardado = _update(sesion)
+        assert guardado["status"] == INVOICE_APPROVED
+        assert guardado["dian_cufe"] == "cufe-abc"
         assert "FE-000007" in respuesta
+        assert "CUFE cufe-abc" in respuesta
+
+    @pytest.mark.asyncio
+    async def test_el_numero_viaja_en_el_documento_de_la_dian(self, monkeypatch) -> None:
+        """La DIAN exige el consecutivo en el documento; el CUFE se calcula con el."""
+        sesion = self._sesion_con_ultimo(41)
+        monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
+        enviar = AsyncMock(return_value={"cufe": "x"})
+        monkeypatch.setattr(it, "enviar_factura", enviar)
+
+        await it.create_invoice.ainvoke(self.PEDIDO, config=CONFIG)
+
+        documento = enviar.await_args.args[0]
+        assert documento["invoice_number"] == "FE-000042"
+        assert documento["prefix"] == "FE"
+        assert sesion.added[0].invoice_number == "FE-000042"
+
+    @pytest.mark.asyncio
+    async def test_se_reserva_en_pending_dian_antes_de_enviar(self, monkeypatch) -> None:
+        sesion = self._sesion_con_ultimo(0)
+        monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
+        estado_al_enviar: list[str] = []
+
+        async def _enviar(documento):
+            estado_al_enviar.append(sesion.added[0].status)
+            return {"cufe": "x"}
+
+        monkeypatch.setattr(it, "enviar_factura", _enviar)
+
+        await it.create_invoice.ainvoke(self.PEDIDO, config=CONFIG)
+
+        assert estado_al_enviar == [INVOICE_PENDING_DIAN]
 
     @pytest.mark.asyncio
     async def test_sin_dian_queda_pendiente_y_no_inventa_cufe(self, monkeypatch) -> None:
-        sesion = _SesionFalsa([_Resultado([]), _Resultado([0])])
+        sesion = self._sesion_con_ultimo(0)
         monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
         monkeypatch.setattr(
             it, "enviar_factura", AsyncMock(side_effect=DianNoConfiguradaError("sin credenciales"))
         )
 
-        respuesta = await it.create_invoice.ainvoke(
-            {"buyer_nit": "890903938", "buyer_name": "ACME SAS", "items": self.ITEMS},
-            config=CONFIG,
-        )
+        respuesta = await it.create_invoice.ainvoke(self.PEDIDO, config=CONFIG)
 
-        factura = sesion.added[0]
-        assert factura.status == INVOICE_PENDING_DIAN
-        assert factura.dian_cufe is None
+        guardado = _update(sesion)
+        assert guardado["status"] == INVOICE_PENDING_DIAN
+        assert guardado["dian_cufe"] is None
         assert "pendiente de validacion" in respuesta
 
     @pytest.mark.asyncio
     async def test_un_fallo_de_la_dian_deja_la_factura_pendiente(self, monkeypatch) -> None:
-        sesion = _SesionFalsa([_Resultado([]), _Resultado([0])])
+        sesion = self._sesion_con_ultimo(0)
         monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
         monkeypatch.setattr(it, "enviar_factura", AsyncMock(side_effect=DianError("timeout")))
 
-        await it.create_invoice.ainvoke(
-            {"buyer_nit": "890903938", "buyer_name": "ACME SAS", "items": self.ITEMS},
-            config=CONFIG,
-        )
+        await it.create_invoice.ainvoke(self.PEDIDO, config=CONFIG)
 
-        assert sesion.added[0].status == INVOICE_PENDING_DIAN
+        assert _update(sesion)["status"] == INVOICE_PENDING_DIAN
 
     @pytest.mark.asyncio
     async def test_sin_cufe_la_dian_la_rechazo(self, monkeypatch) -> None:
-        sesion = _SesionFalsa([_Resultado([]), _Resultado([0])])
+        sesion = self._sesion_con_ultimo(0)
         monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
         monkeypatch.setattr(
             it, "enviar_factura", AsyncMock(return_value={"error": "consecutivo agotado"})
         )
 
-        respuesta = await it.create_invoice.ainvoke(
-            {"buyer_nit": "890903938", "buyer_name": "ACME SAS", "items": self.ITEMS},
-            config=CONFIG,
-        )
+        respuesta = await it.create_invoice.ainvoke(self.PEDIDO, config=CONFIG)
 
-        assert sesion.added[0].status == INVOICE_REJECTED
+        assert _update(sesion)["status"] == INVOICE_REJECTED
         assert "rechazo" in respuesta
 
     @pytest.mark.asyncio
@@ -290,15 +349,16 @@ class TestCreateInvoice:
         assert sesion.added == []
 
     @pytest.mark.asyncio
-    async def test_la_dian_se_consulta_antes_de_abrir_la_transaccion(self, monkeypatch) -> None:
+    async def test_la_dian_se_consulta_sin_transaccion_abierta(self, monkeypatch) -> None:
         """Una llamada de red de hasta 10s no puede retener una conexion del pooler."""
         orden: list[str] = []
-        sesion = _SesionFalsa([_Resultado([]), _Resultado([0])])
+        sesion = self._sesion_con_ultimo(0)
 
         @asynccontextmanager
         async def _cm(client_id, user_id=None):
-            orden.append("transaccion")
+            orden.append("abre")
             yield sesion
+            orden.append("cierra")
 
         async def _enviar(documento):
             orden.append("dian")
@@ -307,12 +367,105 @@ class TestCreateInvoice:
         monkeypatch.setattr(it, "tenant_session", _cm)
         monkeypatch.setattr(it, "enviar_factura", _enviar)
 
-        await it.create_invoice.ainvoke(
-            {"buyer_nit": "890903938", "buyer_name": "ACME SAS", "items": self.ITEMS},
+        await it.create_invoice.ainvoke(self.PEDIDO, config=CONFIG)
+
+        # Reserva del numero, DIAN fuera de toda transaccion, respuesta guardada.
+        assert orden == ["abre", "cierra", "dian", "abre", "cierra"]
+
+    @pytest.mark.asyncio
+    async def test_si_no_se_reserva_el_numero_no_se_llama_a_la_dian(self, monkeypatch) -> None:
+        @asynccontextmanager
+        async def _roto(client_id, user_id=None):
+            raise RuntimeError("pooler caido")
+            yield  # pragma: no cover
+
+        enviar = AsyncMock()
+        monkeypatch.setattr(it, "tenant_session", _roto)
+        monkeypatch.setattr(it, "enviar_factura", enviar)
+
+        respuesta = await it.create_invoice.ainvoke(self.PEDIDO, config=CONFIG)
+
+        enviar.assert_not_awaited()
+        assert "No se envio nada a la DIAN" in respuesta
+
+    @pytest.mark.asyncio
+    async def test_si_falla_guardar_la_respuesta_no_invita_a_reemitir(self, monkeypatch) -> None:
+        """La DIAN ya la aprobo: reintentar el turno emitiria una segunda factura real."""
+        sesion = self._sesion_con_ultimo(9)
+        aperturas = 0
+
+        @asynccontextmanager
+        async def _cm(client_id, user_id=None):
+            nonlocal aperturas
+            aperturas += 1
+            if aperturas == 2:
+                raise RuntimeError("pooler caido")
+            yield sesion
+
+        monkeypatch.setattr(it, "tenant_session", _cm)
+        monkeypatch.setattr(it, "enviar_factura", AsyncMock(return_value={"cufe": "cufe-z"}))
+
+        respuesta = await it.create_invoice.ainvoke(self.PEDIDO, config=CONFIG)
+
+        assert "FE-000010" in respuesta
+        assert "cufe-z" in respuesta
+        assert "No la emitas otra vez" in respuesta
+
+
+class TestFalloInesperadoDeLaDian:
+    @pytest.mark.asyncio
+    async def test_queda_pendiente_y_no_propaga(self, monkeypatch) -> None:
+        """Propagar haria que ai_processor reintentara: otra reserva y otro envio."""
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([0])])
+        monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
+        monkeypatch.setattr(it, "enviar_factura", AsyncMock(side_effect=KeyError("cufe")))
+
+        respuesta = await it.create_invoice.ainvoke(
+            {"buyer_nit": "890903938", "buyer_name": "ACME SAS", "items": TestCreateInvoice.ITEMS},
             config=CONFIG,
         )
 
-        assert orden == ["dian", "transaccion"]
+        guardado = _update(sesion)
+        assert guardado["status"] == INVOICE_PENDING_DIAN
+        assert "revision manual" in guardado["error_message"]
+        assert "pendiente de validacion" in respuesta
+
+
+class TestConsecutivo:
+    @pytest.mark.asyncio
+    async def test_sigue_al_mayor_emitido_no_al_conteo(self) -> None:
+        """Con COUNT(*), una factura borrada hacia chocar cada numero nuevo con el UNIQUE."""
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([1234])])
+
+        numero = await it._siguiente_consecutivo(sesion, uuid4())
+
+        assert numero == "FE-001235"
+        from sqlalchemy.dialects import postgresql
+
+        sql = str(sesion.ejecutadas[1].compile(dialect=postgresql.dialect())).lower()
+        assert "max(" in sql
+        assert "count(" not in sql
+        assert "as bigint" in sql, "el numero se compara como entero, no como texto"
+
+    @pytest.mark.asyncio
+    async def test_el_primero_del_tenant(self) -> None:
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([0])])
+
+        assert await it._siguiente_consecutivo(sesion, uuid4()) == "FE-000001"
+
+    @pytest.mark.asyncio
+    async def test_pasa_de_seis_digitos_sin_romperse(self) -> None:
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([999_999])])
+
+        assert await it._siguiente_consecutivo(sesion, uuid4()) == "FE-1000000"
+
+    @pytest.mark.asyncio
+    async def test_toma_el_advisory_lock_antes_de_leer(self) -> None:
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([0])])
+
+        await it._siguiente_consecutivo(sesion, uuid4())
+
+        assert "pg_advisory_xact_lock" in str(sesion.ejecutadas[0])
 
 
 class TestConsultas:

@@ -21,6 +21,18 @@ transaccion abierta retendria una conexion del pooler durante minutos u horas
 su propia transaccion corta, para que el CRUD de Dev B pueda mostrarlo mientras
 la campana corre.
 
+Campanas programadas
+---------------------
+`bulk_dispatch_scheduled_campaigns` corre cada minuto por Beat y encola las
+campanas `scheduled` cuya `scheduled_for` ya llego. Tambien recupera la que se
+confirmo para "ahora" y cuya task se perdio (worker caido antes de arrancarla):
+sin esta pasada quedaba en `scheduled` para siempre, sin poder reenviarse ni
+borrarse. Encolar dos veces la misma campana es inocuo: `_marcar_en_envio()`
+la bloquea con `FOR UPDATE` y solo una task la pasa a `sending`. Aun asi, una
+marca en Redis (`SET NX EX`, `VENTANA_REENCOLADO_SEGUNDOS`) evita que, mientras
+una campana larga ocupa el worker de `bulk`, cada pasada de Beat vuelva a
+encolar las vencidas que esperan detras y la cola se llene de no-ops.
+
 Que NO hace
 ------------
 No escribe los mensajes en `messages`: una campana no abre una conversacion
@@ -53,7 +65,7 @@ from app.core.metrics import record_message
 from app.models.campaign import (
     CAMPAIGN_COMPLETED,
     CAMPAIGN_FAILED,
-    CAMPAIGN_LANZABLE,
+    CAMPAIGN_SCHEDULED,
     CAMPAIGN_SENDING,
     MAX_ERRORES_GUARDADOS,
     Campaign,
@@ -62,12 +74,17 @@ from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.services.campaigns import (
     VENTANA_ANTIDUPLICADOS_HORAS,
+    bloquear_campana,
     campana_duplicada,
+    debe_salir_ya,
     plantilla_aprobada,
+    serializar_lanzamientos,
 )
+from app.services.dedup import get_redis
 from app.services.messaging.base import MessageContent
 from app.services.messaging.factory import get_messaging_provider
 from app.services.segmentation import CriterioInvalidoError, resolver_segmento
+from app.tasks.auto_close import _load_active_client_ids
 
 # Las dos reglas (plantilla aprobada, anti-duplicado) se siguen evaluando aca,
 # en el chokepoint por el que pasa cualquier envio; lo que ya no se repite es la
@@ -115,6 +132,17 @@ def resolver_plantilla(plantilla: str, contacto: Contact) -> str:
 async def _marcar_en_envio(client_id: UUID, campaign_id: UUID) -> Campaign | None:
     """Pasa la campana a `sending` si todavia se puede lanzar.
 
+    Solo desde `scheduled` (confirmada) y con la fila bloqueada
+    (`bloquear_campana()`, `SELECT ... FOR UPDATE`): dos tasks de la misma
+    campana — doble clic en `/send`, la tool y el CRUD a la vez, la pasada de
+    Beat sobre una que ya estaba en cola — se serializan, y la segunda lee la
+    fila ya en `sending` y no la vuelve a enviar. Antes era un SELECT sin
+    candado: las dos leian `scheduled`, las dos escribian `sending` y el
+    segmento recibia el mensaje dos veces.
+
+    Una campana cuya `scheduled_for` todavia no llego se deja como esta: la
+    saca `bulk_dispatch_scheduled_campaigns` cuando sea la hora.
+
     Vuelve a comprobar la plantilla aprobada y el anti-duplicado de 24h aca,
     no solo en `marketing_tools.create_campaign()`/`send_campaign()`: esas dos
     tools son el unico camino de hoy hacia `execute_campaign.delay()`, pero el
@@ -137,20 +165,24 @@ async def _marcar_en_envio(client_id: UUID, campaign_id: UUID) -> Campaign | Non
             segmento/canal ya recibio una campana en las ultimas 24 horas.
     """
     async with tenant_session(client_id) as session:
-        campana = (
-            await session.execute(
-                select(Campaign).where(Campaign.id == campaign_id, Campaign.client_id == client_id)
-            )
-        ).scalar_one_or_none()
+        # Primero el lock del tenant y despues el de la fila, siempre en ese
+        # orden: ver `serializar_lanzamientos()`.
+        await serializar_lanzamientos(session, client_id)
+        campana = await bloquear_campana(session, client_id, campaign_id)
 
         if campana is None:
             logger.warning("Campana %s no encontrada para el tenant %s", campaign_id, client_id)
             return None
-        if campana.status not in CAMPAIGN_LANZABLE:
-            # Una reentrega de la task (acks_late) no vuelve a enviarla: la
-            # campana ya paso por `sending`.
+        if campana.status != CAMPAIGN_SCHEDULED:
+            # `draft` no esta confirmada; cualquier otro estado ya paso por
+            # `sending` (reentrega con acks_late, o una task duplicada).
+            logger.info("Campana %s en estado %s; no se lanza", campaign_id, campana.status)
+            return None
+        if not debe_salir_ya(campana):
             logger.info(
-                "Campana %s en estado %s; no se lanza otra vez", campaign_id, campana.status
+                "Campana %s programada para %s; todavia no sale",
+                campaign_id,
+                campana.scheduled_for,
             )
             return None
 
@@ -399,6 +431,105 @@ async def _ejecutar(client_id_str: str, campaign_id_str: str) -> dict[str, Any]:
     )
     logger.info("Campana %s terminada: %d enviados, %d fallidos", campaign_id, enviados, fallidos)
     return {"status": CAMPAIGN_COMPLETED, "delivered": enviados, "failed": fallidos}
+
+
+async def _campanas_vencidas(client_id: UUID) -> list[UUID]:
+    """Campanas `scheduled` de un tenant a las que ya les llego la hora.
+
+    Args:
+        client_id: Tenant a barrer.
+
+    Returns:
+        Ids de las campanas a encolar.
+    """
+    async with tenant_session(client_id) as session:
+        filas = await session.execute(
+            select(Campaign.id).where(
+                Campaign.client_id == client_id,
+                Campaign.status == CAMPAIGN_SCHEDULED,
+                Campaign.scheduled_for <= datetime.now(timezone.utc),
+            )
+        )
+        return [campaign_id for (campaign_id,) in filas.all()]
+
+
+#: Cuanto tarda el despachador en volver a encolar una campana vencida que
+#: sigue en `scheduled`. Una sola pasada basta si el worker de `bulk` esta
+#: libre; si no, la campana espera en la cola y no hace falta otra copia. A
+#: los 10 minutos se reintenta por si la task se perdio.
+VENTANA_REENCOLADO_SEGUNDOS = 600
+
+
+async def _reservar_encolado(campaign_id: UUID) -> bool:
+    """Marca en Redis que la campana se acaba de encolar, si no lo estaba ya.
+
+    Args:
+        campaign_id: Campana a encolar.
+
+    Returns:
+        `True` si hay que encolarla. Ante un fallo de Redis tambien `True`
+        (fail-open): una copia de mas es inocua gracias al `FOR UPDATE` de
+        `_marcar_en_envio()`; una campana que no sale no lo es.
+    """
+    try:
+        return bool(
+            await get_redis().set(
+                f"campaign_dispatch:{campaign_id}", "1", nx=True, ex=VENTANA_REENCOLADO_SEGUNDOS
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "Redis no disponible para el despacho de la campana %s: %s", campaign_id, exc
+        )
+        return True
+
+
+async def _despachar_programadas() -> dict[str, int]:
+    """Encola las campanas programadas que ya tienen que salir, en todos los tenants.
+
+    Mismo patron que `auto_close._auto_close()`: un tenant con error no corta
+    el recorrido de los demas.
+
+    Returns:
+        Cuantas campanas se encolaron y cuantos tenants se recorrieron.
+    """
+    client_ids = await _load_active_client_ids()
+    encoladas = 0
+    tenants_con_error = 0
+
+    for client_id in client_ids:
+        try:
+            for campaign_id in await _campanas_vencidas(client_id):
+                if not await _reservar_encolado(campaign_id):
+                    continue
+                execute_campaign.delay(str(client_id), str(campaign_id))
+                encoladas += 1
+        except Exception:
+            tenants_con_error += 1
+            logger.exception("Despacho de campanas programadas fallido para %s", client_id)
+
+    if encoladas:
+        logger.info("%d campana(s) programada(s) encolada(s)", encoladas)
+    return {"enqueued": encoladas, "tenants": len(client_ids), "tenants_failed": tenants_con_error}
+
+
+@shared_task(
+    name="app.tasks.bulk_dispatch_scheduled_campaigns",
+    queue="bulk",
+    acks_late=True,
+    time_limit=120,
+    soft_time_limit=100,
+)
+def dispatch_scheduled_campaigns() -> dict[str, int]:
+    """Encola las campanas `scheduled` cuya hora de salida ya llego.
+
+    Corre por Celery Beat cada minuto. No reintenta: la siguiente pasada
+    vuelve a encontrar las mismas filas mientras sigan en `scheduled`.
+
+    Returns:
+        Conteo de campanas encoladas y tenants recorridos.
+    """
+    return run_isolated(_despachar_programadas())
 
 
 @shared_task(

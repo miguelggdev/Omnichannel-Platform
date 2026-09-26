@@ -12,6 +12,20 @@ solo. Hoy hay tres:
    envio real, incluido el que encole un scheduler futuro saltandose las tools.
 3. `api/v1/campaigns.py::send_campaign`, el CRUD.
 
+Maquina de estados y concurrencia
+----------------------------------
+`draft` -> `scheduled` -> `sending` -> `completed`/`failed`. Confirmar un
+envio (CRUD o tool) pasa la campana de `draft` a `scheduled`; solo la task la
+pasa a `sending`, y solo desde `scheduled`. Cada transicion lee la fila con
+`SELECT ... FOR UPDATE` (`bloquear_campana()`): sin el candado, dos llamadas
+concurrentes — un doble clic en `/send`, la tool y el CRUD a la vez, o dos
+tasks encoladas para la misma campana — leian las dos el estado viejo, las dos
+lo pisaban y el segmento entero recibia el mensaje dos veces.
+
+`scheduled_for` es cuando la campana tiene que salir. Confirmar sin fecha la
+fija en "ahora"; con fecha futura, nadie la encola en el momento y la saca
+`app.tasks.bulk_dispatch_scheduled_campaigns` (Beat) cuando llega la hora.
+
 Lo que tiene que repetirse es la **llamada** en cada camino, no el codigo. Las
 dos primeras tenian la consulta copiada, con el comentario de que importarla
 habria encadenado un modulo de tasks a uno de tools de LangChain — objecion
@@ -22,9 +36,10 @@ horizontalmente y hay una sola definicion de cada regla.
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent_config import AgentConfig
@@ -40,6 +55,126 @@ VENTANA_ANTIDUPLICADOS_HORAS = 24
 #: agente (`marketing_tools.py`) no puedan divergir sobre que canal aceptan.
 #: Hallazgo de /code-review sobre el PR #46: cada uno tenia su propia copia.
 CANALES_VALIDOS: tuple[str, ...] = ("whatsapp", "telegram", "email", "instagram", "facebook")
+
+
+async def bloquear_campana(
+    session: AsyncSession, client_id: UUID, campaign_id: UUID
+) -> Campaign | None:
+    """Lee una campana del tenant con `SELECT ... FOR UPDATE`.
+
+    El candado de fila dura hasta el fin de la transaccion de `session`: una
+    segunda transaccion que quiera la misma campana espera, y al seguir lee la
+    fila ya commiteada (en READ COMMITTED, `FOR UPDATE` re-evalua la ultima
+    version), asi que ve el estado que dejo la primera y no vuelve a lanzarla.
+
+    Args:
+        session: Sesion con el contexto de tenant ya aplicado.
+        client_id: Tenant dueno de la campana.
+        campaign_id: Campana buscada.
+
+    Returns:
+        La campana bloqueada, o `None` si no existe en este tenant.
+    """
+    return (
+        await session.execute(
+            select(Campaign)
+            .where(Campaign.id == campaign_id, Campaign.client_id == client_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+
+
+async def serializar_lanzamientos(session: AsyncSession, client_id: UUID) -> None:
+    """Serializa los lanzamientos de campanas de un tenant hasta el fin de la transaccion.
+
+    `bloquear_campana()` evita lanzar dos veces *la misma* campana, pero el
+    anti-duplicado de 24 horas compara contra *otras* campanas: dos campanas
+    distintas con el mismo segmento, lanzadas a la vez, no se verian entre si
+    (ninguna esta todavia en `sending` para la otra). Este advisory lock por
+    tenant hace que la segunda espere a que la primera commitee su `sending`,
+    y entonces `campana_duplicada()` si la encuentra. La clave lleva prefijo
+    para no compartir el lock del consecutivo de facturas
+    (`invoice_tools._siguiente_consecutivo`), que usa `hashtext(client_id)`.
+
+    Args:
+        session: Sesion con el contexto de tenant ya aplicado.
+        client_id: Tenant cuyos lanzamientos se serializan.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:clave))"),
+        {"clave": f"campaigns:{client_id}"},
+    )
+
+
+def debe_salir_ya(campana: Campaign, ahora: datetime | None = None) -> bool:
+    """Si a la campana ya le llego la hora de salir.
+
+    Args:
+        campana: Campana a evaluar.
+        ahora: Momento de referencia; por defecto, el actual en UTC.
+
+    Returns:
+        `True` si no tiene fecha programada o si esa fecha ya paso.
+    """
+    if campana.scheduled_for is None:
+        return True
+    return campana.scheduled_for <= (ahora or datetime.now(timezone.utc))
+
+
+async def _config_marketing(session: AsyncSession, client_id: UUID) -> dict[str, Any]:
+    """Lee `agent_configs.config.marketing` de la configuracion activa del tenant.
+
+    Args:
+        session: Sesion con el contexto de tenant ya aplicado.
+        client_id: Tenant dueno de la configuracion.
+
+    Returns:
+        El objeto `marketing`, o un dict vacio si el tenant no declaro nada.
+    """
+    config = (
+        await session.execute(
+            select(AgentConfig)
+            .where(AgentConfig.client_id == client_id, AgentConfig.is_active.is_(True))
+            .order_by(AgentConfig.created_at.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    marketing = ((config.config or {}) if config else {}).get("marketing", {})
+    return marketing if isinstance(marketing, dict) else {}
+
+
+async def es_operador_de_marketing(
+    session: AsyncSession, client_id: UUID, contact_id: str | None
+) -> bool:
+    """Si el contacto de la conversacion puede operar el agente de marketing.
+
+    El agente de marketing vive en el mismo grafo que atiende a los clientes
+    finales del tenant: habilitarlo en `enabled_agents` no dice nada de *quien*
+    le habla. Sin este chequeo, cualquier contacto que escribiera por WhatsApp
+    "manda una promo a todos" podia segmentar la base (y ver nombres de otros
+    contactos), crear una campana y lanzar un envio masivo (BUG-045).
+
+    Solo operan los contactos declarados en
+    `agent_configs.config.marketing.operator_contact_ids` — por ejemplo, el
+    WhatsApp del propio administrador del negocio. Sin lista, nadie: es el
+    lado correcto en el que equivocarse, igual que con las plantillas
+    aprobadas. Los administradores siguen teniendo el CRUD `/api/v1/campaigns`.
+
+    Args:
+        session: Sesion con el contexto de tenant ya aplicado.
+        client_id: Tenant dueno de la conversacion.
+        contact_id: Contacto de la conversacion, si lo hay.
+
+    Returns:
+        `True` si el contacto esta en la lista de operadores del tenant.
+    """
+    if not contact_id:
+        return False
+    operadores = (await _config_marketing(session, client_id)).get("operator_contact_ids", [])
+    if not isinstance(operadores, list):
+        return False
+    return str(contact_id) in {str(operador) for operador in operadores}
 
 
 async def plantillas_aprobadas(session: AsyncSession, client_id: UUID) -> list[str]:
@@ -58,17 +193,7 @@ async def plantillas_aprobadas(session: AsyncSession, client_id: UUID) -> list[s
     Returns:
         Plantillas aprobadas; lista vacia si no declaro ninguna.
     """
-    config = (
-        await session.execute(
-            select(AgentConfig)
-            .where(AgentConfig.client_id == client_id, AgentConfig.is_active.is_(True))
-            .order_by(AgentConfig.created_at.asc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-
-    marketing = ((config.config or {}) if config else {}).get("marketing", {})
-    aprobadas = marketing.get("approved_templates", [])
+    aprobadas = (await _config_marketing(session, client_id)).get("approved_templates", [])
     return [str(plantilla) for plantilla in aprobadas] if isinstance(aprobadas, list) else []
 
 

@@ -5,7 +5,7 @@ La tabla no esta en el spec: su §1.2 escribe "Guardar en DB # ..." y hace que
 persistencia, tres de las cuatro tools del agente financiero son una
 maqueta — de ahi que esta entrega agregue la tabla (migracion 012).
 
-Los importes van en centavos (`Integer`), no en `Float`: una factura es dinero
+Los importes van en centavos (`BigInteger`, migracion 014), no en `Float`: una factura es dinero
 y el binario flotante no representa exactamente ni 0.1; con IVA del 19% sobre
 varios items, el redondeo se ve en el total. El calculo se hace entero y la
 presentacion divide por 100.
@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID as _UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -91,9 +91,9 @@ class Invoice(TenantBaseModel):
     buyer_nit: Mapped[str] = mapped_column(EncryptedString, nullable=False)
     buyer_name: Mapped[str] = mapped_column(String(300), nullable=False)
     items: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
-    subtotal_cents: Mapped[int] = mapped_column(Integer, nullable=False)
-    tax_total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
-    total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    subtotal_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    tax_total_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), server_default="COP", nullable=False)
     status: Mapped[str] = mapped_column(String(20), server_default=INVOICE_DRAFT, nullable=False)
     dian_cufe: Mapped[str | None] = mapped_column(String(200), nullable=True)

@@ -16,6 +16,12 @@ Dos cosas que se mantienen del original porque son deliberadas:
 - Las excepciones del LLM no se atrapan: suben a `app/tasks/ai_processor.py`,
   que reintenta y, agotados los intentos, escala a un humano. Atraparlas aca
   convertiria un fallo pasajero de OpenAI en una respuesta generica.
+
+Las de las **tools** si (BUG-045): unos argumentos mal formados del modelo
+(`ValidationError`) o un fallo dentro de la tool tumbaban el turno entero, y el
+reintento de `ai_processor.py` volvia a ejecutar las tools que ya habian
+escrito — una segunda campana creada, por ejemplo. El fallo de una tool se le
+devuelve al modelo como resultado, igual que una tool inexistente.
 """
 
 import logging
@@ -109,7 +115,16 @@ async def responder_con_tools(
             logger.warning("El modelo pidio una tool inexistente: %s", tool_call["name"])
             resultados.append(f"Herramienta '{tool_call['name']}' no reconocida.")
             continue
-        resultados.append(str(await herramienta.ainvoke(tool_call["args"], config=tool_config)))
+        try:
+            resultado = await herramienta.ainvoke(tool_call["args"], config=tool_config)
+        except Exception as exc:
+            logger.exception("La tool %s fallo", tool_call["name"])
+            resultados.append(
+                f"La herramienta '{tool_call['name']}' no pudo completarse "
+                f"({type(exc).__name__}). No se hizo el cambio; explicaselo al usuario."
+            )
+            continue
+        resultados.append(str(resultado))
 
     llm_final = get_chat_model(modelo, temperature=temperatura)
     final = await llm_final.ainvoke(

@@ -16,9 +16,12 @@ agente (un prompt es una sugerencia; el modelo puede ignorarla):
 2. **Sin campanas duplicadas en 24 horas.** `send_campaign()` rechaza lanzar si
    el mismo canal y los mismos criterios ya salieron en las ultimas 24 horas.
 
-El envio nunca ocurre dentro de la tool: `send_campaign()` encola
-`app.tasks.bulk_execute_campaign` (cola `bulk`) y vuelve. Un envio masivo
-dentro del grafo dejaria la conversacion del usuario esperando minutos.
+El envio nunca ocurre dentro de la tool: `send_campaign()` confirma la campana
+(`draft` -> `scheduled`) y, si ya es la hora, encola
+`app.tasks.bulk_execute_campaign` (cola `bulk`) y vuelve. Una campana con
+fecha futura la saca `app.tasks.bulk_dispatch_scheduled_campaigns` (Beat). Un
+envio masivo dentro del grafo dejaria la conversacion del usuario esperando
+minutos.
 """
 
 import logging
@@ -33,14 +36,17 @@ from sqlalchemy import select
 from app.core.database import tenant_session
 from app.models.campaign import (
     CAMPAIGN_DRAFT,
-    CAMPAIGN_LANZABLE,
     CAMPAIGN_SCHEDULED,
     Campaign,
 )
 from app.services.campaigns import (
     CANALES_VALIDOS,
     VENTANA_ANTIDUPLICADOS_HORAS,
+    bloquear_campana,
     campana_duplicada,
+    debe_salir_ya,
+    es_operador_de_marketing,
+    plantilla_aprobada,
     plantillas_aprobadas,
 )
 from app.services.segmentation import CriterioInvalidoError, contar_segmento, resolver_segmento
@@ -70,6 +76,39 @@ def _client_id(config: RunnableConfig) -> UUID:
     return UUID(config["configurable"]["client_id"])
 
 
+#: Respuesta de las tools cuando quien escribe no es operador de marketing.
+NO_AUTORIZADO = (
+    "Esta conversacion no esta autorizada para operar campanas de marketing. "
+    "Un administrador puede hacerlo desde el panel."
+)
+
+
+async def _no_autorizado(config: RunnableConfig) -> str | None:
+    """Corta la tool si el contacto de la conversacion no es operador de marketing.
+
+    Defensa en profundidad del chequeo de `marketing_node()`: las tools no
+    pueden ejecutarse para un cliente final aunque se lleguen a invocar por
+    otra via (ver `services/campaigns.py::es_operador_de_marketing`).
+
+    Args:
+        config: Config que inyecta el nodo, con `client_id` y `contact_id`.
+
+    Returns:
+        `NO_AUTORIZADO` si no puede operar; `None` si puede.
+    """
+    client_id = _client_id(config)
+    contact_id = config.get("configurable", {}).get("contact_id")
+    async with tenant_session(client_id) as session:
+        if await es_operador_de_marketing(session, client_id, contact_id):
+            return None
+    logger.warning(
+        "Contacto %s del tenant %s intento usar una tool de marketing sin ser operador",
+        contact_id,
+        client_id,
+    )
+    return NO_AUTORIZADO
+
+
 async def _plantillas_aprobadas(client_id: UUID) -> list[str]:
     """Lee las plantillas de WhatsApp aprobadas del tenant, en su propia sesion.
 
@@ -86,6 +125,18 @@ async def _plantillas_aprobadas(client_id: UUID) -> list[str]:
         return await plantillas_aprobadas(session, client_id)
 
 
+def _fecha(momento: datetime | None) -> str:
+    """Formatea una fecha de envio para la respuesta de la tool.
+
+    Args:
+        momento: Fecha a mostrar.
+
+    Returns:
+        `dd/mm/aaaa HH:MM`, o "ahora" si no hay fecha.
+    """
+    return f"{momento:%d/%m/%Y %H:%M}" if momento else "ahora"
+
+
 @tool(parse_docstring=True)
 async def segment_contacts(criteria: dict[str, Any], config: RunnableConfig) -> str:
     """Cuenta y muestra los contactos que cumplen unos criterios de segmentacion.
@@ -98,6 +149,8 @@ async def segment_contacts(criteria: dict[str, Any], config: RunnableConfig) -> 
             clave/valor.
     """
     client_id = _client_id(config)
+    if (bloqueo := await _no_autorizado(config)) is not None:
+        return bloqueo
 
     try:
         async with tenant_session(client_id) as session:
@@ -145,6 +198,8 @@ async def create_campaign(
             confirme.
     """
     client_id = _client_id(config)
+    if (bloqueo := await _no_autorizado(config)) is not None:
+        return bloqueo
 
     if channel not in CANALES_VALIDOS:
         return f"Canal invalido: {channel}. Validos: {', '.join(CANALES_VALIDOS)}."
@@ -205,6 +260,8 @@ async def send_campaign(campaign_id: str, config: RunnableConfig) -> str:
         campaign_id: Identificador de la campana a enviar.
     """
     client_id = _client_id(config)
+    if (bloqueo := await _no_autorizado(config)) is not None:
+        return bloqueo
 
     try:
         campana_uuid = UUID(campaign_id)
@@ -212,18 +269,35 @@ async def send_campaign(campaign_id: str, config: RunnableConfig) -> str:
         return f"Identificador de campana invalido: {campaign_id}."
 
     async with tenant_session(client_id) as session:
-        campana = (
-            await session.execute(
-                select(Campaign).where(Campaign.id == campana_uuid, Campaign.client_id == client_id)
-            )
-        ).scalar_one_or_none()
+        # `FOR UPDATE`: si el LLM llama la tool dos veces seguidas, o el CRUD
+        # confirma la misma campana a la vez, la segunda llamada espera y la
+        # encuentra ya en `scheduled`. Antes esta tool ni siquiera cambiaba el
+        # estado, asi que cada llamada encolaba otro envio al mismo segmento.
+        campana = await bloquear_campana(session, client_id, campana_uuid)
 
         if campana is None:
             return f"No encontre la campana {campaign_id}."
-        if campana.status not in CAMPAIGN_LANZABLE:
+        if campana.status == CAMPAIGN_SCHEDULED:
+            return (
+                f"La campana '{campana.name}' ya esta confirmada y sale el "
+                f"{_fecha(campana.scheduled_for)} UTC; no hace falta lanzarla otra vez."
+            )
+        if campana.status != CAMPAIGN_DRAFT:
             return (
                 f"La campana '{campana.name}' esta en estado {campana.status} "
                 "y ya no se puede lanzar."
+            )
+
+        # Mismo chequeo que el CRUD al confirmar: la plantilla pudo dejar de
+        # estar aprobada desde que se creo la campana. Sin esto, la tool
+        # respondia "encolada" y la campana fallaba despues en el worker, sin
+        # que el agente pudiera decirselo al usuario.
+        if campana.channel == "whatsapp" and not await plantilla_aprobada(
+            session, client_id, campana.message_template
+        ):
+            return (
+                f"La plantilla de la campana '{campana.name}' ya no esta entre las aprobadas "
+                "por Meta para este tenant. Actualiza la plantilla antes de enviarla."
             )
 
         duplicada = await campana_duplicada(session, client_id, campana)
@@ -235,11 +309,22 @@ async def send_campaign(campaign_id: str, config: RunnableConfig) -> str:
                 "contactos."
             )
 
+        campana.status = CAMPAIGN_SCHEDULED
+        if campana.scheduled_for is None:
+            campana.scheduled_for = datetime.now(timezone.utc)
         nombre = campana.name
         objetivo = campana.target_count
+        programada = campana.scheduled_for
+        sale_ya = debe_salir_ya(campana)
 
-    # Fuera de la transaccion: el worker abre su propia conexion y necesita ver
-    # la campana (mismo motivo que la ingesta de documentos).
+    if not sale_ya:
+        return (
+            f"Campana '{nombre}' confirmada para {objetivo} contacto(s). "
+            f"Sale automaticamente el {_fecha(programada)} UTC."
+        )
+
+    # Fuera de la transaccion, ya commiteada: el worker abre su propia conexion
+    # y necesita ver la campana en `scheduled`.
     from app.tasks.campaign_tasks import execute_campaign
 
     execute_campaign.delay(str(client_id), campaign_id)
@@ -258,6 +343,8 @@ async def get_campaign_metrics(campaign_id: str, config: RunnableConfig) -> str:
         campaign_id: Identificador de la campana.
     """
     client_id = _client_id(config)
+    if (bloqueo := await _no_autorizado(config)) is not None:
+        return bloqueo
 
     try:
         campana_uuid = UUID(campaign_id)

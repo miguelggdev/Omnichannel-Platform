@@ -1,10 +1,10 @@
 """Schemas de Campaign — CRUD de campanas de marketing (Sprint 12, Dev B)."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.campaign import CAMPAIGN_STATUSES
 from app.services.campaigns import CANALES_VALIDOS
@@ -28,6 +28,25 @@ class CampaignCreate(BaseModel):
     segment_criteria: dict[str, Any]
     message_template: str = Field(min_length=1)
     scheduled_for: datetime | None = None
+
+    @field_validator("scheduled_for")
+    @classmethod
+    def _en_utc(cls, valor: datetime | None) -> datetime | None:
+        """Una fecha sin zona horaria se interpreta en UTC.
+
+        Mismo criterio que `marketing_tools.create_campaign()`. Sin esto, una
+        fecha naive no se puede comparar con `datetime.now(timezone.utc)` en
+        `debe_salir_ya()` (TypeError) y su significado dependeria del driver.
+
+        Args:
+            valor: Fecha recibida, opcional.
+
+        Returns:
+            La misma fecha, con zona horaria.
+        """
+        if valor is not None and valor.tzinfo is None:
+            return valor.replace(tzinfo=timezone.utc)
+        return valor
 
 
 class CampaignResponse(BaseModel):
@@ -89,17 +108,20 @@ class CampaignListResponse(BaseModel):
 
 
 class CampaignSendResponse(BaseModel):
-    """Acuse de que la campana quedo encolada.
+    """Acuse de que la campana quedo confirmada.
 
     Attributes:
-        campaign_id: Campana encolada.
+        campaign_id: Campana confirmada.
         status: Estado en el que quedo.
         target_count: Contactos a los que se le va a enviar.
+        scheduled_for: Cuando sale. Si ya paso, quedo encolada en el acto; si
+            es futura, la encola Beat al llegar la hora.
     """
 
     campaign_id: UUID
     status: str
     target_count: int
+    scheduled_for: datetime
 
 
 def estado_invalido(status: str) -> bool:
