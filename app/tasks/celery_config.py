@@ -117,6 +117,13 @@ celery_app.conf.update(
             "schedule": 3600.0,  # cada hora
             "options": {"queue": "bulk"},
         },
+        "dispatch-scheduled-campaigns": {
+            # Saca las campanas `scheduled` cuya `scheduled_for` ya llego. Un
+            # minuto es la resolucion con la que se puede programar un envio.
+            "task": "app.tasks.bulk_dispatch_scheduled_campaigns",
+            "schedule": 60.0,
+            "options": {"queue": "bulk"},
+        },
         "purge-outgoing-webhook-logs": {
             "task": "app.tasks.bulk_purge_outgoing_webhook_logs",
             # Domingo 05:00 UTC, fuera de la ventana del backup diario (03:00).

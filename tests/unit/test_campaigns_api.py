@@ -6,12 +6,20 @@ por un doble.
 """
 
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from app.api.v1 import campaigns as campaigns_module
-from app.models.campaign import CAMPAIGN_COMPLETED, CAMPAIGN_DRAFT, CAMPAIGN_SENDING
+from app.models.campaign import (
+    CAMPAIGN_COMPLETED,
+    CAMPAIGN_DRAFT,
+    CAMPAIGN_SCHEDULED,
+    CAMPAIGN_SENDING,
+)
+from app.schemas.campaign import CampaignCreate
 from tests.unit.agent_doubles import fake_tenant_session
 from tests.unit.crm_doubles import AHORA, CrmSession
 
@@ -237,6 +245,64 @@ class TestEnvio:
         assert response.json()["status"] == "scheduled"
         assert campana.status == "scheduled"
 
+    async def test_lee_la_campana_con_for_update(
+        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Dos `/send` concurrentes (doble clic) se serializan en la fila."""
+        campana = FakeCampaign(channel="telegram")
+        session = _usa_sesion(monkeypatch, CrmSession(resultados=[campana, None]))
+        _sin_encolar(monkeypatch)
+
+        await authenticated_client.post(f"{URL}/{campana.id}/send")
+
+        sql = str(session.executed[0].compile(dialect=postgresql.dialect()))
+        assert "FOR UPDATE" in sql
+
+    async def test_una_ya_confirmada_no_se_encola_otra_vez(
+        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """El segundo clic encuentra la campana en `scheduled` y no la reenvia."""
+        campana = FakeCampaign(status=CAMPAIGN_SCHEDULED)
+        _usa_sesion(monkeypatch, CrmSession(resultados=[campana]))
+        encolados = _sin_encolar(monkeypatch)
+
+        response = await authenticated_client.post(f"{URL}/{campana.id}/send")
+
+        assert response.status_code == 400
+        assert encolados == []
+
+    async def test_sin_fecha_sale_ya_y_queda_fechada(
+        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`scheduled_for` en ahora deja que Beat la recupere si la task se pierde."""
+        campana = FakeCampaign(channel="telegram")
+        _usa_sesion(monkeypatch, CrmSession(resultados=[campana, None]))
+        encolados = _sin_encolar(monkeypatch)
+
+        response = await authenticated_client.post(f"{URL}/{campana.id}/send")
+
+        assert response.status_code == 202
+        assert len(encolados) == 1
+        assert campana.scheduled_for is not None
+        assert response.json()["scheduled_for"] is not None
+
+    async def test_programada_a_futuro_no_se_encola_ahora(
+        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Antes `/send` la encolaba en el acto e ignoraba `scheduled_for`."""
+        manana = datetime.now(timezone.utc) + timedelta(days=1)
+        campana = FakeCampaign(channel="telegram", scheduled_for=manana)
+        _usa_sesion(monkeypatch, CrmSession(resultados=[campana, None]))
+        encolados = _sin_encolar(monkeypatch)
+
+        response = await authenticated_client.post(f"{URL}/{campana.id}/send")
+
+        assert response.status_code == 202
+        assert encolados == [], "la saca Beat al llegar la hora, no /send"
+        assert campana.status == CAMPAIGN_SCHEDULED
+        assert campana.scheduled_for == manana
+        assert datetime.fromisoformat(response.json()["scheduled_for"]) == manana
+
     async def test_no_se_puede_reenviar_una_ya_enviada(
         self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -297,6 +363,20 @@ class TestEnvio:
 
         assert response.status_code == 404
         assert encolados == []
+
+
+class TestSchemaDeAlta:
+    def test_una_fecha_sin_zona_se_toma_en_utc(self) -> None:
+        """Una fecha naive no se puede comparar con el reloj en UTC."""
+        datos = CampaignCreate(
+            name="Promo",
+            channel="telegram",
+            segment_criteria={},
+            message_template="Hola",
+            scheduled_for=datetime(2026, 10, 1, 9, 0),
+        )
+
+        assert datos.scheduled_for == datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
 
 
 # ─── DELETE /campaigns/{id} ──────────────────────────────────────────────────

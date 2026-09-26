@@ -34,9 +34,6 @@ CAMPAIGN_STATUSES: tuple[str, ...] = (
     CAMPAIGN_FAILED,
 )
 
-# Estados desde los que una campana todavia puede lanzarse.
-CAMPAIGN_LANZABLE: tuple[str, ...] = (CAMPAIGN_DRAFT, CAMPAIGN_SCHEDULED)
-
 MAX_ERRORES_GUARDADOS = 100
 
 

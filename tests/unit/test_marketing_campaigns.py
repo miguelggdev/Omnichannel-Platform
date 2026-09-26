@@ -2,6 +2,7 @@
 
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -69,8 +70,18 @@ class _SesionFalsa:
     def add(self, obj) -> None:
         self.added.append(obj)
 
+    async def flush(self) -> None:
+        return None
+
     def expunge_all(self) -> None:
         return None
+
+
+def _sql(stmt) -> str:
+    """Compila una sentencia con el dialecto de PostgreSQL (ahi vive FOR UPDATE)."""
+    from sqlalchemy.dialects import postgresql
+
+    return str(stmt.compile(dialect=postgresql.dialect()))
 
 
 def _sesion(sesion: _SesionFalsa):
@@ -105,6 +116,7 @@ def _campana(**over):
         "failed_count": 0,
         "read_count": 0,
         "replied_count": 0,
+        "scheduled_for": None,
         "started_at": None,
         "error_log": [],
     }
@@ -264,6 +276,51 @@ class TestToolsDeMarketing:
         assert "encolada" in respuesta
 
     @pytest.mark.asyncio
+    async def test_enviar_confirma_la_campana_con_la_fila_bloqueada(self, monkeypatch) -> None:
+        """Antes la tool no cambiaba el estado: cada llamada encolaba otro envio."""
+        campana = _campana()
+        sesion = _SesionFalsa([_Resultado([campana]), _Resultado([])])
+        monkeypatch.setattr(mt, "tenant_session", _sesion(sesion))
+
+        with patch("app.tasks.campaign_tasks.execute_campaign.delay"):
+            await mt.send_campaign.ainvoke({"campaign_id": str(campana.id)}, config=CONFIG)
+
+        assert "FOR UPDATE" in _sql(sesion.ejecutadas[0])
+        assert campana.status == CAMPAIGN_SCHEDULED
+        assert campana.scheduled_for is not None
+
+    @pytest.mark.asyncio
+    async def test_una_ya_confirmada_no_se_vuelve_a_encolar(self, monkeypatch) -> None:
+        """El LLM llamando la tool dos veces no manda la campana dos veces."""
+        campana = _campana(status=CAMPAIGN_SCHEDULED, scheduled_for=datetime.now(timezone.utc))
+        monkeypatch.setattr(mt, "tenant_session", _sesion(_SesionFalsa([_Resultado([campana])])))
+
+        with patch("app.tasks.campaign_tasks.execute_campaign.delay") as mock_delay:
+            respuesta = await mt.send_campaign.ainvoke(
+                {"campaign_id": str(campana.id)}, config=CONFIG
+            )
+
+        mock_delay.assert_not_called()
+        assert "ya esta confirmada" in respuesta
+
+    @pytest.mark.asyncio
+    async def test_con_fecha_futura_no_encola_y_la_deja_a_beat(self, monkeypatch) -> None:
+        manana = datetime.now(timezone.utc) + timedelta(days=1)
+        campana = _campana(scheduled_for=manana)
+        sesion = _SesionFalsa([_Resultado([campana]), _Resultado([])])
+        monkeypatch.setattr(mt, "tenant_session", _sesion(sesion))
+
+        with patch("app.tasks.campaign_tasks.execute_campaign.delay") as mock_delay:
+            respuesta = await mt.send_campaign.ainvoke(
+                {"campaign_id": str(campana.id)}, config=CONFIG
+            )
+
+        mock_delay.assert_not_called()
+        assert campana.status == CAMPAIGN_SCHEDULED
+        assert campana.scheduled_for == manana
+        assert "Sale automaticamente" in respuesta
+
+    @pytest.mark.asyncio
     async def test_no_repite_la_misma_campana_en_24_horas(self, monkeypatch) -> None:
         campana = _campana()
         anterior = _campana(name="Promo de ayer", status=CAMPAIGN_COMPLETED)
@@ -414,6 +471,114 @@ class TestEnvioMasivo:
         tarea = celery_app.tasks["app.tasks.bulk_execute_campaign"]
 
         assert tarea.queue == "bulk"
+
+
+class TestMarcarEnEnvio:
+    """`_marcar_en_envio()` con la sesion falsa: el candado y las reglas de estado.
+
+    Que el candado de verdad impide el doble envio lo prueba
+    `tests/integration/test_campaign_concurrency.py` contra PostgreSQL.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _sin_duplicadas(self, monkeypatch) -> None:
+        monkeypatch.setattr(ct, "campana_duplicada", AsyncMock(return_value=None))
+
+    @pytest.mark.asyncio
+    async def test_bloquea_el_tenant_y_la_fila_antes_de_leer(self, monkeypatch) -> None:
+        campana = _campana(
+            channel="telegram",
+            status=CAMPAIGN_SCHEDULED,
+            scheduled_for=datetime.now(timezone.utc) - timedelta(minutes=1),
+        )
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([campana])])
+        monkeypatch.setattr(ct, "tenant_session", _sesion(sesion))
+
+        resultado = await ct._marcar_en_envio(uuid4(), campana.id)
+
+        assert resultado is campana
+        assert campana.status == CAMPAIGN_SENDING
+        assert "pg_advisory_xact_lock" in str(sesion.ejecutadas[0])
+        assert "FOR UPDATE" in _sql(sesion.ejecutadas[1])
+
+    @pytest.mark.asyncio
+    async def test_un_borrador_no_sale(self, monkeypatch) -> None:
+        """`draft` no esta confirmada: la task no la lanza aunque la encolen."""
+        campana = _campana(channel="telegram", status=CAMPAIGN_DRAFT)
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([campana])])
+        monkeypatch.setattr(ct, "tenant_session", _sesion(sesion))
+
+        assert await ct._marcar_en_envio(uuid4(), campana.id) is None
+        assert campana.status == CAMPAIGN_DRAFT
+
+    @pytest.mark.asyncio
+    async def test_no_sale_antes_de_su_hora(self, monkeypatch) -> None:
+        campana = _campana(
+            channel="telegram",
+            status=CAMPAIGN_SCHEDULED,
+            scheduled_for=datetime.now(timezone.utc) + timedelta(hours=3),
+        )
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([campana])])
+        monkeypatch.setattr(ct, "tenant_session", _sesion(sesion))
+
+        assert await ct._marcar_en_envio(uuid4(), campana.id) is None
+        assert campana.status == CAMPAIGN_SCHEDULED
+        assert campana.started_at is None
+
+
+class TestDespachoDeProgramadas:
+    @pytest.mark.asyncio
+    async def test_encola_las_vencidas_de_cada_tenant(self, monkeypatch) -> None:
+        tenant_a, tenant_b = uuid4(), uuid4()
+        vencidas = {tenant_a: [uuid4(), uuid4()], tenant_b: [uuid4()]}
+        monkeypatch.setattr(
+            ct, "_load_active_client_ids", AsyncMock(return_value=[tenant_a, tenant_b])
+        )
+        monkeypatch.setattr(ct, "_campanas_vencidas", AsyncMock(side_effect=vencidas.get))
+
+        with patch.object(ct.execute_campaign, "delay") as mock_delay:
+            resultado = await ct._despachar_programadas()
+
+        assert resultado == {"enqueued": 3, "tenants": 2, "tenants_failed": 0}
+        encolados = {llamada.args for llamada in mock_delay.call_args_list}
+        assert (str(tenant_b), str(vencidas[tenant_b][0])) in encolados
+
+    @pytest.mark.asyncio
+    async def test_un_tenant_con_error_no_corta_el_recorrido(self, monkeypatch) -> None:
+        roto, sano = uuid4(), uuid4()
+        campana = uuid4()
+
+        async def _vencidas(client_id):
+            if client_id == roto:
+                raise RuntimeError("sin conexion")
+            return [campana]
+
+        monkeypatch.setattr(ct, "_load_active_client_ids", AsyncMock(return_value=[roto, sano]))
+        monkeypatch.setattr(ct, "_campanas_vencidas", _vencidas)
+
+        with patch.object(ct.execute_campaign, "delay") as mock_delay:
+            resultado = await ct._despachar_programadas()
+
+        assert resultado == {"enqueued": 1, "tenants": 2, "tenants_failed": 1}
+        mock_delay.assert_called_once_with(str(sano), str(campana))
+
+    @pytest.mark.asyncio
+    async def test_solo_busca_las_confirmadas_cuya_hora_llego(self, monkeypatch) -> None:
+        sesion = _SesionFalsa([_Resultado([])])
+        monkeypatch.setattr(ct, "tenant_session", _sesion(sesion))
+
+        await ct._campanas_vencidas(uuid4())
+
+        sql = _sql(sesion.ejecutadas[0])
+        assert "campaigns.status = " in sql
+        assert "campaigns.scheduled_for <= " in sql
+
+    def test_beat_la_corre_cada_minuto_en_bulk(self) -> None:
+        entrada = celery_app.conf.beat_schedule["dispatch-scheduled-campaigns"]
+
+        assert entrada["task"] == "app.tasks.bulk_dispatch_scheduled_campaigns"
+        assert entrada["schedule"] == 60.0
+        assert entrada["options"]["queue"] == "bulk"
 
     def test_el_modulo_esta_en_task_modules(self) -> None:
         """Sin esto, el worker de bulk arranca sin conocer la tarea (BUG-014)."""
