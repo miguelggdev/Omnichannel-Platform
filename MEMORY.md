@@ -489,6 +489,58 @@
   4. **Una cabecera del tenant podía tumbar el intento sin dejar rastro.** `tenant_webhooks.headers` es JSONB: un valor numérico (`{"X-Reintentos": 3}`) hace que httpx falle con `AttributeError`, que no es un `httpx.HTTPError` y por lo tanto se escapaba del manejo de errores — el intento moría sin fila de log y sin tocar los contadores, y el reintento nunca se programaba. `_cabeceras_del_tenant()` descarta lo que no sea escalar, pasa el resto a texto y tira las que traen saltos de línea (inyección de cabeceras).
   5. **Dos menores:** la task de despacho declaraba `max_retries=2` sin llamar nunca a `self.retry()` — ahora reintenta de verdad ante un fallo transitorio, que es lo único que puede salvar al evento (en la de envío no se hace, y queda dicho por qué: el POST puede haber salido ya y reintentar lo duplicaría); y un `PATCH /contacts/{id}` sin campos emitía un `contact.updated` que no anunciaba ningún cambio.
 
+### ADR-071: canal de voz con Twilio (Sprint 13, Dev A) — llamadas como un canal más
+- **Fecha:** 2026-09-26
+- **Contexto:** mitad de Dev A del Sprint 13 (`specs/sprint-13-advanced-modules.md` §1-8, §12). El usuario eligió **Twilio**; Vonage queda fuera (sería otra clase en la factory, no un `if backend ==` en cada método como el spec). Dev B se queda con el agente clínico, sus tools (CIE-10/CUPS/RIPS), Habeas Data y la integración del nodo en el grafo; las tablas que va a usar (`clinical_records`) ya las deja Dev A.
+- **Arquitectura: la voz no es un caso especial del grafo, es un canal.** El spec ejecuta el agente dentro de la API (`CallManager` llamando a un `conversation_pipeline` que no existe). Aquí se reutiliza el patrón del Webchat (ADR-059):
+  - **Entrada:** Twilio abre un WebSocket (Media Streams, `app/api/v1/voice_ws.py`); `CallSession` (`app/services/voice/call_manager.py`) corta el audio en frases, las transcribe con Whisper y encola cada una en `process_incoming_message` normalizada por `TwilioVoiceProvider.parse_webhook()`. Contacto, conversación (canal `voice`), grafo, CRM y handoff funcionan sin saber que era una llamada.
+  - **Salida:** el worker responde con `deliver_message()` como en cualquier canal; `send_message()` publica en un canal de Redis por llamante y la sesión de la llamada lo sintetiza (OpenAI TTS) y lo manda a Twilio por el mismo WebSocket.
+  - Id externo `CallSid:índice`: con el `CallSid` solo, la deduplicación descartaba la segunda frase.
+- **Cinco fallos de seguridad del spec, corregidos:**
+  1. Los endpoints **no validaban** `X-Twilio-Signature`, aunque el provider la implementaba.
+  2. El `wss://` del TwiML salía de `request.url.hostname`: con un `Host` falso, Twilio transmitía el audio de la llamada a otro servidor. Ahora sale de `VOICE_PUBLIC_BASE_URL`, que además es la URL que firma Twilio (detrás de Cloudflare/Traefik la que ve el proceso no es la pública).
+  3. El TwiML interpolaba texto sin escapar en XML.
+  4. El stream se identificaba con el `CallSid` en el path y el tenant con un parámetro sin firmar. Ahora lo autentica un **token HMAC de vida corta** (`stream_token.py`, clave derivada de `JWT_SECRET` con etiqueta propia) que viaja como `<Parameter>` del `<Stream>` y se verifica en el evento `start`. Solo se permite **un stream por llamada**.
+  5. El caller ID **no** llena `verified_phone`: se puede falsificar, y usarlo para unificar con el WhatsApp del mismo número regalaría el historial de otro.
+- **Audio:**
+  - Códec G.711 μ-law propio (`audio.py`): `audioop`, que usa el spec, se eliminó en Python 3.13. Es idéntico a `audioop` en las 65 536 muestras (variante de 14 bits de la referencia de Sun; la de 16 bits difería en 381 muestras de borde).
+  - Remuestreo 24→8 kHz por promedio, no por diezmado (el diezmado produce aliasing).
+  - El fin de frase se mide en **milisegundos de audio**, no con temporizadores de reloj (`asyncio.sleep`, como el spec).
+  - Las frases se transcriben **en orden** en una tarea aparte, sin bloquear la lectura del stream, con 200 ms de *pre-roll* para no cortar la primera sílaba.
+  - La respuesta se sintetiza **por oraciones** y cada una se manda apenas está lista, sin markdown ni URLs.
+- **Barge-in:** es lo que el spec deja como "depende del backend". El detector de interrupciones es por llamada (el del spec era uno por proceso y sumaba la voz de todas las llamadas). Mientras el agente habla, voz sostenida por encima de `VOICE_BARGE_IN_RMS_THRESHOLD` cancela la síntesis en curso y manda `clear`, que vacía el audio que Twilio tenía en cola. Cada respuesta termina con una `mark`, y el agente cuenta como hablando hasta que Twilio la confirma.
+- **`call_records`** (migración 016): una fila por `CallSid`, escrita por tres eventos sin orden garantizado (webhook de la llamada, cierre del stream y status callback). Por eso `voice_tasks.save_call_record` es un **upsert** que:
+  - solo pisa lo que cada evento trae;
+  - nunca deshace un estado final (un `completed` que llega antes que el `in-progress` gana);
+  - toma el `started_at` más temprano;
+  - enlaza conversación y contacto a partir de los mensajes `CallSid:%`.
+
+  `contact_id` es nullable (una llamada en la que el cliente no dijo nada no llega a tener contacto) y los teléfonos van cifrados.
+- **`clinical_records`** (misma migración, para Dev B):
+  - Va cifrado con pgcrypto todo lo que identifica al paciente o describe su salud. Eso incluye los **códigos CIE-10/CUPS**, que el spec dejaba en JSONB en claro y que el trigger de auditoría habría copiado a `audit_logs`. Para eso se agrega el tipo nuevo `EncryptedJSON`.
+  - La búsqueda por documento usa un índice ciego (`patient_document_hash`). El índice del spec sobre el BYTEA cifrado no encuentra nada.
+  - La política RLS "por rol médico" del spec **no se crea**: las políticas permisivas se combinan con OR, así que no restringía nada, y `app.current_user_role` no lo fija nadie. El control por rol queda en la API y en el nodo clínico (Dev B).
+  - Trigger de auditoría de la migración 006.
+  - **Bug de `EncryptedJSON` encontrado por su propio test:** `type_coerce(..., Text)` reemplaza el tipo del parámetro, así que `process_bind_param` nunca corría. La serialización vive en el tipo interno `_JSONTexto`.
+- **API:**
+  - `POST /api/v1/voice/calls` inicia una llamada saliente. Solo `admin`/`super_admin` **del tenant del canal**: el número de Twilio es de `DEFAULT_CLIENT_ID`.
+  - `GET /api/v1/voice/calls[/{id}]` lista las llamadas para el CRM, con teléfonos enmascarados y la transcripción solo en el detalle.
+  - Solo `/api/v1/voice/twilio/*` está exento del JWT (`VOICE_WEBHOOK_PATHS_PREFIX`).
+- **Despliegue:**
+  - `celery-ai`, `notifications`, `media` y `bulk` reciben las credenciales de Twilio: `get_channel_config("voice")` las exige para responder.
+  - La API recibe la configuración de voz y de Whisper, porque las frases se transcriben en el proceso que tiene el stream.
+  - `test_compose_workers.py` vigila las dos cosas.
+  - La voz del `<Say>` pasa a `es-MX`: `Polly.Mia` es mexicana, y la combinación `es-CO` del spec no existe.
+- **Fuera de alcance, anotado:**
+  - El VAD por energía es suficiente para el MVP; con ruido de fondo convendría un VAD entrenado (Silero).
+  - Se recomienda fijar `WHISPER_LANGUAGE=es`: en frases cortas la autodetección falla.
+  - El tope de llamadas simultáneas es por proceso.
+  - Los DTMF de Media Streams no se procesan.
+  - Grabación: la URL llega del status callback, pero la plataforma no la activa.
+- **Tests:**
+  - 100 unitarios: códec contra `audioop`, segmentación, orden del STT, barge-in, TTS por oraciones, firma contra el vector oficial de `twilio-python`, token, webhooks con `Host` falso y XML hostil, llamadas salientes y el WebSocket completo.
+  - 9 de integración contra PostgreSQL real: RLS y cifrado en disco y en auditoría de las dos tablas; una frase recorre `webhook_processor` hasta una conversación `voice`; upsert fuera de orden; API del CRM aislada por tenant.
+
 ### ADR-070: cabos sueltos de la Fase 2 — configuración del agente de marketing y `sentiment_avg`
 - **Fecha:** 2026-09-26
 - **Contexto:** dos pendientes que dejaron BUG-045 y ADR-069.
@@ -1006,6 +1058,13 @@ Cuatro agentes en paralelo (RLS/multi-tenancy, async/concurrencia, seguridad, l�
 |---|---|---|
 | 25 | `agent_action_logs` | Log de acciones de cada nodo LangGraph por conversación |
 | 26 | `admin_assistant_history` | Historial de conversaciones del Admin Assistant por tenant/usuario |
+
+### Fase 3 (Módulos avanzados, Sprint 13) — 2 tablas (migración 016, ADR-071)
+| # | Tabla | Propósito |
+|---|---|---|
+| — | `call_records` | Una llamada de Twilio por fila (upsert por `CallSid`); transcripción, duración, teléfonos cifrados |
+| — | `clinical_records` | Registro RIPS; identidad del paciente y datos de salud cifrados (`EncryptedJSON`), auditado |
+
 ### Fase 3 (Lead Management) — 10 tablas
 | # | Tabla | Propósito |
 |---|---|---|
