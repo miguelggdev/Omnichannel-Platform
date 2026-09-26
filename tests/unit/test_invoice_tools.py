@@ -412,6 +412,25 @@ class TestCreateInvoice:
         assert "No la emitas otra vez" in respuesta
 
 
+class TestFalloInesperadoDeLaDian:
+    @pytest.mark.asyncio
+    async def test_queda_pendiente_y_no_propaga(self, monkeypatch) -> None:
+        """Propagar haria que ai_processor reintentara: otra reserva y otro envio."""
+        sesion = _SesionFalsa([_Resultado([]), _Resultado([0])])
+        monkeypatch.setattr(it, "tenant_session", _sesion(sesion))
+        monkeypatch.setattr(it, "enviar_factura", AsyncMock(side_effect=KeyError("cufe")))
+
+        respuesta = await it.create_invoice.ainvoke(
+            {"buyer_nit": "890903938", "buyer_name": "ACME SAS", "items": TestCreateInvoice.ITEMS},
+            config=CONFIG,
+        )
+
+        guardado = _update(sesion)
+        assert guardado["status"] == INVOICE_PENDING_DIAN
+        assert "revision manual" in guardado["error_message"]
+        assert "pendiente de validacion" in respuesta
+
+
 class TestConsecutivo:
     @pytest.mark.asyncio
     async def test_sigue_al_mayor_emitido_no_al_conteo(self) -> None:

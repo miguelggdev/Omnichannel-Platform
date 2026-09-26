@@ -119,6 +119,28 @@ def _cliente() -> httpx.AsyncClient:
     )
 
 
+def _cuerpo_json(respuesta: httpx.Response) -> dict[str, Any] | None:
+    """Lee el cuerpo de una respuesta de la DIAN como objeto JSON.
+
+    `dict(respuesta.json())` levantaba `ValueError` con un cuerpo que no es
+    JSON (una pagina de error de un proxy, un 200 vacio) y `TypeError`/
+    `ValueError` con un JSON que no es objeto. Ninguna de las dos es
+    `httpx.HTTPError` ni `DianError`, asi que escapaban de quien llama y
+    tumbaban la tool (BUG-045).
+
+    Args:
+        respuesta: Respuesta HTTP de la DIAN.
+
+    Returns:
+        El objeto JSON, o `None` si el cuerpo no es un objeto JSON.
+    """
+    try:
+        cuerpo = respuesta.json()
+    except ValueError:
+        return None
+    return cuerpo if isinstance(cuerpo, dict) else None
+
+
 async def consultar_contribuyente(nit: str) -> dict[str, Any] | None:
     """Consulta los datos de un contribuyente por NIT.
 
@@ -147,7 +169,12 @@ async def consultar_contribuyente(nit: str) -> dict[str, Any] | None:
         logger.warning("La DIAN devolvio %s al consultar el NIT", respuesta.status_code)
         return None
 
-    return dict(respuesta.json())
+    cuerpo = _cuerpo_json(respuesta)
+    if cuerpo is None:
+        logger.warning(
+            "La DIAN respondio al consultar el NIT %s con un cuerpo no interpretable", nit
+        )
+    return cuerpo
 
 
 async def enviar_factura(factura: dict[str, Any]) -> dict[str, Any]:
@@ -176,4 +203,12 @@ async def enviar_factura(factura: dict[str, Any]) -> dict[str, Any]:
     if respuesta.status_code >= 400:
         raise DianError(f"La DIAN devolvio {respuesta.status_code} al enviar la factura")
 
-    return dict(respuesta.json())
+    cuerpo = _cuerpo_json(respuesta)
+    if cuerpo is None:
+        # Aceptada o no, no se puede saber: la factura queda pendiente para que
+        # alguien la concilie, nunca se reintenta sola (podria duplicarla).
+        raise DianError(
+            f"La DIAN respondio {respuesta.status_code} con un cuerpo no interpretable; "
+            "verifica en su portal si la factura quedo registrada"
+        )
+    return cuerpo

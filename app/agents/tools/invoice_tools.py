@@ -439,6 +439,13 @@ async def create_invoice(
         # de validacion, nunca se le inventa un CUFE.
         logger.info("Factura %s queda pendiente de la DIAN: %s", numero, exc)
         error = str(exc)
+    except Exception:
+        # Un fallo inesperado aca ya no puede propagarse: la factura esta
+        # reservada con su numero, y un `raise` haria que `ai_processor.py`
+        # reintentara el turno entero — otra reserva y otro envio a la DIAN.
+        # Queda pendiente con el motivo para conciliarla a mano (BUG-045).
+        logger.exception("Fallo inesperado enviando la factura %s a la DIAN", numero)
+        error = "Error inesperado al enviar a la DIAN; requiere revision manual"
 
     # Paso 3: guardar lo que dijo la DIAN sobre la fila ya reservada.
     try:
