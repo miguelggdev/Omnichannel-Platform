@@ -4,32 +4,33 @@ Que mide
 ---------
 Un numero de 0 a 100 que resume que tan "vivo" esta un contacto, para que el
 `score_min` de la segmentacion de campanas (`app/services/segmentation.py`)
-pueda apuntar a los mas activos. Cuatro componentes ponderados:
+pueda apuntar a los mas activos. Hasta cinco componentes ponderados (pesos
+sin / con sentimiento medido):
 
-- **Recencia** (0.31): cuanto hace que hablo por ultima vez.
-- **Frecuencia** (0.31): cuantos mensajes mando en los ultimos 30 dias.
-- **Engagement** (0.19): que proporcion de lo que le mandamos contesto.
-- **Conversion** (0.19): citas agendadas y facturas emitidas en 90 dias.
+- **Recencia** (0.31 / 0.25): cuanto hace que hablo por ultima vez.
+- **Frecuencia** (0.31 / 0.25): cuantos mensajes mando en los ultimos 30 dias.
+- **Sentimiento** (— / 0.20): promedio del sentimiento de sus mensajes.
+- **Engagement** (0.19 / 0.15): que proporcion de lo que le mandamos contesto.
+- **Conversion** (0.19 / 0.15): citas agendadas y facturas emitidas en 90 dias.
 
-El sentimiento no esta, y por que
-----------------------------------
+El sentimiento, cuando hay datos
+---------------------------------
 El spec (§7) reparte los pesos entre cinco componentes, con 0.20 para el
-sentimiento acumulado del contacto. **No hay de donde sacarlo**: ninguna tabla
-guarda sentimiento — el nodo `sentiment_analysis` es del Sprint 10 de Dev B y
-sigue pendiente. El spec resuelve el hueco con `return 50` ("neutral por
-defecto"), pero eso no es una medida: es la misma constante para todos los
-contactos, asi que el 20% del score no distingue a nadie y solo comprime el
-rango util al 80% restante.
+sentimiento acumulado del contacto. Desde el Sprint 10 (nodo
+`sentiment_analysis`) el sentimiento de cada mensaje entrante queda en
+`messages.metadata.sentiment.level`, pero **solo** para los tenants que activan
+ese agente, y solo para los mensajes posteriores.
 
-Aca ese 0.20 se reparte entre los cuatro componentes que si tienen datos,
-manteniendo sus proporciones relativas del spec. El score sigue yendo de 0 a
-100 y sigue siendo comparable entre contactos. Cuando exista el sentimiento
-por mensaje, se vuelve a los cinco pesos del spec y los scores se recalculan
-con el endpoint; no hay nada que migrar.
+- **Con mensajes clasificados en la ventana:** se usan los cinco pesos del spec
+  (`PESOS_CON_SENTIMIENTO`), con el promedio de los niveles en escala 0-100
+  (`PUNTAJE_SENTIMIENTO`).
+- **Sin ninguno:** los cuatro pesos de siempre (`PESOS`), con el 0.20 del
+  sentimiento repartido en proporcion. El `return 50` "neutral por defecto" del
+  spec seria la misma constante para todos: no distingue a nadie y solo
+  comprime el rango util.
 
-Es la misma postura que tomo Dev A con `sentiment_avg` en la segmentacion:
-antes que colar un valor inventado que nadie puede auditar, se deja el hueco
-explicito.
+Asi el score de un tenant no cambia hasta que empieza a medir sentimiento, y
+dentro de un tenant compara igual a quien no tiene mensajes medidos todavia.
 
 Separacion IO / calculo
 ------------------------
@@ -44,7 +45,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import case, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
@@ -52,6 +53,7 @@ from app.models.conversation import Conversation
 from app.models.invoice import Invoice
 from app.models.message import Message
 from app.models.service_type import Appointment
+from app.schemas.sentiment import PUNTAJE_SENTIMIENTO
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,15 @@ PESOS: dict[str, float] = {
     "frequency": 0.31,
     "engagement": 0.19,
     "conversion": 0.19,
+}
+
+#: Pesos del spec (§7) cuando el contacto tiene mensajes con sentimiento medido.
+PESOS_CON_SENTIMIENTO: dict[str, float] = {
+    "recency": 0.25,
+    "frequency": 0.25,
+    "sentiment": 0.20,
+    "engagement": 0.15,
+    "conversion": 0.15,
 }
 
 #: Ventana de la frecuencia y del engagement, en dias.
@@ -87,12 +98,15 @@ class MetricasDelContacto:
         entrantes: Mensajes que mando el contacto en la ventana de actividad.
         salientes: Mensajes que le mandamos en la ventana de actividad.
         conversiones: Citas + facturas en la ventana de conversion.
+        sentimiento: Promedio (0-100) del sentimiento de los mensajes del
+            contacto en la ventana de actividad; `None` si ninguno esta medido.
     """
 
     ultima_actividad: datetime | None
     entrantes: int
     salientes: int
     conversiones: int
+    sentimiento: float | None = None
 
 
 def _score_recencia(ultima_actividad: datetime | None, ahora: datetime) -> float:
@@ -199,7 +213,11 @@ def calcular_score(metricas: MetricasDelContacto, ahora: datetime | None = None)
         "engagement": _score_engagement(metricas.entrantes, metricas.salientes),
         "conversion": _score_conversion(metricas.conversiones),
     }
-    total = sum(componentes[nombre] * peso for nombre, peso in PESOS.items())
+    pesos = PESOS
+    if metricas.sentimiento is not None:
+        componentes["sentiment"] = max(0.0, min(float(metricas.sentimiento), 100.0))
+        pesos = PESOS_CON_SENTIMIENTO
+    total = sum(componentes[nombre] * peso for nombre, peso in pesos.items())
     return round(total, 2)
 
 
@@ -208,7 +226,7 @@ async def cargar_metricas(
 ) -> MetricasDelContacto:
     """Lee de la base las metricas crudas de un contacto.
 
-    Las cuatro salen en un solo SELECT con subconsultas escalares, no en cinco
+    Todas salen en un solo SELECT con subconsultas escalares, no en cinco
     viajes como el pseudocodigo del spec: el endpoint recalcula de a un
     contacto hoy, pero un recalculo por lotes sobre miles de contactos con
     cinco round-trips cada uno no se sostiene.
@@ -260,6 +278,25 @@ async def cargar_metricas(
         .scalar_subquery()
     )
 
+    # Promedio del sentimiento de los mensajes entrantes medidos en la ventana
+    # (`sentiment_analysis_node`). AVG ignora los NULL: los mensajes sin medir
+    # no cuentan como neutrales, y si no hay ninguno el resultado es NULL.
+    nivel = Message.metadata_["sentiment"]["level"].astext
+    puntaje = case(
+        *((nivel == nombre, valor) for nombre, valor in PUNTAJE_SENTIMIENTO.items()),
+        else_=None,
+    )
+    sentimiento = (
+        select(func.avg(puntaje))
+        .where(
+            Message.client_id == client_id,
+            Message.conversation_id.in_(conversaciones),
+            Message.direction == "inbound",
+            Message.created_at >= desde_actividad,
+        )
+        .scalar_subquery()
+    )
+
     citas = (
         select(func.count())
         .select_from(Appointment)
@@ -289,6 +326,7 @@ async def cargar_metricas(
                 _contar_mensajes("inbound").label("entrantes"),
                 _contar_mensajes("outbound").label("salientes"),
                 (citas + facturas).label("conversiones"),
+                sentimiento.label("sentimiento"),
             )
         )
     ).one()
@@ -298,6 +336,7 @@ async def cargar_metricas(
         entrantes=int(fila.entrantes or 0),
         salientes=int(fila.salientes or 0),
         conversiones=int(fila.conversiones or 0),
+        sentimiento=None if fila.sentimiento is None else float(fila.sentimiento),
     )
 
 
