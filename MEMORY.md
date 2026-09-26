@@ -871,8 +871,24 @@ Cuatro agentes en paralelo (RLS/multi-tenancy, async/concurrencia, seguridad, l�
   - Toda transición lee la fila con `SELECT ... FOR UPDATE` (`services/campaigns.py::bloquear_campana()`): `/send`, `DELETE`, la tool y la task. La task toma antes `pg_advisory_xact_lock(hashtext('campaigns:<client_id>'))` (`serializar_lanzamientos()`), así el anti-duplicado ve la `sending` ya commiteada de la otra campaña. La clave lleva prefijo para no compartir el lock del consecutivo de facturas.
   - Confirmar sin fecha fija `scheduled_for = now()`. Con fecha futura no se encola nada: `app.tasks.bulk_dispatch_scheduled_campaigns` (Beat, cada 60s, cola `bulk`) encola las `scheduled` con `scheduled_for <= now()`. Esa pasada también recupera una campaña cuya task se perdió (antes quedaba en `scheduled` sin poder reenviarse ni borrarse). Encolar dos veces es inocuo gracias al candado. `_marcar_en_envio()` además no lanza nada antes de su hora.
   - `CampaignCreate.scheduled_for` naive se toma en UTC, igual que la tool. `CampaignSendResponse` devuelve `scheduled_for`.
-- **Pendiente anotado:** mientras una campaña larga ocupa el worker de `bulk`, cada pasada de Beat vuelve a encolar las vencidas que esperan detrás. Son no-ops (la task la encuentra en `sending`), pero se acumulan en la cola; si molesta, deduplicar con una clave en Redis por campaña.
+- **Encolado repetido (cerrado en la misma sesión):** mientras una campaña larga ocupaba el worker de `bulk`, cada pasada de Beat volvía a encolar las vencidas que esperaban detrás (no-ops, pero se acumulaban en la cola). `_reservar_encolado()` pone `SET campaign_dispatch:<id> NX EX 600` en Redis antes de encolar: una copia cada 10 minutos como mucho, que sigue recuperando una task perdida. Fail-open si Redis no responde (una copia de más es inocua por el `FOR UPDATE`).
 - **Lección transferible:** un "guard de reentrega" que lee el estado y después lo escribe no protege de nada sin candado (`FOR UPDATE` o `UPDATE ... WHERE status = ... RETURNING`). Y un campo de fecha programada necesita un consumidor; si no, es solo un dato que se muestra.
+
+### BUG-044: Facturación y segmentación del Sprint 12 — cinco defectos de la revisión post-sprint
+- **Descripción:** misma revisión de la Sesión 38.
+  1. **El número de factura no viajaba a la DIAN.** `create_invoice()` llamaba a `enviar_factura()` y recién después calculaba el consecutivo, así que el documento no llevaba prefijo ni número. La DIAN los exige (el CUFE se calcula con ellos): un CUFE aprobado no correspondía al número guardado.
+  2. **Consecutivo por `COUNT(*) + 1`.** Con una sola factura borrada o importada con otro número, el calculado ya existía y **cada factura nueva del tenant** chocaba contra el `UNIQUE (client_id, invoice_number)` para siempre.
+  3. **Importes en `INTEGER`** (migración 013): en centavos, el tope son ~21,5 M COP. Una factura B2B mayor fallaba al insertarse (`value out of int32 range`). Encontrado al revisar el punto 5.
+  4. **Filtro `metadata` de la segmentación con `str(valor)`:** `{"vip": true}` buscaba `"True"` contra el `"true"` de JSON, y `{"nivel": 1.0}` buscaba `"1.0"` contra `"1"`: no encontraba a nadie. Además, `score_min: true` pasaba la validación (`bool` es subclase de `int`).
+  5. **`calcular_totales()`:** `unit_price: "inf"` levantaba `OverflowError` (no capturado: la tool se caía), y `quantity: 2.9` se truncaba a 2 sin avisar.
+- **Estado:** CERRADO.
+  1. `create_invoice()` en tres pasos: (a) transacción corta que toma el advisory lock, calcula el consecutivo e inserta la factura en `pending_dian`; (b) `enviar_factura()` con `invoice_number` y `prefix`, sin transacción abierta; (c) `UPDATE` con estado, CUFE y respuesta. Si (a) falla, no se llamó a la DIAN y se puede reintentar. Si (c) falla, la fila ya existe con número: log CRITICAL con número y CUFE, y un mensaje al agente que dice explícitamente que **no** reemita.
+  2. `MAX(substring(invoice_number from '^FE-([0-9]+)$')::bigint) + 1`, comparado como entero (con texto, `FE-1000000` ordenaría antes que `FE-999999`).
+  3. Migración `014_invoice_amounts_bigint` (`ALTER COLUMN ... TYPE BIGINT`, sube y baja) y `BigInteger` en el modelo; `alembic check` limpio.
+  4. Contención JSONB (`metadata @> '{"clave": valor}'`), que compara valores con su tipo y los números por valor. `bool` excluido de los criterios numéricos.
+  5. `_a_centavos()` rechaza no finitos y booleanos; `_cantidad()` acepta `2`, `2.0` o `"2"` y rechaza fracciones.
+- **Tests:** `tests/integration/test_invoices_segmentation.py` contra PostgreSQL real: con el código anterior fallan el importe de 59,5 M COP, el consecutivo con huecos (daba `FE-000003`, que ya existía) y los casos `true`/`1.0` del filtro.
+- **Lección transferible:** un identificador que un tercero firma (el CUFE) tiene que existir antes de la llamada, no después. Y en una base, contar filas no es numerar: los huecos existen.
 
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.
