@@ -127,8 +127,8 @@ def _campana(**over):
 class TestSegmentacion:
     def test_un_criterio_desconocido_no_se_ignora(self) -> None:
         """Ignorarlo mandaria la campana a mas gente de la que el tenant eligio."""
-        with pytest.raises(CriterioInvalidoError, match="sentiment_avg"):
-            construir_query(uuid4(), {"tags": ["vip"], "sentiment_avg": 0.5})
+        with pytest.raises(CriterioInvalidoError, match="edad"):
+            construir_query(uuid4(), {"tags": ["vip"], "edad": 30})
 
     @pytest.mark.parametrize(
         ("criterio", "valor"),
@@ -160,6 +160,41 @@ class TestSegmentacion:
         """`timedelta(days=1e10)` y `NaN` en JSONB tumbaban la consulta."""
         with pytest.raises(CriterioInvalidoError):
             construir_query(uuid4(), criterios)
+
+    @pytest.mark.parametrize(
+        ("valor", "compara"),
+        [
+            (60, [">="]),
+            ({"min": 20, "max": 50}, [">=", "<="]),
+            ({"max": 30}, ["<="]),
+        ],
+    )
+    def test_sentiment_avg_filtra_por_el_promedio_medido(
+        self, valor: object, compara: list[str]
+    ) -> None:
+        """Ahora que el sentimiento se mide (Sprint 10), el criterio del spec existe."""
+        from sqlalchemy.dialects import postgresql
+
+        sql = " ".join(
+            str(
+                construir_query(uuid4(), {"sentiment_avg": valor}).compile(
+                    dialect=postgresql.dialect()
+                )
+            ).split()
+        )
+
+        assert "avg(CASE" in sql
+        assert "messages.direction = " in sql
+        for operador in compara:
+            assert f") {operador} " in sql
+
+    @pytest.mark.parametrize(
+        "valor",
+        [-1, 101, float("nan"), True, "alto", {}, {"min": 80, "max": 20}, {"min": 10, "extra": 1}],
+    )
+    def test_sentiment_avg_invalido(self, valor: object) -> None:
+        with pytest.raises(CriterioInvalidoError, match="sentiment_avg"):
+            construir_query(uuid4(), {"sentiment_avg": valor})
 
     @pytest.mark.parametrize("criterio", ["score_min", "last_active_days"])
     def test_un_booleano_no_cuenta_como_numero(self, criterio: str) -> None:
@@ -322,7 +357,7 @@ class TestToolsDeMarketing:
     @pytest.mark.asyncio
     async def test_un_criterio_invalido_no_crea_la_campana(self, monkeypatch) -> None:
         monkeypatch.setattr(
-            mt, "contar_segmento", AsyncMock(side_effect=CriterioInvalidoError("sentiment_avg"))
+            mt, "contar_segmento", AsyncMock(side_effect=CriterioInvalidoError("edad"))
         )
         sesion = _SesionFalsa()
         monkeypatch.setattr(mt, "tenant_session", _sesion(sesion))
@@ -330,7 +365,7 @@ class TestToolsDeMarketing:
         respuesta = await mt.create_campaign.ainvoke(
             {
                 "name": "Promo",
-                "segment_criteria": {"sentiment_avg": 1},
+                "segment_criteria": {"edad": 1},
                 "message_template": "Hola",
                 "channel": "telegram",
             },

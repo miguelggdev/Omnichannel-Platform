@@ -145,8 +145,9 @@ async def segment_contacts(criteria: dict[str, Any], config: RunnableConfig) -> 
         criteria: Criterios de segmentacion. Claves admitidas: tags con una
             lista de nombres de etiqueta que el contacto debe tener todas,
             channel con el canal, last_active_days con los dias de actividad
-            reciente, score_min con el score minimo, y metadata con pares
-            clave/valor.
+            reciente, score_min con el score minimo, sentiment_avg con el
+            sentimiento promedio de 0 a 100 (un numero es el minimo, o un
+            objeto con min y max), y metadata con pares clave/valor.
     """
     client_id = _client_id(config)
     if (bloqueo := await _no_autorizado(config)) is not None:

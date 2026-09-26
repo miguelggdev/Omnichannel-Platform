@@ -23,6 +23,7 @@ from app.api.v1.contacts import router as contacts_router
 from app.api.v1.conversations import router as conversations_router
 from app.api.v1.csat import router as csat_router
 from app.api.v1.documents import router as documents_router
+from app.api.v1.marketing_settings import router as marketing_settings_router
 from app.api.v1.notes import router as notes_router
 from app.api.v1.quick_replies import router as quick_replies_router
 from app.api.v1.tags import contact_tags_router
@@ -173,6 +174,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
     app.include_router(templates_router, prefix="/api/v1/admin/templates", tags=["templates"])
     app.include_router(campaigns_router, prefix="/api/v1/campaigns", tags=["campaigns"])
+    app.include_router(marketing_settings_router, prefix="/api/v1/marketing", tags=["marketing"])
     # NO "/api/v1/webhooks/outgoing" (el path del spec): TenantContextMiddleware
     # trata cualquier ruta bajo "/api/v1/webhooks/" como webhook entrante (firma
     # HMAC, no JWT) y la salta por completo — un CRUD ahi quedaria sin

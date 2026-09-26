@@ -166,16 +166,16 @@ class TestAlta:
         from app.services.segmentation import CriterioInvalidoError
 
         async def _contar(*_args, **_kwargs):
-            raise CriterioInvalidoError("Criterios no soportados: sentiment_avg")
+            raise CriterioInvalidoError("Criterios no soportados: edad")
 
         monkeypatch.setattr(campaigns_module, "contar_segmento", _contar)
 
         response = await authenticated_client.post(
-            URL, json={**self._BODY, "segment_criteria": {"sentiment_avg": 0.8}}
+            URL, json={**self._BODY, "segment_criteria": {"edad": 30}}
         )
 
         assert response.status_code == 400
-        assert "sentiment_avg" in response.text
+        assert "edad" in response.text
         assert session.added == []
 
     async def test_plantilla_vacia_la_rechaza_el_schema(

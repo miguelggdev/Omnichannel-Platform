@@ -17,9 +17,13 @@ Criterios soportados
   existe, el filtro simplemente no encuentra a nadie.
 - `metadata`: pares clave/valor que deben estar en `contacts.metadata`.
 
-`sentiment_avg` (que el spec menciona) no esta: el sentimiento por mensaje lo
-introduce el nodo de Dev B del Sprint 10 y todavia no hay un promedio por
-contacto que consultar. Pedirlo da error en vez de colarse sin filtrar.
+- `sentiment_avg`: sentimiento promedio (0-100) de los mensajes del contacto
+  en los ultimos 30 dias, medido por el nodo `sentiment_analysis` (Sprint 10).
+  Un numero es el minimo; `{"min": x, "max": y}` acota por los dos lados (para
+  una campana de recuperacion interesa el maximo). Misma escala y ventana que
+  el scoring (`contact_scoring.puntaje_de_sentimiento`). Un contacto **sin**
+  mensajes medidos no entra: no se sabe como esta, y tratarlo como neutral
+  seria inventarle un dato.
 
 Nunca entran en un segmento los contactos fusionados (`merged_into_id`) ni los
 borrados por RGPD (`is_gdpr_deleted`): los primeros duplicarian el envio en la
@@ -41,13 +45,15 @@ from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.contact_tag import ContactTag
 from app.models.conversation import Conversation
+from app.models.message import Message
 from app.models.tag import Tag
+from app.services.contact_scoring import VENTANA_ACTIVIDAD_DIAS, puntaje_de_sentimiento
 
 logger = logging.getLogger(__name__)
 
 #: Claves que `resolver_segmento()` sabe interpretar.
 CRITERIOS_SOPORTADOS: frozenset[str] = frozenset(
-    {"tags", "channel", "last_active_days", "score_min", "metadata"}
+    {"tags", "channel", "last_active_days", "score_min", "metadata", "sentiment_avg"}
 )
 
 
@@ -102,6 +108,8 @@ def _validar(criterios: dict[str, Any]) -> None:
         raise CriterioInvalidoError(
             f"`last_active_days` tiene que estar entre 0 y {MAX_DIAS_ACTIVIDAD}"
         )
+    if "sentiment_avg" in criterios:
+        _rango_de_sentimiento(criterios["sentiment_avg"])
     for clave, valor in (criterios.get("metadata") or {}).items():
         if isinstance(valor, float) and not math.isfinite(valor):
             raise CriterioInvalidoError(f"`metadata.{clave}` tiene que ser un numero finito")
@@ -136,6 +144,49 @@ def _coincide_metadata(clave: str, valor: Any) -> ColumnElement[bool]:
         como_texto = Contact.metadata_.contains({clave: json.dumps(valor)})
         return or_(por_json, como_texto)
     return por_json
+
+
+def _es_puntaje(valor: Any) -> bool:
+    """Si `valor` es un numero finito entre 0 y 100 (y no un booleano)."""
+    return (
+        not isinstance(valor, bool)
+        and isinstance(valor, (int, float))
+        and math.isfinite(valor)
+        and 0 <= valor <= 100
+    )
+
+
+def _rango_de_sentimiento(valor: Any) -> tuple[float | None, float | None]:
+    """Interpreta el criterio `sentiment_avg`.
+
+    Args:
+        valor: Un numero (minimo) o `{"min": x, "max": y}`, en escala 0-100.
+
+    Returns:
+        `(minimo, maximo)`; cualquiera de los dos puede ser `None`.
+
+    Raises:
+        CriterioInvalidoError: Si no tiene una de esas dos formas, algun extremo
+            no esta entre 0 y 100, o el minimo supera al maximo.
+    """
+    error = CriterioInvalidoError(
+        "`sentiment_avg` tiene que ser un numero entre 0 y 100 (minimo) o "
+        '{"min": x, "max": y} con valores entre 0 y 100'
+    )
+    if _es_puntaje(valor):
+        return float(valor), None
+    if not isinstance(valor, dict) or not valor or set(valor) - {"min", "max"}:
+        raise error
+    minimo, maximo = valor.get("min"), valor.get("max")
+    for extremo in (minimo, maximo):
+        if extremo is not None and not _es_puntaje(extremo):
+            raise error
+    if minimo is not None and maximo is not None and minimo > maximo:
+        raise CriterioInvalidoError("`sentiment_avg.min` no puede ser mayor que `max`")
+    return (
+        None if minimo is None else float(minimo),
+        None if maximo is None else float(maximo),
+    )
 
 
 def construir_query(client_id: UUID, criterios: dict[str, Any]) -> Select[tuple[Contact]]:
@@ -212,6 +263,30 @@ def construir_query(client_id: UUID, criterios: dict[str, Any]) -> Select[tuple[
         stmt = stmt.where(
             case((es_numero, score_texto.cast(Numeric)), else_=None) >= float(score_min)
         )
+
+    if "sentiment_avg" in criterios:
+        minimo, maximo = _rango_de_sentimiento(criterios["sentiment_avg"])
+        desde = datetime.now(timezone.utc) - timedelta(days=VENTANA_ACTIVIDAD_DIAS)
+        # Subconsulta correlacionada por contacto. AVG da NULL si no hay
+        # mensajes medidos, y NULL no cumple ninguna comparacion: el contacto
+        # queda fuera, que es lo que se quiere (ver el docstring del modulo).
+        promedio = (
+            select(func.avg(puntaje_de_sentimiento()))
+            .select_from(Message)
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .where(
+                Conversation.contact_id == Contact.id,
+                Conversation.client_id == client_id,
+                Message.client_id == client_id,
+                Message.direction == "inbound",
+                Message.created_at >= desde,
+            )
+            .scalar_subquery()
+        )
+        if minimo is not None:
+            stmt = stmt.where(promedio >= minimo)
+        if maximo is not None:
+            stmt = stmt.where(promedio <= maximo)
 
     for clave, valor in (criterios.get("metadata") or {}).items():
         stmt = stmt.where(_coincide_metadata(clave, valor))
