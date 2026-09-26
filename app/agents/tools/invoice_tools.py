@@ -19,18 +19,24 @@ Cambios sobre el pseudocodigo del spec (§1.2), todos en ADR-067:
   sin definir; aca es `FE-000001` por tenant, calculado dentro de la misma
   transaccion que inserta, con el `UNIQUE (client_id, invoice_number)` de la
   migracion 012 como red.
+- **El numero se reserva antes de ir a la DIAN.** La DIAN exige prefijo y
+  consecutivo en el documento (el CUFE se calcula con ellos), asi que
+  `create_invoice()` primero inserta la factura en `pending_dian` con su
+  numero, despues la envia y por ultimo guarda la respuesta (BUG-044).
 - **Sin CUFE inventado.** Si la DIAN no esta configurada o falla, la factura
   queda en `pending_dian` con el motivo; nunca se marca `approved`.
 """
 
 import logging
+import math
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from sqlalchemy import func, select, text
+from sqlalchemy import BigInteger, func, select, text
+from sqlalchemy import update as sa_update
 
 from app.core.database import tenant_session
 from app.models.invoice import (
@@ -146,12 +152,47 @@ def _a_centavos(valor: Any) -> int:
         El importe en centavos, redondeado al centavo mas cercano.
 
     Raises:
-        ValueError: Si no es un numero o es negativo.
+        ValueError: Si no es un numero finito o es negativo.
     """
+    if isinstance(valor, bool):
+        raise ValueError("El precio tiene que ser un numero")
     numero = float(valor)
+    # `float()` acepta "inf" y "nan": `round(inf)` levanta OverflowError, que
+    # no es ValueError y tumbaba la tool en vez de devolver un mensaje.
+    if not math.isfinite(numero):
+        raise ValueError("El precio tiene que ser un numero finito")
     if numero < 0:
         raise ValueError("Los importes no pueden ser negativos")
     return round(numero * 100)
+
+
+def _cantidad(valor: Any, descripcion: str) -> int:
+    """Valida la cantidad de una linea: un entero de 1 o mas.
+
+    `int(2.9)` da 2 sin avisar, asi que una cantidad fraccionaria facturaba
+    menos unidades de las pedidas. Se acepta `2`, `2.0` o `"2"`, y se rechaza
+    `2.9` en vez de truncarla.
+
+    Args:
+        valor: Cantidad tal como llego del LLM.
+        descripcion: Descripcion de la linea, para el mensaje de error.
+
+    Returns:
+        La cantidad como entero.
+
+    Raises:
+        ValueError: Si no es un entero de 1 o mas.
+    """
+    error = ValueError(f"Cantidad invalida en '{descripcion}': debe ser un entero de 1 o mas")
+    if isinstance(valor, bool):
+        raise error
+    try:
+        numero = float(valor)
+    except (TypeError, ValueError):
+        raise error from None
+    if not math.isfinite(numero) or not numero.is_integer() or numero < 1:
+        raise error
+    return int(numero)
 
 
 def calcular_totales(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int, int, int]:
@@ -180,9 +221,7 @@ def calcular_totales(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
         if not descripcion:
             raise ValueError("Cada linea necesita una descripcion")
 
-        cantidad = int(item.get("quantity", 0))
-        if cantidad < 1:
-            raise ValueError(f"Cantidad invalida en '{descripcion}': debe ser 1 o mas")
+        cantidad = _cantidad(item.get("quantity", 0), descripcion)
 
         if "tax_rate" not in item or item["tax_rate"] is None:
             raise ValueError(
@@ -229,17 +268,21 @@ def _formatear_pesos(centavos: int) -> str:
 async def _siguiente_consecutivo(session: Any, client_id: UUID) -> str:
     """Calcula el siguiente numero de factura del tenant.
 
-    `pg_advisory_xact_lock` antes del `COUNT(*)`, no solo el `UNIQUE` de la
-    migracion 012 como red: sin el lock, dos `create_invoice` casi
-    simultaneas del mismo tenant leen el mismo conteo antes de que ninguna
-    inserte, calculan el mismo consecutivo, y la segunda revienta contra el
-    `UNIQUE` — pero para entonces la DIAN ya pudo haber aceptado las dos
-    facturas (`create_invoice` llama a la DIAN antes de abrir esta
-    transaccion), asi que el choque deja una factura aprobada sin fila local.
-    El lock es por tenant (`hashtext(client_id)`) y de alcance transaccional:
-    se libera solo al terminar la transaccion, mismo patron que el
-    doble-booking de citas (`calendar_tools.create_appointment`).
-    Hallazgo de /code-review sobre el PR #42.
+    `pg_advisory_xact_lock` antes de leer el ultimo numero, no solo el `UNIQUE`
+    de la migracion 012 como red: sin el lock, dos `create_invoice` casi
+    simultaneas del mismo tenant leen el mismo ultimo numero antes de que
+    ninguna inserte y la segunda revienta contra el `UNIQUE`. El lock es por
+    tenant (`hashtext(client_id)`) y de alcance transaccional: se libera solo
+    al terminar la transaccion, mismo patron que el doble-booking de citas
+    (`calendar_tools.create_appointment`). Hallazgo de /code-review sobre el
+    PR #42.
+
+    El siguiente es el **mayor numero emitido + 1**, no `COUNT(*) + 1`: con el
+    conteo, una sola factura borrada (o importada con otro numero) hacia que
+    el calculado ya existiera, y desde ahi cada factura nueva del tenant
+    chocaba contra el `UNIQUE` para siempre (BUG-044). El numero se extrae y
+    se compara como entero, no como texto: `FE-1000000` ordena antes que
+    `FE-999999` lexicograficamente.
 
     Args:
         session: Sesion con el contexto de tenant ya aplicado.
@@ -251,12 +294,16 @@ async def _siguiente_consecutivo(session: Any, client_id: UUID) -> str:
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:client_id))"), {"client_id": str(client_id)}
     )
-    emitidas = (
+    numero = func.substring(Invoice.invoice_number, r"^FE-([0-9]+)$").cast(BigInteger)
+    ultimo = (
         await session.execute(
-            select(func.count()).select_from(Invoice).where(Invoice.client_id == client_id)
+            select(func.coalesce(func.max(numero), 0)).where(
+                Invoice.client_id == client_id,
+                Invoice.invoice_number.like(f"{PREFIJO_CONSECUTIVO}%"),
+            )
         )
     ).scalar_one()
-    return f"{PREFIJO_CONSECUTIVO}{emitidas + 1:0{DIGITOS_CONSECUTIVO}d}"
+    return f"{PREFIJO_CONSECUTIVO}{int(ultimo) + 1:0{DIGITOS_CONSECUTIVO}d}"
 
 
 @tool(parse_docstring=True)
@@ -326,37 +373,11 @@ async def create_invoice(
     invoice_id = uuid4()
     emitida = datetime.now(timezone.utc)
 
-    documento = {
-        "buyer_nit": f"{nit_limpio}-{digito}",
-        "buyer_name": buyer_name,
-        "items": lineas,
-        "subtotal_cents": subtotal,
-        "tax_total_cents": impuestos,
-        "total_cents": total,
-        "currency": "COP",
-        "issue_date": emitida.isoformat(),
-    }
-
-    # La DIAN se consulta ANTES de abrir la transaccion: es una llamada de red
-    # de hasta 10s y no puede retener una conexion del pooler (misma razon que
-    # el engine de webhooks salientes, ADR-065).
-    estado = INVOICE_PENDING_DIAN
-    cufe: str | None = None
-    respuesta_dian: dict[str, Any] = {}
-    error: str | None = None
-
-    try:
-        respuesta_dian = await enviar_factura(documento)
-        cufe = respuesta_dian.get("cufe")
-        estado = INVOICE_APPROVED if cufe else INVOICE_REJECTED
-        if estado == INVOICE_REJECTED:
-            error = str(respuesta_dian.get("error") or "La DIAN no devolvio CUFE")
-    except DianError as exc:
-        # Incluye DianNoConfiguradaError: la factura existe y queda pendiente
-        # de validacion, nunca se le inventa un CUFE.
-        logger.info("Factura %s queda pendiente de la DIAN: %s", invoice_id, exc)
-        error = str(exc)
-
+    # Paso 1: reservar el consecutivo. La factura se inserta en `pending_dian`
+    # en una transaccion corta, ANTES de hablar con la DIAN: el documento que
+    # se le envia tiene que llevar su numero (el CUFE se calcula con el), y
+    # si algo falla despues queda una fila con numero que conciliar, no una
+    # factura aprobada sin rastro local.
     try:
         async with tenant_session(client_id) as session:
             numero = await _siguiente_consecutivo(session, client_id)
@@ -373,27 +394,78 @@ async def create_invoice(
                     subtotal_cents=subtotal,
                     tax_total_cents=impuestos,
                     total_cents=total,
-                    status=estado,
-                    dian_cufe=cufe,
-                    dian_response=respuesta_dian,
-                    error_message=error,
+                    status=INVOICE_PENDING_DIAN,
+                    dian_response={},
                     issued_at=emitida,
                 )
             )
     except Exception:
-        # La DIAN ya pudo haber aceptado la factura (estado == INVOICE_APPROVED,
-        # cufe con valor) antes de que esto fallara: un `raise` aca dejaria que
-        # `ai_processor.py` reintente el turno completo, y el reintento
-        # volveria a llamar a `enviar_factura()` — una segunda factura real
-        # ante la DIAN por el mismo pedido. En vez de eso se registra en
-        # CRITICAL con el CUFE (si lo hay) para que un humano concilie a mano,
-        # y se le devuelve al agente un resultado que deja claro que hace
-        # falta revisar, no un error generico que invite a reintentar.
-        # Hallazgo de /code-review sobre el PR #42.
+        # Todavia no se hablo con la DIAN: no hay nada que conciliar.
+        logger.exception("No se pudo reservar el consecutivo de la factura %s", invoice_id)
+        return (
+            "No se pudo emitir la factura por un problema tecnico. "
+            "No se envio nada a la DIAN; puedes intentarlo de nuevo."
+        )
+
+    documento = {
+        "invoice_number": numero,
+        "prefix": PREFIJO_CONSECUTIVO.rstrip("-"),
+        "buyer_nit": f"{nit_limpio}-{digito}",
+        "buyer_name": buyer_name,
+        "items": lineas,
+        "subtotal_cents": subtotal,
+        "tax_total_cents": impuestos,
+        "total_cents": total,
+        "currency": "COP",
+        "issue_date": emitida.isoformat(),
+    }
+
+    # Paso 2: la DIAN, sin ninguna transaccion abierta. Es una llamada de red
+    # de hasta 10s y no puede retener una conexion del pooler (misma razon que
+    # el engine de webhooks salientes, ADR-065).
+    estado = INVOICE_PENDING_DIAN
+    cufe: str | None = None
+    respuesta_dian: dict[str, Any] = {}
+    error: str | None = None
+
+    try:
+        respuesta_dian = await enviar_factura(documento)
+        cufe = respuesta_dian.get("cufe")
+        estado = INVOICE_APPROVED if cufe else INVOICE_REJECTED
+        if estado == INVOICE_REJECTED:
+            error = str(respuesta_dian.get("error") or "La DIAN no devolvio CUFE")
+    except DianError as exc:
+        # Incluye DianNoConfiguradaError: la factura existe y queda pendiente
+        # de validacion, nunca se le inventa un CUFE.
+        logger.info("Factura %s queda pendiente de la DIAN: %s", numero, exc)
+        error = str(exc)
+
+    # Paso 3: guardar lo que dijo la DIAN sobre la fila ya reservada.
+    try:
+        async with tenant_session(client_id) as session:
+            await session.execute(
+                sa_update(Invoice)
+                .where(Invoice.id == invoice_id, Invoice.client_id == client_id)
+                .values(
+                    status=estado,
+                    dian_cufe=cufe,
+                    dian_response=respuesta_dian,
+                    error_message=error,
+                )
+                .execution_options(synchronize_session=False)
+            )
+    except Exception:
+        # La DIAN ya pudo haber aceptado la factura (cufe con valor) antes de
+        # que esto fallara: un `raise` aca dejaria que `ai_processor.py`
+        # reintente el turno completo, y el reintento volveria a llamar a
+        # `enviar_factura()` — una segunda factura real ante la DIAN por el
+        # mismo pedido. Se registra en CRITICAL con el numero y el CUFE para
+        # que un humano concilie a mano; la fila ya existe en `pending_dian`
+        # con su numero. Hallazgo de /code-review sobre el PR #42.
         logger.critical(
-            "No se pudo guardar la factura %s tras la respuesta de la DIAN "
+            "No se pudo guardar la respuesta de la DIAN para la factura %s "
             "(estado=%s cufe=%s tenant=%s); requiere conciliacion manual",
-            invoice_id,
+            numero,
             estado,
             cufe,
             client_id,
@@ -401,9 +473,9 @@ async def create_invoice(
         )
         aviso_dian = f" La DIAN ya la habia aprobado con CUFE {cufe}." if cufe else ""
         return (
-            "No se pudo registrar la factura por un problema tecnico al guardarla."
-            f"{aviso_dian} Avisa a soporte con este identificador para revisarlo "
-            f"a mano: {invoice_id}."
+            f"La factura {numero} se envio pero no se pudo registrar la respuesta de la DIAN "
+            f"por un problema tecnico.{aviso_dian} No la emitas otra vez: avisa a soporte "
+            f"con el numero {numero} para revisarla."
         )
 
     resumen = (
