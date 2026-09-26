@@ -27,6 +27,7 @@ from app.api.v1.notes import router as notes_router
 from app.api.v1.quick_replies import router as quick_replies_router
 from app.api.v1.tags import contact_tags_router
 from app.api.v1.tags import router as tags_router
+from app.api.v1.templates import router as templates_router
 from app.api.v1.webchat import router as webchat_router
 from app.api.v1.webhooks import router as webhooks_router
 from app.api.v1.webhooks_config import router as webhooks_config_router
@@ -170,6 +171,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_logs_router, prefix="/api/v1/agent-logs", tags=["agent-logs"])
     app.include_router(quick_replies_router, prefix="/api/v1/quick-replies", tags=["quick-replies"])
     app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
+    app.include_router(templates_router, prefix="/api/v1/admin/templates", tags=["templates"])
     app.include_router(campaigns_router, prefix="/api/v1/campaigns", tags=["campaigns"])
     # NO "/api/v1/webhooks/outgoing" (el path del spec): TenantContextMiddleware
     # trata cualquier ruta bajo "/api/v1/webhooks/" como webhook entrante (firma
