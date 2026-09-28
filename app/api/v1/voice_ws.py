@@ -174,7 +174,9 @@ async def media_stream(websocket: WebSocket) -> None:
         logger.warning("Voz: stream rechazado, token ausente o invalido")
         await websocket.close(code=CLOSE_TOKEN_INVALIDO)
         return
-    if not await mark_if_new("voice_stream", call_sid):
+    # Fail-closed: aqui no hay otra barrera contra un segundo stream, y sin
+    # Redis la llamada tampoco podria recibir respuestas del agente.
+    if not await mark_if_new("voice_stream", call_sid, fail_open=False):
         logger.warning("Voz: segundo stream para la llamada %s", call_sid)
         await websocket.close(code=CLOSE_STREAM_DUPLICADO)
         return
@@ -184,9 +186,11 @@ async def media_stream(websocket: WebSocket) -> None:
         return
 
     _llamadas_activas += 1
-    sesion = CallSession(claims, stream_sid, websocket.send_json)
+    sesion: CallSession | None = None
     motivo = "error"
     try:
+        # Dentro del `try`: si el constructor lanza, el `finally` libera el cupo.
+        sesion = CallSession(claims, stream_sid, websocket.send_json)
         await sesion.start()
         motivo = await _atender(websocket, sesion, settings.VOICE_MAX_CALL_SECONDS)
     except Exception:
@@ -195,10 +199,11 @@ async def media_stream(websocket: WebSocket) -> None:
         # Primero y sin `await`: si esta tarea se cancela al limpiar, el cupo no
         # puede quedar ocupado para siempre.
         _llamadas_activas -= 1
-        try:
-            await sesion.close(motivo)
-        except Exception:
-            logger.exception("Voz: error al cerrar la llamada %s", call_sid)
+        if sesion is not None:
+            try:
+                await sesion.close(motivo)
+            except Exception:
+                logger.exception("Voz: error al cerrar la llamada %s", call_sid)
         if motivo != "disconnected":
             with contextlib.suppress(Exception):
                 await websocket.close(code=CLOSE_TIEMPO_AGOTADO if motivo == "timeout" else 1000)

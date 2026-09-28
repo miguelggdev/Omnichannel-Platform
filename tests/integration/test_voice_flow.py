@@ -161,6 +161,27 @@ async def test_eventos_fuera_de_orden_no_deshacen_el_estado_final(
     assert registro.phone_to == PLATAFORMA
 
 
+async def test_el_fin_de_la_llamada_es_el_primero_que_se_conocio(
+    tenant_voz: uuid.UUID,
+) -> None:
+    """El cierre del stream y el `completed` escriben los dos `ended_at`; gana el primero."""
+    fin = datetime.now(timezone.utc) - timedelta(seconds=30)
+
+    await guardar_llamada(
+        tenant_voz, "CA-fin", {"status": "completed", "ended_at": fin.isoformat()}
+    )
+    await guardar_llamada(
+        tenant_voz,
+        "CA-fin",
+        {"ended_at": datetime.now(timezone.utc).isoformat(), "transcript": []},
+    )
+    await guardar_llamada(tenant_voz, "CA-fin", {"status": "in-progress"})
+
+    registro = await _registro(tenant_voz, "CA-fin")
+    assert registro.ended_at == fin
+    assert registro.status == "completed"
+
+
 async def test_los_telefonos_de_la_llamada_quedan_cifrados(tenant_voz: uuid.UUID) -> None:
     await guardar_llamada(
         tenant_voz,

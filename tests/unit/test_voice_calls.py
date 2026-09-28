@@ -783,6 +783,36 @@ class TestWebSocket:
             ws.send_json(_start(_token()))
             assert _codigo_de_cierre(ws) == 4409
 
+    def test_sin_redis_el_stream_se_rechaza(
+        self, cliente_ws: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.api.v1 import voice_ws
+        from app.services import dedup
+
+        class RedisCaido:
+            async def set(self, *args: Any, **kwargs: Any) -> bool:
+                raise ConnectionError("redis caido")
+
+        monkeypatch.setattr(voice_ws, "mark_if_new", dedup.mark_if_new)
+        monkeypatch.setattr(dedup, "get_redis", RedisCaido)
+        with _conectar(cliente_ws) as ws:
+            ws.send_json(_start(_token()))
+            assert _codigo_de_cierre(ws) == 4409
+
+    def test_si_la_sesion_no_se_construye_el_cupo_se_libera(
+        self, cliente_ws: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.api.v1 import voice_ws
+
+        def _revienta(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("constructor roto")
+
+        monkeypatch.setattr(voice_ws, "CallSession", _revienta)
+        with _conectar(cliente_ws) as ws:
+            ws.send_json(_start(_token()))
+            _codigo_de_cierre(ws)
+        assert voice_ws._llamadas_activas == 0
+
     def test_tope_de_llamadas_simultaneas(
         self, cliente_ws: TestClient, ajustes: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:

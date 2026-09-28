@@ -194,7 +194,9 @@ async def guardar_llamada(client_id: UUID, call_sid: str, datos: dict[str, Any])
             "phone_to": _si_llego("phone_to"),
             # El inicio es el primero que se conocio, no el ultimo evento.
             "started_at": func.least(actual.started_at, nuevo.started_at),
-            "ended_at": _si_llego("ended_at"),
+            # Como el inicio: el primer fin conocido. El cierre del stream y el
+            # status callback final lo escriben los dos, en cualquier orden.
+            "ended_at": func.least(actual.ended_at, nuevo.ended_at),
             "duration_seconds": _si_llego("duration_seconds"),
             "transcript": _si_llego("transcript"),
             "recording_url": _si_llego("recording_url"),
