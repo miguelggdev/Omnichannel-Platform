@@ -21,6 +21,7 @@ from app.services.messaging.voice_provider import (
     TwilioAPIError,
     TwilioVoiceProvider,
     canal_de_salida,
+    faltan_credenciales_salientes,
     numero_del_contacto,
     twilio_signature,
 )
@@ -284,16 +285,54 @@ async def test_start_call_sin_respuesta_de_twilio() -> None:
         await TwilioVoiceProvider().start_call("+57", CONFIG, "https://a", "https://s")
 
 
-def test_get_channel_config_de_voz_exige_credenciales() -> None:
+def test_get_channel_config_de_voz_solo_exige_client_id() -> None:
+    """Responder en una llamada no necesita las credenciales de salida.
+
+    En un despliegue de solo entrada `TWILIO_PHONE_NUMBER` va vacio porque
+    nadie llama hacia fuera. Exigirlo aqui hacia que `deliver_message()`
+    reventara en cada respuesta del agente y la llamada quedara muda, con el
+    audio entrante y el grafo funcionando.
+    """
+    from app.agents.nodes._tenant import get_channel_config
+
+    tenant = str(uuid4())
+    with patch("app.agents.nodes._tenant.get_settings") as settings:
+        settings.return_value = MagicMock(
+            DEFAULT_CLIENT_ID=tenant,
+            TWILIO_ACCOUNT_SID="",
+            TWILIO_AUTH_TOKEN="tok",
+            TWILIO_PHONE_NUMBER="",
+            TWILIO_API_BASE_URL="https://api.twilio.com",
+        )
+        proveedor, config = get_channel_config("voice")
+
+    assert proveedor == "twilio"
+    assert config["client_id"] == tenant
+    # Y lo que falta se detecta donde si importa: al llamar hacia fuera.
+    assert faltan_credenciales_salientes(config) == ["account_sid", "phone_number"]
+
+
+def test_get_channel_config_de_voz_exige_client_id() -> None:
     from app.agents.nodes._tenant import ChannelNotConfiguredError, get_channel_config
 
     with patch("app.agents.nodes._tenant.get_settings") as settings:
         settings.return_value = MagicMock(
-            DEFAULT_CLIENT_ID=str(uuid4()),
-            TWILIO_ACCOUNT_SID="",
+            DEFAULT_CLIENT_ID="",
+            TWILIO_ACCOUNT_SID="sid",
             TWILIO_AUTH_TOKEN="tok",
             TWILIO_PHONE_NUMBER="+1",
             TWILIO_API_BASE_URL="https://api.twilio.com",
         )
-        with pytest.raises(ChannelNotConfiguredError, match="account_sid"):
+        with pytest.raises(ChannelNotConfiguredError, match="client_id"):
             get_channel_config("voice")
+
+
+async def test_start_call_sin_credenciales_no_llama_a_twilio() -> None:
+    """La red de seguridad de la clase: no se sale a Twilio sin credenciales."""
+    config = {**CONFIG, "phone_number": ""}
+    with (
+        patch("app.services.messaging.voice_provider.httpx.AsyncClient") as cliente,
+        pytest.raises(TwilioAPIError, match="phone_number"),
+    ):
+        await TwilioVoiceProvider().start_call("+57", config, "https://a", "https://s")
+    cliente.assert_not_called()

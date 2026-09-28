@@ -55,10 +55,11 @@ from app.schemas.voice import (
 from app.services.messaging.voice_provider import (
     TwilioAPIError,
     TwilioVoiceProvider,
+    faltan_credenciales_salientes,
     numero_del_contacto,
 )
 from app.services.voice.stream_token import emitir_token
-from app.tasks.voice_tasks import normalizar_direccion
+from app.tasks.voice_tasks import direccion_reconocida, normalizar_direccion
 
 logger = logging.getLogger(__name__)
 
@@ -323,7 +324,7 @@ async def twilio_status(request: Request) -> Response:
 
     datos: dict[str, Any] = {
         "status": estado,
-        "direction": normalizar_direccion(params.get("Direction")),
+        "direction": direccion_reconocida(params.get("Direction")),
         "phone_from": params.get("From") or None,
         "phone_to": params.get("To") or None,
         "duration_seconds": _entero(params.get("CallDuration")),
@@ -365,6 +366,12 @@ async def start_outbound_call(
         _, config = get_channel_config("voice")
     except ChannelNotConfiguredError as exc:
         raise AppException(503, VOICE_NOT_CONFIGURED, "Canal de voz no configurado") from exc
+    # `get_channel_config("voice")` solo exige `client_id`, que es lo que hace
+    # falta para responder dentro de una llamada. Llamar hacia fuera si necesita
+    # las credenciales REST, y que falten es un problema de configuracion (503),
+    # no un rechazo de Twilio (502).
+    if faltan_credenciales_salientes(config):
+        raise AppException(503, VOICE_NOT_CONFIGURED, "Canal de voz no configurado")
     base = settings.VOICE_PUBLIC_BASE_URL.rstrip("/")
     if not base:
         raise AppException(503, VOICE_NOT_CONFIGURED, "Canal de voz no configurado")

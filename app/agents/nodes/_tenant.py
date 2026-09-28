@@ -297,7 +297,20 @@ def get_channel_config(channel: str) -> tuple[str, dict[str, Any]]:
 
     # En email, usuario y password son opcionales (un relay interno puede no
     # pedirlos): solo el servidor y la direccion de origen son imprescindibles.
-    obligatorias = ("smtp_host", "from_email") if provider_name == "email" else tuple(config)
+    #
+    # En twilio (voz) solo `client_id` es imprescindible, que es lo unico que
+    # lee `send_message()` para publicar la respuesta en Redis. Las credenciales
+    # REST solo hacen falta para llamar hacia fuera, y las valida
+    # `start_outbound_call()`. Exigirlas aqui dejaba muda cada respuesta del
+    # agente en un despliegue de solo entrada —con el auth token puesto para
+    # validar firmas y sin numero propio—, mientras el audio entrante, el STT y
+    # el grafo funcionaban.
+    if provider_name == "email":
+        obligatorias: tuple[str, ...] = ("smtp_host", "from_email")
+    elif provider_name == "twilio":
+        obligatorias = ("client_id",)
+    else:
+        obligatorias = tuple(config)
     faltantes = [clave for clave in obligatorias if not config[clave]]
     if faltantes:
         raise ChannelNotConfiguredError(

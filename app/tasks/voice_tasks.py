@@ -66,6 +66,31 @@ def normalizar_direccion(direccion: str | None) -> str:
     return "outbound" if (direccion or "").startswith("outbound") else "inbound"
 
 
+def direccion_reconocida(direccion: str | None) -> str | None:
+    """Traduce la direccion solo cuando Twilio la mando y se entiende.
+
+    `normalizar_direccion()` nunca devuelve `None`: convierte lo ausente y lo
+    desconocido en `inbound`. Eso sirve para el webhook de TwiML, que siempre
+    trae `Direction` y es la fuente autoritativa, pero no para los status
+    callbacks: ahi el valor puede faltar, o ser uno que no empieza por
+    `outbound` sin ser entrante (`trunking-terminating` en troncales SIP). Como
+    el upsert solo escribe los campos que no son `None`, devolver `None` deja
+    intacta la direccion ya guardada en vez de voltear un `outbound` a
+    `inbound`.
+
+    Args:
+        direccion: Valor de `Direction`, si vino.
+
+    Returns:
+        `inbound`, `outbound`, o `None` si no vino o no se reconoce.
+    """
+    if not direccion:
+        return None
+    if direccion.startswith("outbound"):
+        return "outbound"
+    return "inbound" if direccion == "inbound" else None
+
+
 def _instante(valor: str | datetime | None) -> datetime | None:
     """Convierte un instante ISO-8601 (como viaja por Celery) a `datetime`.
 

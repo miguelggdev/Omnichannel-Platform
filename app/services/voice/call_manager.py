@@ -30,6 +30,7 @@ el agente corre donde corre para todos los canales: en los workers de Celery.
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import re
@@ -57,6 +58,12 @@ logger = logging.getLogger(__name__)
 
 #: Canal con el que se deduplican las frases (el de `NormalizedMessage.channel`).
 DEDUP_CHANNEL = "voice"
+
+#: Veces que se rehace la suscripcion de Redis antes de rendirse.
+REINTENTOS_PUBSUB = 3
+
+#: Segundos entre reintentos de suscripcion.
+ESPERA_REINTENTO_PUBSUB = 0.5
 
 #: Turnos de la transcripcion que se guardan como maximo en `call_records`.
 MAX_TRANSCRIPT_TURNS = 500
@@ -89,6 +96,17 @@ def texto_para_voz(texto: str) -> str:
     limpio = _MARCAS_MARKDOWN.sub(" ", limpio)
     return _ESPACIOS.sub(" ", limpio).strip()
 
+
+#: Lo que se dice cuando la respuesta del agente se queda sin nada que leer.
+#:
+#: `texto_para_voz()` quita URLs y markdown, asi que una respuesta que sea solo
+#: un enlace —habitual en los flujos de pago y facturacion— se reduce a la
+#: cadena vacia. Sin esto el llamante oia silencio mientras la conversacion
+#: registraba la respuesta como entregada.
+RESPUESTA_SIN_VOZ = (
+    "Disculpa, esa respuesta lleva informacion que no puedo leer por telefono. "
+    "Te la hago llegar por escrito."
+)
 
 Enviar = Callable[[dict[str, Any]], Awaitable[None]]
 Sintetizar = Callable[[str, str], Awaitable[bytes]]
@@ -320,7 +338,61 @@ class CallSession:
     # ─── Salida: respuestas del agente ───────────────────────────────────────
 
     async def _escuchar_respuestas(self) -> None:
-        """Dice, en orden, cada respuesta publicada para el llamante."""
+        """Dice, en orden, cada respuesta publicada para el llamante.
+
+        El bucle se reanuda si Redis se cae. `listen()` lanza `ConnectionError`
+        en un reset o en un failover de Sentinel, y sin esto la tarea moria en
+        silencio: su excepcion solo la recogia el `gather(return_exceptions=True)`
+        de `close()`, asi que nadie la veia. La llamada seguia abierta —el audio
+        fluyendo, el STT encolando, el worker publicando a un canal sin
+        suscriptor— pero el agente no volvia a hablar hasta el tope de duracion.
+        """
+        intentos = 0
+        while True:
+            try:
+                await self._consumir_respuestas()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                intentos += 1
+                if intentos > REINTENTOS_PUBSUB:
+                    logger.exception(
+                        "Voz: la escucha de respuestas de %s no se pudo restablecer",
+                        self.claims.call_sid,
+                    )
+                    return
+                logger.warning(
+                    "Voz: se corto la escucha de respuestas de %s; reintento %d",
+                    self.claims.call_sid,
+                    intentos,
+                    exc_info=True,
+                )
+                if not await self._resuscribir():
+                    return
+                await asyncio.sleep(ESPERA_REINTENTO_PUBSUB)
+
+    async def _resuscribir(self) -> bool:
+        """Rehace la suscripcion al canal de salida tras una caida de Redis.
+
+        Returns:
+            `True` si quedo suscrita de nuevo.
+        """
+        canal = canal_de_salida(self.claims.client_id, self.claims.contact_phone)
+        try:
+            with contextlib.suppress(Exception):
+                await self._pubsub.close()
+            self._pubsub = get_redis().pubsub()
+            await self._pubsub.subscribe(canal)
+        except Exception:
+            logger.exception(
+                "Voz: no se pudo volver a suscribir la llamada %s", self.claims.call_sid
+            )
+            return False
+        return True
+
+    async def _consumir_respuestas(self) -> None:
+        """Consume el canal de salida hasta que se cierre."""
         async for mensaje in self._pubsub.listen():
             if mensaje.get("type") != "message":
                 continue
@@ -350,8 +422,17 @@ class CallSession:
             texto: Respuesta del agente.
             message_id: Id del mensaje, usado como nombre de la marca.
         """
+        trozos = split_text(texto_para_voz(texto), limit=TTS_CHUNK_CHARS)
+        if not trozos:
+            # La respuesta era solo un enlace, markdown o puntuacion: sin esto
+            # el bucle no se ejecutaria y la llamada se quedaria en silencio.
+            logger.warning(
+                "Voz: la respuesta de %s no deja texto que decir; se usa el aviso generico",
+                self.claims.call_sid,
+            )
+            trozos = split_text(RESPUESTA_SIN_VOZ, limit=TTS_CHUNK_CHARS)
         mando_audio = False
-        for trozo in split_text(texto_para_voz(texto), limit=TTS_CHUNK_CHARS):
+        for trozo in trozos:
             try:
                 audio = await self._synthesize(trozo, self.claims.client_id)
             except asyncio.CancelledError:

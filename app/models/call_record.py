@@ -35,6 +35,11 @@ from app.models.base import TenantBaseModel
 
 #: Estados de una llamada, tal como los reporta Twilio (`CallStatus`).
 CALL_STATUSES: tuple[str, ...] = (
+    # `initiated` no aparece en la lista de `CallStatus` de la documentacion,
+    # pero es lo que trae el callback del evento del mismo nombre al que se
+    # suscribe `TwilioVoiceProvider.start_call`. Sin el, toda llamada saliente
+    # perdia su primer estado y dejaba un error en el log.
+    "initiated",
     "queued",
     "ringing",
     "in-progress",
@@ -51,6 +56,19 @@ CALL_FINAL_STATUSES: frozenset[str] = frozenset(
 )
 
 CALL_DIRECTIONS: tuple[str, ...] = ("inbound", "outbound")
+
+
+def _en(valores: tuple[str, ...], columna: str) -> str:
+    """Arma el `IN (...)` de un CHECK a partir de los valores permitidos.
+
+    Args:
+        valores: Valores admitidos.
+        columna: Columna sobre la que aplica.
+
+    Returns:
+        La expresion SQL del CHECK.
+    """
+    return f"{columna} IN ({', '.join(repr(v) for v in valores)})"
 
 
 class CallRecord(TenantBaseModel):
@@ -79,12 +97,11 @@ class CallRecord(TenantBaseModel):
         Index("uq_call_records_call_sid", "client_id", "call_sid", unique=True),
         Index("idx_call_records_client_started", "client_id", "started_at"),
         Index("idx_call_records_contact", "client_id", "contact_id"),
-        CheckConstraint(
-            "status IN ('queued', 'ringing', 'in-progress', 'completed', 'busy', "
-            "'failed', 'no-answer', 'canceled')",
-            name="ck_call_records_status",
-        ),
-        CheckConstraint("direction IN ('inbound', 'outbound')", name="ck_call_records_direction"),
+        # Derivados de las tuplas de arriba y no escritos a mano: son los
+        # mismos valores que la migracion 016, y copiarlos dejaba las dos listas
+        # libres de separarse sin que nada avisara.
+        CheckConstraint(_en(CALL_STATUSES, "status"), name="ck_call_records_status"),
+        CheckConstraint(_en(CALL_DIRECTIONS, "direction"), name="ck_call_records_direction"),
     )
 
     call_sid: Mapped[str] = mapped_column(String(64), nullable=False)

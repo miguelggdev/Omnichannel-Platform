@@ -121,8 +121,8 @@ def upgrade() -> None:
         ),
         *_timestamps(),
         sa.CheckConstraint(
-            "status IN ('queued', 'ringing', 'in-progress', 'completed', 'busy', "
-            "'failed', 'no-answer', 'canceled')",
+            "status IN ('initiated', 'queued', 'ringing', 'in-progress', 'completed', "
+            "'busy', 'failed', 'no-answer', 'canceled')",
             name="ck_call_records_status",
         ),
         sa.CheckConstraint(

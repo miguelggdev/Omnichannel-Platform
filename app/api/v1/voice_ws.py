@@ -130,6 +130,18 @@ async def _atender(websocket: WebSocket, sesion: CallSession, duracion_maxima: f
             return "stop"
 
 
+def _texto(valor: Any) -> str:
+    """Devuelve el valor solo si de verdad venia como texto.
+
+    Args:
+        valor: Campo crudo del evento `start`.
+
+    Returns:
+        El texto, o `""` si no era una cadena.
+    """
+    return valor if isinstance(valor, str) else ""
+
+
 @router.websocket("/stream")
 async def media_stream(websocket: WebSocket) -> None:
     """WebSocket bidireccional de audio de una llamada de Twilio.
@@ -142,10 +154,20 @@ async def media_stream(websocket: WebSocket) -> None:
 
     await websocket.accept()
     start = await _esperar_start(websocket)
-    datos_start = (start or {}).get("start") or {}
-    call_sid = str(datos_start.get("callSid") or "")
-    stream_sid = str(datos_start.get("streamSid") or (start or {}).get("streamSid") or "")
-    token = (datos_start.get("customParameters") or {}).get("token")
+    # Todo esto corre sin autenticar y fuera del `try` de mas abajo, asi que se
+    # comprueban los tipos y no solo la presencia: un `start` con
+    # `{"customParameters": {"token": 5}}` o `{"start": "abc"}` reventaba con un
+    # `AttributeError` sin capturar, y el cierre 4401 nunca llegaba a correr.
+    marco = start if isinstance(start, dict) else {}
+    datos_start = marco.get("start")
+    if not isinstance(datos_start, dict):
+        datos_start = {}
+    parametros = datos_start.get("customParameters")
+    if not isinstance(parametros, dict):
+        parametros = {}
+    call_sid = _texto(datos_start.get("callSid"))
+    stream_sid = _texto(datos_start.get("streamSid")) or _texto(marco.get("streamSid"))
+    token = parametros.get("token")
 
     claims = verificar_token(token, call_sid) if call_sid and stream_sid else None
     if claims is None:

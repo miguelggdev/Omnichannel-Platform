@@ -67,6 +67,27 @@ MAX_TEXT_LENGTH = 4000
 TWILIO_TIMEOUT_SECONDS = 10.0
 
 
+#: Claves que solo hacen falta para llamar hacia fuera.
+CREDENCIALES_SALIENTES: tuple[str, ...] = (
+    "account_sid",
+    "auth_token",
+    "phone_number",
+    "api_base_url",
+)
+
+
+def faltan_credenciales_salientes(channel_config: dict[str, Any]) -> list[str]:
+    """Dice que credenciales REST faltan para iniciar una llamada saliente.
+
+    Args:
+        channel_config: Configuracion del canal de voz.
+
+    Returns:
+        Las claves ausentes o vacias; lista vacia si estan todas.
+    """
+    return [clave for clave in CREDENCIALES_SALIENTES if not channel_config.get(clave)]
+
+
 class TwilioAPIError(RuntimeError):
     """La API REST de Twilio rechazo o no contesto una operacion."""
 
@@ -293,6 +314,14 @@ class TwilioVoiceProvider(MessagingProvider):
         Raises:
             TwilioAPIError: Si Twilio la rechaza o no contesta.
         """
+        # Las credenciales REST se validan aqui y no en `get_channel_config()`:
+        # responder en una llamada ya en curso no las necesita, y exigirlas para
+        # todo el canal dejaba mudo un despliegue de solo entrada. El endpoint
+        # las comprueba antes con `faltan_credenciales_salientes()` para
+        # responder 503; esto es la red de seguridad de la propia clase.
+        faltantes = faltan_credenciales_salientes(channel_config)
+        if faltantes:
+            raise TwilioAPIError(f"Faltan credenciales para llamar hacia fuera: {faltantes}")
         sid = channel_config["account_sid"]
         url = f"{channel_config['api_base_url'].rstrip('/')}/2010-04-01/Accounts/{sid}/Calls.json"
         datos = [

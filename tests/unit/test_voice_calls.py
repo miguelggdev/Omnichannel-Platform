@@ -3,11 +3,13 @@
 import asyncio
 import base64
 import contextlib
+import json
 import math
 import uuid
 import xml.etree.ElementTree as ET
 from array import array
 from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -18,10 +20,12 @@ from fastapi import FastAPI
 from starlette.testclient import TestClient
 
 from app.core.config import get_settings
+from app.models.call_record import CALL_FINAL_STATUSES, CALL_STATUSES, CallRecord
 from app.services.messaging.voice_provider import canal_de_salida, twilio_signature
 from app.services.voice import audio
 from app.services.voice import call_manager as cm
 from app.services.voice.stream_token import StreamClaims, emitir_token, verificar_token
+from app.tasks.voice_tasks import direccion_reconocida
 from tests.unit.test_webchat_endpoint import FakeRedis
 
 TENANT = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -496,6 +500,103 @@ class TestWebhooks:
         await api_client.post("/api/v1/voice/twilio/status", content=cuerpo, headers=headers)
         assert "ended_at" not in registros[0]["datos"]
 
+    async def test_status_sin_direction_no_toca_la_direccion_guardada(
+        self, ajustes: Any, registros: list[dict[str, Any]], api_client: Any
+    ) -> None:
+        """Un status callback sin `Direction` no puede voltear un `outbound`.
+
+        `normalizar_direccion()` convierte lo ausente en `inbound`, asi que
+        mandar siempre su resultado hacia el upsert pisaba la direccion correcta
+        de una llamada saliente con cada evento que llegara sin el campo.
+        """
+        params = {k: v for k, v in LLAMADA.items() if k != "Direction"}
+        params["CallStatus"] = "completed"
+        cuerpo, headers = _firmado("/api/v1/voice/twilio/status", params)
+        await api_client.post("/api/v1/voice/twilio/status", content=cuerpo, headers=headers)
+
+        assert registros[0]["datos"]["direction"] is None
+
+    async def test_status_con_direction_desconocida_no_la_adivina(
+        self, ajustes: Any, registros: list[dict[str, Any]], api_client: Any
+    ) -> None:
+        """`trunking-terminating` (troncales SIP) no es entrante."""
+        params = {**LLAMADA, "CallStatus": "completed", "Direction": "trunking-terminating"}
+        cuerpo, headers = _firmado("/api/v1/voice/twilio/status", params)
+        await api_client.post("/api/v1/voice/twilio/status", content=cuerpo, headers=headers)
+
+        assert registros[0]["datos"]["direction"] is None
+
+    async def test_status_con_direction_saliente_si_la_guarda(
+        self, ajustes: Any, registros: list[dict[str, Any]], api_client: Any
+    ) -> None:
+        params = {**LLAMADA, "CallStatus": "completed", "Direction": "outbound-api"}
+        cuerpo, headers = _firmado("/api/v1/voice/twilio/status", params)
+        await api_client.post("/api/v1/voice/twilio/status", content=cuerpo, headers=headers)
+
+        assert registros[0]["datos"]["direction"] == "outbound"
+
+    async def test_status_initiated_se_acepta(
+        self, ajustes: Any, registros: list[dict[str, Any]], api_client: Any
+    ) -> None:
+        """`start_call()` se suscribe al evento `initiated`: su estado vale.
+
+        No esta en la lista de `CallStatus` de la documentacion, pero es lo que
+        trae ese callback. Sin el en `CALL_STATUSES` toda llamada saliente
+        perdia su primer estado y dejaba un error en el log.
+        """
+        params = {**LLAMADA, "CallStatus": "initiated", "Direction": "outbound-api"}
+        cuerpo, headers = _firmado("/api/v1/voice/twilio/status", params)
+        respuesta = await api_client.post(
+            "/api/v1/voice/twilio/status", content=cuerpo, headers=headers
+        )
+
+        assert respuesta.status_code == 204
+        assert registros[0]["datos"]["status"] == "initiated"
+        assert "initiated" in CALL_STATUSES
+        assert "initiated" not in CALL_FINAL_STATUSES
+
+
+class TestEstadosYMigracion:
+    """El CHECK de la migracion y el del modelo tienen que decir lo mismo."""
+
+    def test_la_migracion_admite_los_mismos_estados_que_el_modelo(self) -> None:
+        fuente = (
+            Path(__file__).resolve().parents[2]
+            / "migrations"
+            / "versions"
+            / "016_call_clinical_records.py"
+        ).read_text(encoding="utf-8")
+        [check] = [
+            c for c in CallRecord.__table__.constraints if c.name == "ck_call_records_status"
+        ]
+        # La migracion parte el CHECK en dos literales, asi que se comparan sin
+        # espacios ni comillas dobles: lo que queda es el mismo `IN (...)`.
+        esperado = str(check.sqltext)  # type: ignore[attr-defined]
+        normal = "".join(fuente.split()).replace('"', "")
+        assert "".join(esperado.split()) in normal
+
+    def test_ningun_estado_final_es_intermedio(self) -> None:
+        assert set(CALL_STATUSES) >= CALL_FINAL_STATUSES
+        assert "initiated" not in CALL_FINAL_STATUSES
+
+
+class TestDireccionReconocida:
+    @pytest.mark.parametrize(
+        ("crudo", "esperado"),
+        [
+            ("inbound", "inbound"),
+            ("outbound", "outbound"),
+            ("outbound-api", "outbound"),
+            ("outbound-dial", "outbound"),
+            (None, None),
+            ("", None),
+            ("trunking-terminating", None),
+            ("lo-que-sea", None),
+        ],
+    )
+    def test_solo_traduce_lo_que_entiende(self, crudo: str | None, esperado: str | None) -> None:
+        assert direccion_reconocida(crudo) == esperado
+
 
 # ─── Llamadas salientes ──────────────────────────────────────────────────────
 
@@ -709,10 +810,177 @@ class TestWebSocket:
             ws.send_json({"event": "stop"})
 
 
+class TestEscuchaResiliente:
+    """Una caida de Redis no puede dejar al agente mudo el resto de la llamada."""
+
+    async def test_se_resuscribe_y_sigue_hablando(
+        self, ajustes: Any, redis: FakeRedis, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`listen()` lanza `ConnectionError` en un failover; hay que reanudar.
+
+        Antes la tarea moria en silencio —su excepcion solo la recogia el
+        `gather(return_exceptions=True)` de `close()`— y la llamada seguia
+        abierta pero sorda: el worker publicaba a un canal sin suscriptor.
+        """
+        monkeypatch.setattr(cm, "ESPERA_REINTENTO_PUBSUB", 0)
+        arnes = _Sesion()
+        await arnes.sesion.start()
+
+        # La primera escucha se corta como si Redis se hubiera caido.
+        primero = arnes.sesion._pubsub
+        await primero.cola.put({"type": "caida"})
+        original = primero.listen
+
+        async def _listen_que_falla() -> Any:
+            async for mensaje in original():
+                if mensaje.get("type") == "caida":
+                    raise ConnectionError("Connection closed by server")
+                yield mensaje
+
+        primero.listen = _listen_que_falla
+        await _esperar(lambda: arnes.sesion._pubsub is not primero)
+
+        # Ya resuscrita: lo que se publique ahora si se dice.
+        await redis.publish(
+            canal_de_salida(TENANT, CLIENTE),
+            json.dumps({"type": "say", "message_id": "m1", "text": "Sigo aqui"}),
+        )
+        await _esperar(lambda: arnes.eventos("mark"))
+        await arnes.sesion.close("stop")
+
+        assert arnes.sintetizar.await_args_list[0].args[0] == "Sigo aqui"
+
+    async def test_se_rinde_tras_varios_intentos_y_lo_deja_en_el_log(
+        self, ajustes: Any, redis: FakeRedis, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(cm, "ESPERA_REINTENTO_PUBSUB", 0)
+        monkeypatch.setattr(cm, "REINTENTOS_PUBSUB", 2)
+        arnes = _Sesion()
+        await arnes.sesion.start()
+
+        intentos = 0
+
+        async def _siempre_falla() -> Any:
+            nonlocal intentos
+            intentos += 1
+            raise ConnectionError("Connection closed by server")
+            yield  # pragma: no cover
+
+        # El original, antes de parchear: si no, `_pubsub_roto` se llama a si
+        # mismo y revienta con RecursionError dentro de `_resuscribir`.
+        pubsub_real = redis.pubsub
+
+        def _pubsub_roto() -> Any:
+            falso = pubsub_real()
+            falso.listen = _siempre_falla
+            return falso
+
+        arnes.sesion._pubsub.listen = _siempre_falla
+        monkeypatch.setattr(redis, "pubsub", _pubsub_roto)
+        await _esperar(lambda: arnes.sesion._escucha is not None and arnes.sesion._escucha.done())
+
+        assert intentos == cm.REINTENTOS_PUBSUB + 1
+        # Se rinde, pero no se lleva la llamada por delante.
+        assert arnes.sesion._escucha is not None
+        assert arnes.sesion._escucha.exception() is None
+        await arnes.sesion.close("stop")
+
+
+class TestMarcoStartMalformado:
+    """El `start` llega sin autenticar: sus tipos no se pueden dar por buenos."""
+
+    @pytest.mark.parametrize(
+        "marco",
+        [
+            pytest.param({"event": "start", "start": "abc"}, id="start-texto"),
+            pytest.param(
+                {"event": "start", "start": {"callSid": "CA1", "customParameters": ["a"]}},
+                id="parametros-lista",
+            ),
+            pytest.param(
+                {
+                    "event": "start",
+                    "start": {
+                        "streamSid": "MZ1",
+                        "callSid": "CA1",
+                        "customParameters": {"token": 5},
+                    },
+                },
+                id="token-numero",
+            ),
+            pytest.param(
+                {
+                    "event": "start",
+                    "start": {"streamSid": "MZ1", "callSid": {"a": 1}, "customParameters": {}},
+                },
+                id="callsid-dict",
+            ),
+        ],
+    )
+    def test_se_cierra_con_4401_y_no_revienta(
+        self, cliente_ws: TestClient, marco: dict[str, Any]
+    ) -> None:
+        with _conectar(cliente_ws) as ws:
+            ws.send_json(marco)
+            assert _codigo_de_cierre(ws) == 4401
+
+    def test_verificar_token_rechaza_lo_que_no_es_texto(self) -> None:
+        assert verificar_token(5, "CA1") is None  # type: ignore[arg-type]
+        assert verificar_token(["a.b"], "CA1") is None  # type: ignore[arg-type]
+
+
 class TestRespuestaHablada:
     def test_texto_para_voz_quita_markdown_y_urls(self) -> None:
         texto = "**Horario:** lunes a viernes. Mira [la web](https://x.co/a) o https://y.co\n# Nota"
         assert cm.texto_para_voz(texto) == "Horario: lunes a viernes. Mira la web o Nota"
+
+    @pytest.mark.parametrize(
+        "texto",
+        [
+            pytest.param("https://pagos.example/factura/123", id="solo-url"),
+            pytest.param("**", id="solo-markdown"),
+            pytest.param("[https://x.co/a](https://x.co/a)", id="enlace-que-es-la-url"),
+        ],
+    )
+    async def test_una_respuesta_que_se_queda_sin_texto_no_deja_la_llamada_muda(
+        self, ajustes: Any, redis: FakeRedis, texto: str
+    ) -> None:
+        """`texto_para_voz()` quita URLs y markdown; puede no quedar nada.
+
+        Sin el aviso generico el bucle de `_decir()` no se ejecutaba: ni audio,
+        ni marca, y el llamante oia silencio mientras la conversacion daba la
+        respuesta por entregada.
+        """
+        arnes = _Sesion()
+        await arnes.sesion.start()
+        await redis.publish(
+            canal_de_salida(TENANT, CLIENTE),
+            json.dumps({"type": "say", "message_id": "m1", "text": texto}),
+        )
+        await _esperar(lambda: arnes.eventos("mark"))
+        await arnes.sesion.close("stop")
+
+        assert arnes.eventos("media"), "la llamada se quedo en silencio"
+        arnes.sintetizar.assert_awaited()
+        dicho = arnes.sintetizar.await_args_list[0].args[0]
+        assert dicho in cm.RESPUESTA_SIN_VOZ
+        # La transcripcion guarda lo que el agente dijo de verdad, no el aviso.
+        assert arnes.sesion.transcript[-1]["text"] == texto
+
+    async def test_una_respuesta_con_texto_util_no_usa_el_aviso(
+        self, ajustes: Any, redis: FakeRedis
+    ) -> None:
+        arnes = _Sesion()
+        await arnes.sesion.start()
+        await redis.publish(
+            canal_de_salida(TENANT, CLIENTE),
+            json.dumps({"type": "say", "message_id": "m1", "text": "Paga en https://x.co/a hoy"}),
+        )
+        await _esperar(lambda: arnes.eventos("mark"))
+        await arnes.sesion.close("stop")
+
+        dicho = arnes.sintetizar.await_args_list[0].args[0]
+        assert dicho == "Paga en hoy"
 
     async def test_una_respuesta_larga_se_sintetiza_y_se_manda_por_oraciones(
         self, ajustes: Any, redis: FakeRedis, monkeypatch: pytest.MonkeyPatch

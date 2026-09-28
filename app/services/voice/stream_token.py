@@ -129,7 +129,10 @@ def verificar_token(
         Las afirmaciones del token, o `None` si no es valido, caduco o es de
         otra llamada.
     """
-    if not token or token.count(".") != 1:
+    # `isinstance` y no solo `not token`: el token sale de un JSON que manda
+    # quien se conecte, asi que puede llegar como numero o lista y `.count()`
+    # reventaria en una ruta sin autenticar.
+    if not isinstance(token, str) or token.count(".") != 1:
         return None
     payload, firma = token.split(".")
     esperada = _b64(hmac.new(_clave(), payload.encode("ascii"), hashlib.sha256).digest())
