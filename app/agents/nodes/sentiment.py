@@ -59,6 +59,9 @@ AGENTE = "sentiment"
 #: Motivo de handoff que lee `human_handoff_node` para elegir el mensaje.
 HANDOFF_REASON = "negative_sentiment"
 
+#: Intents cuyo texto no se analiza (ver `sentiment_analysis_node`).
+INTENTS_SIN_SENTIMIENTO: frozenset[str] = frozenset({"clinical"})
+
 #: Mensajes `very_negative` seguidos que escalan a un humano.
 UMBRAL_ESCALAMIENTO = 2
 
@@ -210,6 +213,12 @@ async def sentiment_analysis_node(state: ConversationState) -> dict[str, Any]:
         return {}
     if state.get("requires_handoff"):
         # Ya va a un humano por otro motivo: medirlo no cambia nada.
+        return {}
+    if state.get("intent") in INTENTS_SIN_SENTIMIENTO:
+        # Lo dictado por un profesional es dato de salud: no se manda a otro
+        # LLM ni se guarda su "razonamiento" en `messages.metadata`, que la
+        # redaccion clinica no cubre (ADR-072). Y quien dicta no es un cliente
+        # cuyo enojo haya que medir.
         return {}
 
     ajustes = await get_agent_settings(UUID(client_id))
