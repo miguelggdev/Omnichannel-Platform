@@ -8,7 +8,7 @@ su documento).
 
 Las tools son una capa fina sobre `app/services/clinical.py`, que hace cumplir
 las reglas en codigo. Cambios sobre el pseudocodigo del spec (§9.2), todos en
-ADR-071:
+ADR-072:
 
 - **`code_cie10`/`code_cups` no caen a un LLM.** Si el codigo no esta en el
   catalogo local, el spec le pide al modelo que lo "busque" y el resultado va a

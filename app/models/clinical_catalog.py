@@ -1,7 +1,7 @@
 """Catalogos de referencia CIE-10 y CUPS (Sprint 13).
 
 Tablas globales, sin `client_id` ni RLS: son catalogos publicos compartidos
-por todos los tenants (ver la migracion 017). Solo la aplicacion las lee; las
+por todos los tenants (ver la migracion 018). Solo la aplicacion las lee; las
 carga `scripts/load_clinical_catalogs.py`.
 """
 

@@ -11,12 +11,12 @@ POST    /api/v1/clinical/records/{id}/review|sign|submit   draft -> reviewed -> 
 
 Un registro firmado no se modifica ni se borra durante 20 anos desde la ultima
 atencion del paciente (Resolucion 839 de 2017); lo garantiza el trigger de la
-migracion 016, no solo esta API.
+migracion 017, no solo esta API.
 
 Solo `super_admin` y `admin`: son datos de salud. El spec propone un rol
 `medical` con una politica RLS propia, pero el enum `user_role` no lo tiene y
 nada fija `app.current_user_role` (ver la migracion 016); un rol clinico
-dedicado queda como decision de producto pendiente (ADR-071).
+dedicado queda como decision de producto pendiente (ADR-072).
 
 Los endpoints de consulta son POST, con el documento en el cuerpo: un GET lo
 dejaria en la URL, y por tanto en los logs de acceso (ver `schemas/clinical.py`).

@@ -164,15 +164,15 @@ class TestEncryptedJSON:
         assert "pgp_sym_encrypt" in insercion
         assert "pgp_sym_decrypt" in seleccion
 
-    def test_ida_y_vuelta_del_json(self) -> None:
-        tipo = EncryptedJSON()
-
-        assert tipo.process_result_value('{"plan": "café"}', None) == {"plan": "café"}
-        assert tipo.process_result_value(None, None) is None
-
-    def test_las_notas_ya_no_van_en_jsonb_en_claro(self) -> None:
-        assert isinstance(ClinicalRecord.__table__.c.structured_notes.type, EncryptedJSON)
-        assert isinstance(ClinicalRecord.__table__.c.medical_entities.type, EncryptedJSON)
+    def test_notas_y_codigos_ya_no_van_en_jsonb_en_claro(self) -> None:
+        """La 016 de Dev A cifra tambien los codigos CIE-10/CUPS."""
+        for columna in (
+            "structured_notes",
+            "medical_entities",
+            "diagnosis_codes",
+            "procedure_codes",
+        ):
+            assert isinstance(ClinicalRecord.__table__.c[columna].type, EncryptedJSON)
 
 
 def _registro(estado_: str = "draft", **over: Any) -> SimpleNamespace:

@@ -12,6 +12,7 @@ from app.services.messaging.base import MessagingProvider
 from app.services.messaging.email_provider import EmailProvider
 from app.services.messaging.meta import MetaProvider
 from app.services.messaging.telegram import TelegramProvider
+from app.services.messaging.voice_provider import TwilioVoiceProvider
 from app.services.messaging.webchat import WebchatProvider
 from app.services.messaging.ycloud import YCloudProvider
 
@@ -21,6 +22,7 @@ _PROVIDERS: dict[str, type[MessagingProvider]] = {
     "telegram": TelegramProvider,  # Sprint 9
     "email": EmailProvider,  # Sprint 9
     "webchat": WebchatProvider,  # Sprint 9 (WebSocket; no recibe webhooks HTTP)
+    "twilio": TwilioVoiceProvider,  # Sprint 13 (voz; webhooks propios en /api/v1/voice)
 }
 
 
@@ -56,5 +58,8 @@ def get_messaging_provider(
         # test_todos_los_providers_implementan_el_abc pueda iterarlo con
         # issubclass(); el cast solo informa a mypy de la firma real aqui.
         return cast("type[MetaProvider]", provider_class)(provider_config or {})
+    if provider_name == "twilio":
+        # La URL publica del request, si la hay, es parte de la firma de Twilio.
+        return cast("type[TwilioVoiceProvider]", provider_class)(provider_config or {})
 
     return provider_class()

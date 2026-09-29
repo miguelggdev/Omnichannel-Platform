@@ -489,10 +489,10 @@
   4. **Una cabecera del tenant podía tumbar el intento sin dejar rastro.** `tenant_webhooks.headers` es JSONB: un valor numérico (`{"X-Reintentos": 3}`) hace que httpx falle con `AttributeError`, que no es un `httpx.HTTPError` y por lo tanto se escapaba del manejo de errores — el intento moría sin fila de log y sin tocar los contadores, y el reintento nunca se programaba. `_cabeceras_del_tenant()` descarta lo que no sea escalar, pasa el resto a texto y tira las que traen saltos de línea (inyección de cabeceras).
   5. **Dos menores:** la task de despacho declaraba `max_retries=2` sin llamar nunca a `self.retry()` — ahora reintenta de verdad ante un fallo transitorio, que es lo único que puede salvar al evento (en la de envío no se hace, y queda dicho por qué: el POST puede haber salido ya y reintentar lo duplicaría); y un `PATCH /contacts/{id}` sin campos emitía un `contact.updated` que no anunciaba ningún cambio.
 
-### ADR-071: Sprint 13 (Dev B) — agente clínico (RIPS, CIE-10, CUPS) y Habeas Data
+### ADR-072: Sprint 13 (Dev B) — agente clínico (RIPS, CIE-10, CUPS) y Habeas Data
 - **Fecha:** 2026-09-29
-- **Contexto:** Dev B no pudo continuar y sus tareas del Sprint 13 pasaron a esta sesión. Alcance de esta entrega: el **agente clínico** completo (`specs/sprint-13-advanced-modules.md` §8-11, §13) y Habeas Data. **Queda pendiente la mitad de Dev A** (canal de voz: `VoiceProvider`, STT/TTS, `CallManager`, `call_records`, `voice.py`, `voice_ws.py`, `voice_tasks.py`); nada de eso existe todavía en el repo.
-- **Qué se entregó:** modelos `ClinicalRecord` y `PatientConsent` + migración `016_clinical_records`; catálogo CIE-10/CUPS (`services/clinical_catalog.py`); servicio con las reglas RIPS (`services/clinical.py`); `app/core/habeas_data.py`; 8 tools (`agents/tools/clinical_tools.py`); nodo `clinical` y su cableado en el grafo (11 nodos) y en el router de intents; `app/schemas/clinical.py`; API `/api/v1/clinical/*`; y los tests (unitarios, RLS e integración contra PostgreSQL real).
+- **Contexto:** Dev B no pudo continuar y sus tareas del Sprint 13 pasaron a esta sesión. Alcance de esta entrega: el **agente clínico** completo (`specs/sprint-13-advanced-modules.md` §8-11, §13) y Habeas Data. La mitad de Dev A (canal de voz, ADR-071, PR #50) se desarrolló en paralelo; la reconciliación de los dos PR está en el último punto de este ADR.
+- **Qué se entregó:** modelos `ClinicalRecord` y `PatientConsent` + migraciones `017_clinical_records` (extiende la tabla de la 016) y `018_clinical_catalogs`; catálogo CIE-10/CUPS (`services/clinical_catalog.py`); servicio con las reglas RIPS (`services/clinical.py`); `app/core/habeas_data.py`; 8 tools (`agents/tools/clinical_tools.py`); nodo `clinical` y su cableado en el grafo (11 nodos) y en el router de intents; `app/schemas/clinical.py`; API `/api/v1/clinical/*`; y los tests (unitarios, RLS e integración contra PostgreSQL real).
 - **Defectos del spec corregidos:**
   1. **`user_role`/`habeas_data_consent` no existen en `ConversationState`.** El grafo atiende a *contactos* de un canal, no a usuarios con rol; con el spec tal cual, cualquier cliente que escribiera "necesito un registro clínico" llegaba al agente que lee y escribe datos de salud. Mismo hueco que BUG-045: solo opera quien esté en `agent_configs.config.clinical.professional_contact_ids` (sin lista, nadie), administrable con `PUT /api/v1/clinical/settings`. El chequeo va en el nodo, antes de gastar una llamada al LLM.
   2. **El consentimiento nunca podía verificarse.** El spec lo busca en `clinical_records.data_processing_authorized`, pero ese registro no puede existir antes del consentimiento. Tabla propia `patient_consents` (revocable, con quién lo registró); `create_rips_record` lo exige **en código**, dentro de la transacción que inserta, no en el prompt. Tool nueva `register_patient_consent`.
@@ -509,18 +509,71 @@
 - **Catálogos incompletos a propósito:** `CIE10_COMMON` (36 códigos que conozco bien) y `CUPS_COMMON` (solo `890201` y `890301`). Varios CUPS del pseudocódigo del spec (`903841` "hemograma", `903856` "glicemia") no coinciden con el listado oficial que conozco y no se copiaron. **Pendiente:** cargar el dataset oficial (CIE-10 y CUPS, Resolución 5171 de 2017) en una tabla de referencia con `tsvector`, como prevé el spec.
 - **Riesgos abiertos, sin resolver en esta entrega:**
   - Lo que dicta el profesional también se guarda **en claro** en `messages.content` (y sale en la respuesta), fuera del cifrado y de la anonimización clínica. Cifrarlo o excluirlo exige tocar `webhook_processor.py`, el flujo crítico; decisión pendiente. El intent router también registra los primeros 200 caracteres del mensaje antes de saber que es clínico.
-  - `structured_notes`, `diagnosis_codes` y `procedure_codes` van en JSONB **sin cifrar** (el spec solo cifra documento, nombre y transcripción). Si el asesor legal lo exige, se cifran en una migración.
+  - ~~`structured_notes`, `diagnosis_codes` y `procedure_codes` sin cifrar~~ — cerrado en la reconciliación: la migración 016 de Dev A cifra también los códigos (`EncryptedJSON`).
   - El texto dictado se envía a OpenAI (extracción de entidades y agente): es una transferencia internacional de datos sensibles (Ley 1581, art. 26) que el tenant tiene que cubrir con su autorización y contrato de transmisión.
-  - `clinical_records.call_record_id` no tiene FK: `call_records` es de Dev A. Su migración la agrega, y `export_patient_data()` ya incluye las llamadas cuando exista `app.models.call_record.CallRecord`.
+  - ~~`call_record_id` sin FK~~ — cerrado en la reconciliación: la 016 de Dev A ya la trae. **Abierto:** el agente todavía no llena `call_record_id` cuando el dictado llegó por voz (habría que ligar el `CallSid` de la conversación con `call_records`).
   - Los endpoints para **revisar y firmar** un registro (transición `draft → reviewed → signed`) no existen todavía: hoy nadie puede firmar desde la API.
 - **Addendum (2026-09-29, cierre de los pendientes de arriba):**
   - **Retención de 20 años, garantizada por la base.** La historia clínica se conserva 20 años desde la **última atención del paciente** (5 en archivo de gestión + 15 en el central, Resolución 839 de 2017). El pedido llegó como "290 años"; se tomó como 20, que es lo que fija la norma — si el asesor legal exige otro plazo, cambia `RETENTION_YEARS` (modelo) y la constante congelada en la migración 016. El trigger `clinical_records_protect_trigger` impide borrar o modificar un registro `signed`/`submitted` mientras corra el plazo (solo `signed -> submitted`), aunque lo intente un admin o un bug; el estado solo avanza `draft -> reviewed -> signed -> submitted`. Cada atención nueva del paciente extiende el plazo de **todos** sus registros. Vencido el plazo se puede anonimizar y borrar. `retention_until` sale en la exportación y en el detalle. La lectura de la norma **sigue pendiente de validación legal**; los tests de integración la prueban contra PostgreSQL real, incluido el caso de una atención reciente que extiende la retención de las antiguas.
   - **Firma:** `GET /api/v1/clinical/records` (listado sin notas ni documento), `GET /records/{id}` (documento enmascarado) y `POST /records/{id}/review|sign|submit`. Cada transición es un `UPDATE ... WHERE status = <origen>` atómico (3 firmas simultáneas: una gana, dos reciben 409), y el trigger la impone aunque alguien se salte la API. Solo `admin`/`super_admin`; un rol clínico dedicado sigue como decisión de producto.
-  - **Notas SOAP y entidades cifradas** (`EncryptedJSON`, nuevo en `app/core/encryption.py`): ya no son JSONB en claro. Los códigos CIE-10/CUPS siguen en JSONB: no son texto libre y son lo único que se conserva, anónimo, tras la supresión. Las pruebas contra la base real destaparon que `type_coerce(..., Text)` descarta el serializador de un `TypeDecorator`; por eso el parámetro se tipa `JSONB(none_as_null=True)` antes de cifrar.
-  - **Catálogos oficiales:** tablas `cie10_catalog` y `cups_catalog` (migración 017, globales, sin `client_id` ni RLS: son catálogos públicos) y `scripts/load_clinical_catalogs.py` (CSV `codigo;descripcion`, idempotente). Con las tablas cargadas manda la base: la búsqueda va ahí, todo código queda verificado y **uno que no exista se rechaza**; con ellas vacías rige el subconjunto de referencia. **Falta cargar el dataset** (CIE-10 y CUPS de la Resolución 5171 de 2017): no está en el repo ni se pudo descargar desde este entorno. El rol de la aplicación debería tener solo `SELECT` sobre esas tablas (infra, como el `REVOKE` de `audit_logs`).
+  - **Notas SOAP y entidades cifradas:** con `EncryptedJSON` (implementado por Dev A en la reconciliación; Dev B había escrito una versión propia y se descartó). Las pruebas contra la base real habían mostrado que `type_coerce(..., Text)` descarta el serializador de un `TypeDecorator`; la versión de Dev A lo resuelve con `_JSONTexto`.
+  - **Catálogos oficiales:** tablas `cie10_catalog` y `cups_catalog` (migración 018, globales, sin `client_id` ni RLS: son catálogos públicos) y `scripts/load_clinical_catalogs.py` (CSV `codigo;descripcion`, idempotente). Con las tablas cargadas manda la base: la búsqueda va ahí, todo código queda verificado y **uno que no exista se rechaza**; con ellas vacías rige el subconjunto de referencia. **Falta cargar el dataset** (CIE-10 y CUPS de la Resolución 5171 de 2017): no está en el repo ni se pudo descargar desde este entorno. El rol de la aplicación debería tener solo `SELECT` sobre esas tablas (infra, como el `REVOKE` de `audit_logs`).
   - **Lo dictado ya no queda en claro en el historial:** el nodo reemplaza `messages.content` del mensaje entrante (también si el LLM falla) y `respond` guarda un marcador en el saliente y en los eventos (`stored_text`); al contacto le llega el texto completo. `agent_action_logs` tampoco lo guarda, incluida la entrada de `intent_routing`, que corre antes de conocer el intent. Un hallazgo nuevo al revisar: **el checkpointer de LangGraph guardaba el estado completo (dictado y respuesta) sin cifrar y sin RLS**; tras un turno clínico `ai_processor` borra los checkpoints de esa conversación (se pierde su contexto persistido, p. ej. el contador de mensajes muy negativos, que en un dictado no aplica). Ambas protecciones son best-effort: si fallan se registra el error y no se tumba la respuesta.
   - **Sigue abierto, y no es de código:** (a) el texto dictado se envía a OpenAI: es una transferencia internacional de datos sensibles (Ley 1581, art. 26) que el tenant cubre con autorización del titular y contrato de transmisión; (b) validación legal de la retención y de la supresión; (c) `call_records`/FK y el canal de voz, que son de Dev A; (d) un rol `medical` dedicado.
-- **Verificado en local** (PostgreSQL 16 + pgvector + Redis, rol `app_user` `NOBYPASSRLS`, como el job del CI): migración 016 sube, baja y vuelve a subir, `alembic check` sin diferencias; suite de integración y e2e completa pasa; unitarios pasan salvo 3 de `test_rag.py` que descargan `tiktoken` y el sandbox no tiene red; `ruff` y `mypy` (config del CI) limpios.
+- **Verificado en local** (PostgreSQL 16 + pgvector + Redis, rol `app_user` `NOBYPASSRLS`, como el job del CI): migraciones 017 y 018 suben, bajan y vuelven a subir, `alembic check` sin diferencias; suite de integración y e2e completa pasa; unitarios pasan salvo 3 de `test_rag.py` que descargan `tiktoken` y el sandbox no tiene red; `ruff` y `mypy` (config del CI) limpios.
+- **Reconciliación con el PR #50 (Dev A), 2026-09-29:** los dos PR creaban `clinical_records` con la migración 016, `EncryptedJSON` y ADR-071. Se mergeó la rama del #50 en la del #51 (el #50 debe mergearse **primero**). Decisiones: (1) se adopta su tabla, su `EncryptedJSON` y su cifrado de códigos y notas; (2) lo de Dev B se reescribe como migraciones **017** (`contact_id` opcional, `dictated_by_contact_id`, `anonymized_at`, `patient_consents`, trigger de retención de 20 años) y **018** (catálogos); (3) se descarta el trigger de auditoría propio de Dev B: el genérico de la 016 ya no filtra nada porque los campos sensibles van cifrados; (4) este ADR pasa a ADR-072. `contact_id` queda opcional porque quien escribe al agente es el profesional y el paciente puede no ser un contacto. **Riesgo nuevo que deja la unión:** `call_records.transcript` (Dev A) es JSONB en claro, así que un dictado clínico hecho por teléfono queda ahí sin cifrar aunque `messages`, los logs y los checkpoints ya no lo guarden; es la pregunta de diseño que Dev A dejó abierta en su PR y aquí pasa a ser bloqueante para producción en una clínica.
+
+### ADR-071: canal de voz con Twilio (Sprint 13, Dev A) — llamadas como un canal más
+- **Fecha:** 2026-09-26
+- **Contexto:** mitad de Dev A del Sprint 13 (`specs/sprint-13-advanced-modules.md` §1-8, §12). El usuario eligió **Twilio**; Vonage queda fuera (sería otra clase en la factory, no un `if backend ==` en cada método como el spec). Dev B se queda con el agente clínico, sus tools (CIE-10/CUPS/RIPS), Habeas Data y la integración del nodo en el grafo; las tablas que va a usar (`clinical_records`) ya las deja Dev A.
+- **Arquitectura: la voz no es un caso especial del grafo, es un canal.** El spec ejecuta el agente dentro de la API (`CallManager` llamando a un `conversation_pipeline` que no existe). Aquí se reutiliza el patrón del Webchat (ADR-059):
+  - **Entrada:** Twilio abre un WebSocket (Media Streams, `app/api/v1/voice_ws.py`); `CallSession` (`app/services/voice/call_manager.py`) corta el audio en frases, las transcribe con Whisper y encola cada una en `process_incoming_message` normalizada por `TwilioVoiceProvider.parse_webhook()`. Contacto, conversación (canal `voice`), grafo, CRM y handoff funcionan sin saber que era una llamada.
+  - **Salida:** el worker responde con `deliver_message()` como en cualquier canal; `send_message()` publica en un canal de Redis por llamante y la sesión de la llamada lo sintetiza (OpenAI TTS) y lo manda a Twilio por el mismo WebSocket.
+  - Id externo `CallSid:índice`: con el `CallSid` solo, la deduplicación descartaba la segunda frase.
+- **Cinco fallos de seguridad del spec, corregidos:**
+  1. Los endpoints **no validaban** `X-Twilio-Signature`, aunque el provider la implementaba.
+  2. El `wss://` del TwiML salía de `request.url.hostname`: con un `Host` falso, Twilio transmitía el audio de la llamada a otro servidor. Ahora sale de `VOICE_PUBLIC_BASE_URL`, que además es la URL que firma Twilio (detrás de Cloudflare/Traefik la que ve el proceso no es la pública).
+  3. El TwiML interpolaba texto sin escapar en XML.
+  4. El stream se identificaba con el `CallSid` en el path y el tenant con un parámetro sin firmar. Ahora lo autentica un **token HMAC de vida corta** (`stream_token.py`, clave derivada de `JWT_SECRET` con etiqueta propia) que viaja como `<Parameter>` del `<Stream>` y se verifica en el evento `start`. Solo se permite **un stream por llamada**.
+  5. El caller ID **no** llena `verified_phone`: se puede falsificar, y usarlo para unificar con el WhatsApp del mismo número regalaría el historial de otro.
+- **Audio:**
+  - Códec G.711 μ-law propio (`audio.py`): `audioop`, que usa el spec, se eliminó en Python 3.13. Es idéntico a `audioop` en las 65 536 muestras (variante de 14 bits de la referencia de Sun; la de 16 bits difería en 381 muestras de borde).
+  - Remuestreo 24→8 kHz por promedio, no por diezmado (el diezmado produce aliasing).
+  - El fin de frase se mide en **milisegundos de audio**, no con temporizadores de reloj (`asyncio.sleep`, como el spec).
+  - Las frases se transcriben **en orden** en una tarea aparte, sin bloquear la lectura del stream, con 200 ms de *pre-roll* para no cortar la primera sílaba.
+  - La respuesta se sintetiza **por oraciones** y cada una se manda apenas está lista, sin markdown ni URLs.
+- **Barge-in:** es lo que el spec deja como "depende del backend". El detector de interrupciones es por llamada (el del spec era uno por proceso y sumaba la voz de todas las llamadas). Mientras el agente habla, voz sostenida por encima de `VOICE_BARGE_IN_RMS_THRESHOLD` cancela la síntesis en curso y manda `clear`, que vacía el audio que Twilio tenía en cola. Cada respuesta termina con una `mark`, y el agente cuenta como hablando hasta que Twilio la confirma.
+- **`call_records`** (migración 016): una fila por `CallSid`, escrita por tres eventos sin orden garantizado (webhook de la llamada, cierre del stream y status callback). Por eso `voice_tasks.save_call_record` es un **upsert** que:
+  - solo pisa lo que cada evento trae;
+  - nunca deshace un estado final (un `completed` que llega antes que el `in-progress` gana);
+  - toma el `started_at` más temprano;
+  - enlaza conversación y contacto a partir de los mensajes `CallSid:%`.
+
+  `contact_id` es nullable (una llamada en la que el cliente no dijo nada no llega a tener contacto) y los teléfonos van cifrados.
+- **`clinical_records`** (misma migración, para Dev B):
+  - Va cifrado con pgcrypto todo lo que identifica al paciente o describe su salud. Eso incluye los **códigos CIE-10/CUPS**, que el spec dejaba en JSONB en claro y que el trigger de auditoría habría copiado a `audit_logs`. Para eso se agrega el tipo nuevo `EncryptedJSON`.
+  - La búsqueda por documento usa un índice ciego (`patient_document_hash`). El índice del spec sobre el BYTEA cifrado no encuentra nada.
+  - La política RLS "por rol médico" del spec **no se crea**: las políticas permisivas se combinan con OR, así que no restringía nada, y `app.current_user_role` no lo fija nadie. El control por rol queda en la API y en el nodo clínico (Dev B).
+  - Trigger de auditoría de la migración 006.
+  - **Bug de `EncryptedJSON` encontrado por su propio test:** `type_coerce(..., Text)` reemplaza el tipo del parámetro, así que `process_bind_param` nunca corría. La serialización vive en el tipo interno `_JSONTexto`.
+- **API:**
+  - `POST /api/v1/voice/calls` inicia una llamada saliente. Solo `admin`/`super_admin` **del tenant del canal**: el número de Twilio es de `DEFAULT_CLIENT_ID`.
+  - `GET /api/v1/voice/calls[/{id}]` lista las llamadas para el CRM, con teléfonos enmascarados y la transcripción solo en el detalle.
+  - Solo `/api/v1/voice/twilio/*` está exento del JWT (`VOICE_WEBHOOK_PATHS_PREFIX`).
+- **Despliegue:**
+  - `celery-ai`, `notifications`, `media` y `bulk` reciben las credenciales de Twilio: `get_channel_config("voice")` las exige para responder.
+  - La API recibe la configuración de voz y de Whisper, porque las frases se transcriben en el proceso que tiene el stream.
+  - `test_compose_workers.py` vigila las dos cosas.
+  - La voz del `<Say>` pasa a `es-MX`: `Polly.Mia` es mexicana, y la combinación `es-CO` del spec no existe.
+- **Fuera de alcance, anotado:**
+  - El VAD por energía es suficiente para el MVP; con ruido de fondo convendría un VAD entrenado (Silero).
+  - Se recomienda fijar `WHISPER_LANGUAGE=es`: en frases cortas la autodetección falla.
+  - El tope de llamadas simultáneas es por proceso.
+  - Los DTMF de Media Streams no se procesan.
+  - Grabación: la URL llega del status callback, pero la plataforma no la activa.
+- **Tests:**
+  - 100 unitarios: códec contra `audioop`, segmentación, orden del STT, barge-in, TTS por oraciones, firma contra el vector oficial de `twilio-python`, token, webhooks con `Host` falso y XML hostil, llamadas salientes y el WebSocket completo.
+  - 9 de integración contra PostgreSQL real: RLS y cifrado en disco y en auditoría de las dos tablas; una frase recorre `webhook_processor` hasta una conversación `voice`; upsert fuera de orden; API del CRM aislada por tenant.
 
 ### ADR-070: cabos sueltos de la Fase 2 — configuración del agente de marketing y `sentiment_avg`
 - **Fecha:** 2026-09-26
@@ -1039,6 +1092,15 @@ Cuatro agentes en paralelo (RLS/multi-tenancy, async/concurrencia, seguridad, l�
 |---|---|---|
 | 25 | `agent_action_logs` | Log de acciones de cada nodo LangGraph por conversación |
 | 26 | `admin_assistant_history` | Historial de conversaciones del Admin Assistant por tenant/usuario |
+
+### Fase 3 (Módulos avanzados, Sprint 13) — 5 tablas (migraciones 016 a 018, ADR-071 y ADR-072)
+| # | Tabla | Propósito |
+|---|---|---|
+| — | `call_records` | Una llamada de Twilio por fila (upsert por `CallSid`); transcripción, duración, teléfonos cifrados |
+| — | `clinical_records` | Registro RIPS; identidad del paciente y datos de salud cifrados (`EncryptedJSON`), auditado; desde la 017, retención de 20 años por trigger |
+| — | `patient_consents` | Autorización Habeas Data por paciente (índice ciego), revocable (migración 017, ADR-072) |
+| — | `cie10_catalog` / `cups_catalog` | Catálogos oficiales de codificación, globales, sin `client_id` ni RLS (migración 018, ADR-072) |
+
 ### Fase 3 (Lead Management) — 10 tablas
 | # | Tabla | Propósito |
 |---|---|---|

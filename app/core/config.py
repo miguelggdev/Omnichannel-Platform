@@ -107,6 +107,50 @@ class Settings(BaseSettings):
     WEBCHAT_IDLE_TIMEOUT_SECONDS: float = 120.0
     WEBCHAT_REPLAY_LIMIT: int = 50
 
+    # Canal de voz (Twilio) — Sprint 13. Vacias las credenciales = canal
+    # desactivado: los webhooks de Twilio responden 401 y no se aceptan streams.
+    # Globales, como el resto de canales (el tenant es `DEFAULT_CLIENT_ID`).
+    TWILIO_ACCOUNT_SID: str = ""
+    # Firma los webhooks (`X-Twilio-Signature`) y autentica la API REST.
+    TWILIO_AUTH_TOKEN: str = ""
+    # Numero de Twilio en E.164, origen de las llamadas salientes.
+    TWILIO_PHONE_NUMBER: str = ""
+    TWILIO_API_BASE_URL: str = "https://api.twilio.com"
+    # URL publica de la API (`https://api.ejemplo.com`), tal como la ve Twilio.
+    # Hace falta porque la firma de Twilio cubre la URL completa, y detras de
+    # Cloudflare/Traefik la que ve el proceso no es la publica. Tambien da el
+    # `wss://` del stream de audio.
+    VOICE_PUBLIC_BASE_URL: str = ""
+    # Validez del token del stream: se usa segundos despues de emitirlo.
+    VOICE_STREAM_TOKEN_TTL_SECONDS: int = 60
+    VOICE_WELCOME_MESSAGE: str = "Hola, gracias por llamar. ¿En qué le puedo ayudar?"
+    VOICE_OUTBOUND_WELCOME_MESSAGE: str = "Hola, le llamamos de parte de nuestro equipo."
+    # Lo dice Twilio si el stream de audio se cierra de nuestro lado (error,
+    # tope de llamadas, fin del tiempo maximo).
+    VOICE_UNAVAILABLE_MESSAGE: str = (
+        "Lo sentimos, no podemos continuar la llamada en este momento. Intente más tarde."
+    )
+    # Idioma y voz del saludo, que lo dice Twilio (`<Say>`) antes del stream.
+    VOICE_TWIML_LANGUAGE: str = "es-MX"
+    VOICE_TWIML_VOICE: str = "Polly.Mia"
+    # Respuestas del agente: OpenAI TTS.
+    VOICE_TTS_MODEL: str = "tts-1"
+    VOICE_TTS_VOICE: str = "nova"
+    VOICE_TTS_TIMEOUT_SECONDS: float = 20.0
+    VOICE_TTS_COST_PER_1K_CHARS_USD: float = 0.015
+    # Deteccion de voz por energia (RMS sobre PCM de 16 bits).
+    VOICE_SPEECH_RMS_THRESHOLD: int = 500
+    # Silencio que cierra una frase del cliente y la manda a Whisper.
+    VOICE_END_OF_SPEECH_SILENCE_MS: int = 900
+    VOICE_MAX_UTTERANCE_SECONDS: int = 30
+    # Interrupcion (barge-in): voz mas fuerte y sostenida que la deteccion normal,
+    # para que el eco de la propia respuesta no corte al agente.
+    VOICE_BARGE_IN_RMS_THRESHOLD: int = 800
+    VOICE_BARGE_IN_MIN_MS: int = 200
+    # Tope de una llamada y de llamadas simultaneas por proceso de la API.
+    VOICE_MAX_CALL_SECONDS: int = 1800
+    VOICE_MAX_CONCURRENT_CALLS: int = 20
+
     # Email como canal de clientes — Sprint 9. Salida por SMTP; entrada por el
     # Inbound Parse de SendGrid o Mailgun (POST /api/v1/webhooks/email/email).
     # Globales, como el resto de canales, hasta que exista `channel_configs`.

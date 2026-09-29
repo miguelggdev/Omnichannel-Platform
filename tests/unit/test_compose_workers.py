@@ -39,6 +39,11 @@ ENV_CANALES = frozenset(
         "EMAIL_SMTP_PASSWORD",
         "EMAIL_FROM_ADDRESS",
         "EMAIL_FROM_NAME",
+        # Voz (Sprint 13): `get_channel_config("voice")` exige las cuatro.
+        "TWILIO_ACCOUNT_SID",
+        "TWILIO_AUTH_TOKEN",
+        "TWILIO_PHONE_NUMBER",
+        "TWILIO_API_BASE_URL",
     }
 )
 
@@ -319,6 +324,19 @@ class TestOtrosWorkers:
         faltan = REQUERIDAS_POR_SERVICIO[nombre] - _env(servicios[nombre]).keys()
 
         assert not faltan, f"{nombre} no declara {sorted(faltan)}"
+
+    def test_la_api_tiene_todo_lo_del_canal_de_voz(
+        self, servicios: dict[str, dict[str, Any]]
+    ) -> None:
+        """Webhooks, stream, STT y TTS de las llamadas corren en la API (Sprint 13)."""
+        del_settings = {n for n in Settings.model_fields if n.startswith(("VOICE_", "TWILIO_"))} | {
+            "OPENAI_API_KEY",
+            "WHISPER_MODEL",
+            "WHISPER_LANGUAGE",
+            "WHISPER_TIMEOUT_SECONDS",
+        }
+
+        assert del_settings <= _env(servicios["api"]).keys()
 
     def test_la_api_expone_todos_los_limites_del_webchat(
         self, servicios: dict[str, dict[str, Any]]

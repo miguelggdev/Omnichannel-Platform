@@ -7,7 +7,7 @@ Aca vive la logica que el spec (§9.2) deja dentro de las tools y con un
 valido, un solo diagnostico principal, codigos con formato, consentimiento del
 titular, fecha no futura— se hacen cumplir en codigo, no en el prompt.
 
-Cambios sobre el pseudocodigo del spec, todos en ADR-071:
+Cambios sobre el pseudocodigo del spec, todos en ADR-072:
 
 - **`purpose_code` es obligatorio.** El spec lo deja en `"01"` por defecto, que
   en la Resolucion 3374 es *atencion del parto*: un default silencioso habria
@@ -329,7 +329,7 @@ def resumen_registro(registro: ClinicalRecord, documento: str) -> dict[str, Any]
         Resumen sin documento completo ni contenido de las notas.
     """
     principal = next(
-        (d["code"] for d in registro.diagnosis_codes if d.get("type") == "principal"), None
+        (d["code"] for d in (registro.diagnosis_codes or []) if d.get("type") == "principal"), None
     )
     return {
         "record_id": str(registro.id),
@@ -338,7 +338,7 @@ def resumen_registro(registro: ClinicalRecord, documento: str) -> dict[str, Any]
         "date": registro.service_date.isoformat(),
         "type": registro.rips_type,
         "main_diagnosis": principal,
-        "procedures": len(registro.procedure_codes),
+        "procedures": len(registro.procedure_codes or []),
     }
 
 
@@ -525,7 +525,9 @@ async def obtener_historial(
     )
     historial: list[dict[str, Any]] = []
     for fila in filas:
-        principal = next((d for d in fila.diagnosis_codes if d.get("type") == "principal"), {})
+        principal = next(
+            (d for d in (fila.diagnosis_codes or []) if d.get("type") == "principal"), {}
+        )
         historial.append(
             {
                 "record_id": str(fila.id),
@@ -646,8 +648,8 @@ def _detalle(registro: ClinicalRecord, ultima_atencion: date) -> dict[str, Any]:
         "purpose_code": registro.purpose_code,
         "external_cause": registro.external_cause,
         "diagnosis_type": registro.diagnosis_type,
-        "diagnosis_codes": registro.diagnosis_codes,
-        "procedure_codes": registro.procedure_codes,
+        "diagnosis_codes": registro.diagnosis_codes or [],
+        "procedure_codes": registro.procedure_codes or [],
         "structured_notes": registro.structured_notes or {},
         "dictated_by_contact_id": (
             str(registro.dictated_by_contact_id) if registro.dictated_by_contact_id else None
@@ -707,7 +709,7 @@ async def listar_registros(
             "service_date": f.service_date.isoformat(),
             "rips_type": f.rips_type,
             "main_diagnosis": next(
-                (d["code"] for d in f.diagnosis_codes if d.get("type") == "principal"), None
+                (d["code"] for d in (f.diagnosis_codes or []) if d.get("type") == "principal"), None
             ),
             "anonymized": f.anonymized_at is not None,
         }
@@ -763,7 +765,7 @@ async def avanzar_registro(
 
     Es un `UPDATE ... WHERE status = <origen>` atomico: dos firmas simultaneas
     no se pisan y la segunda recibe `TransicionInvalidaError`. El trigger de la
-    base (migracion 016) hace cumplir lo mismo aunque alguien salte esta
+    base (migracion 017) hace cumplir lo mismo aunque alguien salte esta
     funcion. Un registro firmado ya no se puede modificar ni borrar durante 20
     anos.
 

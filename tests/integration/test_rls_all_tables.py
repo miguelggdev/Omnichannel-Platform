@@ -878,6 +878,142 @@ class TestRLSAgentesEspecializados:
         )
 
 
+# ─── Tests por tabla: canal de voz y agente clinico (Sprint 13) ─────────────
+
+
+async def _contacto(session, client_id: uuid.UUID) -> str:
+    """Crea un contacto del tenant y devuelve su id.
+
+    Args:
+        session: Sesion con el contexto de ese tenant.
+        client_id: Tenant.
+
+    Returns:
+        El id del contacto, como texto.
+    """
+    contact_id = str(uuid.uuid4())
+    await session.execute(
+        text("INSERT INTO contacts (id, client_id, display_name) VALUES (:id, :cid, 'Paciente')"),
+        {"id": contact_id, "cid": str(client_id)},
+    )
+    return contact_id
+
+
+class TestRLSVozYClinico:
+    """Aislamiento y cifrado de `call_records` y `clinical_records`."""
+
+    async def test_call_records(self, rls_harness: dict) -> None:
+        """call_records: un tenant no ve las llamadas del otro."""
+        await assert_rls_isolation(
+            rls_harness["session_a"],
+            rls_harness["session_b"],
+            table="call_records",
+            insert_sql="""
+                INSERT INTO call_records (id, client_id, call_sid, direction, status,
+                                          phone_from, started_at)
+                VALUES (:id, :client_id, :sid, 'inbound', 'in-progress',
+                        pgp_sym_encrypt('+573001234567', :clave), now())
+            """,
+            params={
+                "id": str(uuid.uuid4()),
+                "client_id": str(rls_harness["tenant_a"]),
+                "sid": f"CA{uuid.uuid4().hex}",
+                "clave": get_settings().ENCRYPTION_KEY,
+            },
+        )
+
+    async def test_clinical_records(self, rls_harness: dict) -> None:
+        """clinical_records: un tenant no ve los registros clinicos del otro."""
+        sa = rls_harness["session_a"]
+        contact_id = await _contacto(sa, rls_harness["tenant_a"])
+        await assert_rls_isolation(
+            sa,
+            rls_harness["session_b"],
+            table="clinical_records",
+            insert_sql="""
+                INSERT INTO clinical_records (id, client_id, contact_id, patient_document_number,
+                                              patient_document_hash, service_date)
+                VALUES (:id, :client_id, :contact_id, pgp_sym_encrypt('1020304050', :clave),
+                        :hash, current_date)
+            """,
+            params={
+                "id": str(uuid.uuid4()),
+                "client_id": str(rls_harness["tenant_a"]),
+                "contact_id": contact_id,
+                "clave": get_settings().ENCRYPTION_KEY,
+                "hash": "a" * 64,
+            },
+        )
+
+    async def test_los_datos_clinicos_quedan_cifrados_en_disco_y_en_la_auditoria(
+        self, rls_harness: dict
+    ) -> None:
+        """Diagnostico, notas y documento: legibles por el ORM, cifrados en la base.
+
+        Incluye `audit_logs`: el trigger guarda `to_jsonb(NEW)`, y con los
+        codigos en JSONB (como proponia el spec) el diagnostico quedaba en claro
+        en el rastro de auditoria.
+        """
+        from datetime import date
+
+        from sqlalchemy import select
+
+        from app.core.encryption import blind_index
+        from app.models.clinical_record import ClinicalRecord
+
+        sa = rls_harness["session_a"]
+        tenant = rls_harness["tenant_a"]
+        contact_id = await _contacto(sa, tenant)
+
+        registro = ClinicalRecord(
+            client_id=tenant,
+            contact_id=uuid.UUID(contact_id),
+            patient_document_type="CC",
+            patient_document_number="1020304050",
+            patient_document_hash=blind_index("CC:1020304050", tenant),
+            patient_name="Ana Perez",
+            service_date=date(2026, 9, 26),
+            diagnosis_codes=[{"code": "J06.9", "description": "Rinofaringitis aguda"}],
+            structured_notes={"subjective": "Dolor de garganta hace tres dias"},
+            raw_transcription="Paciente refiere dolor de garganta",
+        )
+        sa.add(registro)
+        await sa.flush()
+
+        crudo = (
+            await sa.execute(
+                text(
+                    "SELECT patient_document_number::text, patient_name::text, "
+                    "diagnosis_codes::text, structured_notes::text, raw_transcription::text "
+                    "FROM clinical_records WHERE id = :id"
+                ),
+                {"id": str(registro.id)},
+            )
+        ).one()
+        for valor in crudo:
+            for secreto in ("1020304050", "Ana Perez", "J06.9", "garganta"):
+                assert secreto not in (valor or "")
+
+        auditoria = await sa.scalar(
+            text(
+                "SELECT new_values::text FROM audit_logs "
+                "WHERE table_name = 'clinical_records' AND record_id = :id"
+            ),
+            {"id": str(registro.id)},
+        )
+        assert auditoria is not None, "el trigger de auditoria no registro el alta"
+        for secreto in ("1020304050", "Ana Perez", "J06.9", "garganta"):
+            assert secreto not in auditoria
+
+        sa.expunge_all()
+        leido = (
+            await sa.execute(select(ClinicalRecord).where(ClinicalRecord.id == registro.id))
+        ).scalar_one()
+        assert leido.patient_document_number == "1020304050"
+        assert leido.diagnosis_codes == [{"code": "J06.9", "description": "Rinofaringitis aguda"}]
+        assert leido.structured_notes == {"subjective": "Dolor de garganta hace tres dias"}
+
+
 # ─── Test de búsqueda vectorial con aislamiento ─────────────────────────────
 
 

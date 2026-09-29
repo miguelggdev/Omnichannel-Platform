@@ -10,7 +10,7 @@ trata con autorizacion previa y expresa del titular (art. 6); el titular puede
 conocerlo (art. 8, a-b y art. 14), revocar la autorizacion o pedir su
 supresion (art. 8, e).
 
-Desviaciones sobre el pseudocodigo del spec (ADR-071):
+Desviaciones sobre el pseudocodigo del spec (ADR-072):
 
 - **El titular se identifica por documento, no por `contact_id`.** Quien habla
   con el agente es el profesional; el paciente puede no ser un contacto.
@@ -32,7 +32,7 @@ Desviaciones sobre el pseudocodigo del spec (ADR-071):
   plazo, tambien se anonimizan los firmados. El plazo se cuenta desde la
   ultima atencion **del paciente**: cada registro nuevo lo extiende para todos
   los anteriores. La conservacion la impone ademas el trigger de la base
-  (migracion 016), no solo este modulo.
+  (migracion 017), no solo este modulo.
 - **`anonymize_patient_data` no hace `commit()`**: lo hace `tenant_session()`
   al cerrar el contexto. Un commit aca partiria la transaccion del llamante.
 """
@@ -40,7 +40,6 @@ Desviaciones sobre el pseudocodigo del spec (ADR-071):
 import logging
 import re
 from datetime import date, datetime, timezone
-from importlib import import_module
 from typing import Any, cast
 from uuid import UUID
 
@@ -48,6 +47,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.encryption import blind_index
+from app.models.call_record import CallRecord
 from app.models.clinical_record import (
     CONSENT_TYPES,
     DATA_CATEGORY_HEALTH,
@@ -396,8 +396,8 @@ class HabeasDataCompliance:
                     "service_type": r.service_type,
                     "rips_type": r.rips_type,
                     "specialty": r.specialty,
-                    "diagnosis_codes": r.diagnosis_codes,
-                    "procedure_codes": r.procedure_codes,
+                    "diagnosis_codes": r.diagnosis_codes or [],
+                    "procedure_codes": r.procedure_codes or [],
                     "structured_notes": r.structured_notes or {},
                     "status": r.status,
                     "anonymized": r.anonymized_at is not None,
@@ -519,10 +519,7 @@ def hash_paciente_anonimo(client_id: UUID | str, record_id: UUID) -> str:
 async def _llamadas_del_paciente(
     session: AsyncSession, client_id: UUID, registros: Any
 ) -> list[dict[str, Any]]:
-    """Llamadas ligadas a los registros del paciente, si el canal de voz existe.
-
-    `call_records` es de la mitad de Dev A del sprint. Mientras no este
-    desplegado, la lista va vacia en vez de romper la exportacion.
+    """Llamadas de origen de los registros del paciente (canal de voz, Dev A).
 
     Args:
         session: Sesion con el contexto de tenant aplicado.
@@ -530,20 +527,16 @@ async def _llamadas_del_paciente(
         registros: Registros clinicos del paciente.
 
     Returns:
-        Las llamadas de origen de los registros, o una lista vacia.
+        Fecha, duracion y direccion de cada llamada; el telefono y la
+        transcripcion no se entregan aqui.
     """
-    try:
-        modulo = import_module("app.models.call_record")
-    except ImportError:
-        return []
     ids = [r.call_record_id for r in registros if r.call_record_id is not None]
     if not ids:
         return []
-    llamada = modulo.CallRecord
     filas = (
         (
             await session.execute(
-                select(llamada).where(llamada.client_id == client_id, llamada.id.in_(ids))
+                select(CallRecord).where(CallRecord.client_id == client_id, CallRecord.id.in_(ids))
             )
         )
         .scalars()

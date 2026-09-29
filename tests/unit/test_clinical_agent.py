@@ -66,7 +66,7 @@ class TestCodificacion:
         assert any(m["code"] == "I10" for m in resultado["matches"])
 
     async def test_cie10_sin_coincidencia_no_propone_un_codigo(self) -> None:
-        """ADR-071: el spec caia a un LLM y devolvia un codigo inventado."""
+        """ADR-072: el spec caia a un LLM y devolvia un codigo inventado."""
         resultado = await ct.code_cie10.ainvoke(
             {"diagnosis": "sindrome inexistente xyz"}, config=CONFIG
         )

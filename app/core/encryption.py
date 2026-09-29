@@ -79,8 +79,8 @@ import hmac
 import json
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Text, cast, type_coerce
-from sqlalchemy.dialects.postgresql import BYTEA, JSONB
+from sqlalchemy import Text, type_coerce
+from sqlalchemy.dialects.postgresql import BYTEA
 from sqlalchemy.sql import func
 from sqlalchemy.types import TypeDecorator
 
@@ -149,64 +149,95 @@ class EncryptedString(TypeDecorator[str]):
         return func.pgp_sym_decrypt(col, _clave(), type_=Text)
 
 
+class _JSONTexto(TypeDecorator[Any]):
+    """JSON serializado como texto: el tipo del valor en claro de `EncryptedJSON`.
+
+    Existe porque `pgp_sym_encrypt()` recibe el parametro con `type_coerce()`, y
+    `type_coerce()` reemplaza el tipo del parametro: los `process_bind_param()`
+    de `EncryptedJSON` nunca se ejecutarian y la lista llegaria sin serializar al
+    driver. Serializar en el tipo del `type_coerce()` (y deserializar en el de
+    `pgp_sym_decrypt()`) es lo que hace que el JSON pase de verdad por aca.
+
+    Attributes:
+        impl: `TEXT`.
+        cache_ok: Sin estado propio.
+    """
+
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Any) -> str | None:
+        """Serializa el valor a JSON.
+
+        Args:
+            value: Valor Python (dict, list, ...). `None` queda como NULL.
+            dialect: Dialecto de SQLAlchemy (sin uso).
+
+        Returns:
+            El JSON como texto, o `None`.
+        """
+        if value is None:
+            return None
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    def process_result_value(self, value: Any, dialect: Any) -> Any:
+        """Deserializa el JSON ya descifrado.
+
+        Args:
+            value: Texto que devolvio `pgp_sym_decrypt()`.
+            dialect: Dialecto de SQLAlchemy (sin uso).
+
+        Returns:
+            El valor Python, o `None`.
+        """
+        if value is None:
+            return None
+        return json.loads(value)
+
+
 class EncryptedJSON(TypeDecorator[Any]):
-    """Columna `BYTEA` que guarda un valor JSON cifrado con pgcrypto.
+    """Columna `BYTEA` con un valor JSON cifrado (Sprint 13).
 
-    Para texto libre estructurado que no se consulta por dentro (notas
-    clinicas SOAP, entidades extraidas del dictado): en `JSONB` quedaria en
-    claro para cualquiera con lectura de la tabla. Serializa a JSON, cifra en
-    PostgreSQL igual que `EncryptedString`, y al leer descifra y parsea.
+    Para datos estructurados que son sensibles en si mismos, como las notas
+    SOAP o los diagnosticos de un registro clinico: un `JSONB` los dejaria en
+    claro en disco, en los backups y en el `to_jsonb(NEW)` del trigger de
+    auditoria. Se serializa a texto en Python (`_JSONTexto`) y se cifra en
+    PostgreSQL con la misma clave y las mismas funciones que `EncryptedString`.
 
-    Un `None` de Python se guarda como `NULL` (no como el JSON `null`). Los
-    valores son los de `JSONB`: `jsonb::text` normaliza el espacio en blanco.
+    El precio es el mismo que el de cualquier columna cifrada: no se puede
+    consultar por su contenido (`->`, `@>`, indices GIN). Quien necesite filtrar
+    por un campo tiene que guardarlo aparte, en claro si no es sensible o con
+    `blind_index()` si lo es.
 
     Attributes:
         impl: Tipo real de la columna en PostgreSQL (`BYTEA`).
-        cache_ok: El tipo no lleva estado propio.
+        cache_ok: Sin estado propio; SQLAlchemy puede cachear las sentencias.
     """
 
     impl = BYTEA
     cache_ok = True
 
-    def process_result_value(self, value: Any, dialect: Any) -> Any:
-        """Parsea el JSON que devolvio el descifrado.
-
-        Args:
-            value: Texto ya descifrado por `column_expression`, o `None`.
-            dialect: Dialecto en uso (no se usa).
-
-        Returns:
-            El objeto original, o `None`.
-        """
-        return None if value is None else json.loads(value)
-
     def bind_expression(self, bindvalue: Any) -> ColumnElement[Any]:
-        """Envuelve el parametro con `pgp_sym_encrypt()` al escribir.
+        """Serializa y cifra el valor al escribir.
 
         Args:
-            bindvalue: Parametro con el JSON en claro.
+            bindvalue: Parametro con el valor Python.
 
         Returns:
-            Expresion SQL que cifra el valor.
+            Expresion SQL que cifra el JSON.
         """
-        # JSONB serializa el objeto Python (y `none_as_null` deja un None como
-        # NULL, que `pgp_sym_encrypt` devuelve como NULL: la columna queda
-        # vacia en vez de cifrar el texto "null").
-        return func.pgp_sym_encrypt(
-            cast(type_coerce(bindvalue, JSONB(none_as_null=True)), Text), _clave()
-        )
+        return func.pgp_sym_encrypt(type_coerce(bindvalue, _JSONTexto()), _clave())
 
     def column_expression(self, col: Any) -> ColumnElement[Any]:
-        """Envuelve la columna con `pgp_sym_decrypt()` al leer.
+        """Descifra y deserializa la columna al leer.
 
         Args:
             col: Columna cifrada.
 
         Returns:
-            Expresion SQL que devuelve el JSON en claro como texto; el
-            resultado lo parsea `process_result_value()`.
+            Expresion SQL que devuelve el JSON, deserializado por `_JSONTexto`.
         """
-        return func.pgp_sym_decrypt(col, _clave(), type_=self)
+        return func.pgp_sym_decrypt(col, _clave(), type_=_JSONTexto())
 
 
 def blind_index(valor: str | None, client_id: UUID | str, *, normalizar: bool = True) -> str | None:

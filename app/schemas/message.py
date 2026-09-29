@@ -66,6 +66,9 @@ class ChannelEnum(StrEnum):
     email = "email"
     phone = "phone"
     facebook = "facebook"
+    #: Llamadas telefonicas (Twilio, Sprint 13). `phone` es anterior y no lo usa
+    #: ningun proveedor.
+    voice = "voice"
 
 
 class MessageTypeEnum(StrEnum):

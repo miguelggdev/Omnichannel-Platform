@@ -543,18 +543,23 @@ async def test_un_registro_firmado_no_se_puede_borrar_en_20_anos(
 async def test_un_registro_firmado_no_se_puede_modificar(
     tenant: uuid.UUID, profesional: uuid.UUID
 ) -> None:
+    from app.core.config import get_settings
+
     await _firmado(tenant, profesional)
 
     for sql in (
-        "UPDATE clinical_records SET diagnosis_codes = '[]'::jsonb WHERE client_id = :cid",
+        "UPDATE clinical_records SET diagnosis_codes = NULL WHERE client_id = :cid",
         "UPDATE clinical_records SET patient_name = pgp_sym_encrypt('otro', 'k') WHERE client_id = :cid",
         "UPDATE clinical_records SET status = 'draft' WHERE client_id = :cid",
     ):
-        with pytest.raises(DBAPIError):
+        with pytest.raises(DBAPIError, match=r"no se puede modificar|Transicion de estado"):
             await _sql(tenant, sql)
 
     (fila,) = await _filas(
-        tenant, "SELECT status, diagnosis_codes::text FROM clinical_records WHERE client_id = :cid"
+        tenant,
+        "SELECT status, pgp_sym_decrypt(diagnosis_codes, :clave) FROM clinical_records "
+        "WHERE client_id = :cid",
+        clave=get_settings().ENCRYPTION_KEY,
     )
     assert fila[0] == "signed"
     assert "I10" in fila[1]

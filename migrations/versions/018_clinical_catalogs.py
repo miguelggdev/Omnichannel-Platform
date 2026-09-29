@@ -16,8 +16,8 @@ verdad y un codigo que no este en ellas se rechaza.
 el cargador: la busqueda por palabras es un `ILIKE` sobre ~15 mil filas, sin
 necesidad de `unaccent` ni de `tsvector`.
 
-Revision ID: 017_clinical_catalogs
-Revises: 016_clinical_records
+Revision ID: 018_clinical_catalogs
+Revises: 017_clinical_records
 Create Date: 2026-09-29
 """
 
@@ -27,8 +27,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "017_clinical_catalogs"
-down_revision: str | None = "016_clinical_records"
+revision: str = "018_clinical_catalogs"
+down_revision: str | None = "017_clinical_records"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -1,25 +1,40 @@
-"""Modelos clinicos: `ClinicalRecord` (RIPS) y `PatientConsent` (Sprint 13, Dev B).
+"""Modelos clinicos: `ClinicalRecord` (RIPS) y `PatientConsent` (Sprint 13).
 
-Contrato: `specs/sprint-13-advanced-modules.md` §8.2-8.3. Se aparta del
-pseudocodigo en cinco puntos (ADR-071):
+`ClinicalRecord` lo creo Dev A (migracion 016); Dev B lo extiende en la
+migracion 017 (ADR-072): el profesional que dicta (`dictated_by_contact_id`),
+`anonymized_at`, y `contact_id` pasa a opcional. `PatientConsent` es de Dev B.
 
-1. **El paciente no es el contacto de la conversacion.** El spec pone
-   `contact_id NOT NULL` y verifica el consentimiento por contacto, pero quien
-   escribe al agente es el *profesional* que dicta; el paciente se identifica
-   por tipo y numero de documento. `contact_id` (el paciente, si tambien es un
-   contacto) queda opcional y `dictated_by_contact_id` registra al profesional
-   ("registra siempre quien dicto", §9.1).
-2. **`patient_document_hash`**: el numero de documento va cifrado y, con un
-   IV aleatorio, no se puede buscar por igualdad (misma razon que
-   `contact_identifiers.identifier_hash`). El indice ciego por tenant permite
-   ubicar el historial, deduplicar y ligar el consentimiento sin descifrar.
-3. **El consentimiento tiene tabla propia (`patient_consents`).** El spec lo
-   busca en `clinical_records.data_processing_authorized`, pero ese registro no
-   puede existir antes del consentimiento: la verificacion nunca pasaria. Una
-   tabla aparte permite ademas revocarlo (Ley 1581, art. 8) y probarlo.
-4. **`call_record_id` sin FK.** `call_records` es de la mitad de Dev A del
-   sprint (canal de voz) y no existe todavia; su migracion agrega la FK.
-5. **`anonymized_at`** marca los registros anonimizados (derecho de supresion).
+Que va cifrado y por que
+------------------------
+Un registro clinico es dato sensible (Ley 1581 de 2012, art. 5) y CLAUDE.md
+exige cifrar los datos medicos. Van cifrados con pgcrypto:
+
+- la identidad del paciente (`patient_document_number`, `patient_name`);
+- todo lo que describe su salud: la transcripcion del dictado, las notas SOAP,
+  las entidades medicas extraidas **y los codigos de diagnostico y
+  procedimiento**. El spec los deja en `JSONB`, pero un CIE-10 asociado a un
+  paciente dice de que esta enfermo; en claro quedaria en disco, en los backups
+  y en `audit_logs` (el trigger guarda `to_jsonb(NEW)`).
+
+Quedan en claro los campos administrativos del RIPS (tipo de registro,
+finalidad, causa externa, fechas, estado): no identifican a nadie y hacen
+falta para filtrar y generar los reportes.
+
+Buscar un paciente por documento
+--------------------------------
+El spec indexa `patient_document_number`, pero sobre una columna cifrada con IV
+aleatorio ese indice no encuentra nada. Se agrega `patient_document_hash`, el
+indice ciego del tipo y numero de documento (`blind_index()`), que es por
+tenant como los de `contact_identifiers`.
+
+Acceso por rol
+--------------
+El spec propone una segunda politica RLS que exige un rol medico leyendo
+`app.current_user_role`. No se incluye: las politicas permisivas de PostgreSQL
+se combinan con OR, asi que junto a `tenant_isolation` no restringiria nada, y
+esa variable no la fija nadie (`tenant_session()` solo fija el tenant, y los
+workers de Celery no tienen usuario). El control por rol queda en la API y en
+el nodo del agente clinico (Dev B).
 """
 
 from datetime import date, datetime
@@ -27,23 +42,25 @@ from typing import Any
 from uuid import UUID as _UUID
 
 from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, String, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.encryption import EncryptedJSON, EncryptedString
 from app.models.base import TenantBaseModel
+
+#: Estados de un registro clinico.
+CLINICAL_STATUSES: tuple[str, ...] = ("draft", "reviewed", "signed", "submitted")
+
+#: Tipos de archivo RIPS: consulta, procedimiento, urgencia, hospitalizacion.
+RIPS_TYPES: tuple[str, ...] = ("AC", "AP", "AU", "AH")
 
 RECORD_DRAFT = "draft"
 RECORD_REVIEWED = "reviewed"
 RECORD_SIGNED = "signed"
 RECORD_SUBMITTED = "submitted"
 
-RECORD_STATUSES: tuple[str, ...] = (
-    RECORD_DRAFT,
-    RECORD_REVIEWED,
-    RECORD_SIGNED,
-    RECORD_SUBMITTED,
-)
+#: Alias de `CLINICAL_STATUSES` con el nombre que usa el servicio clinico.
+RECORD_STATUSES: tuple[str, ...] = CLINICAL_STATUSES
 
 #: Estados en los que el registro ya es parte de la historia clinica y no se
 #: puede anonimizar ni modificar (deber de conservacion).
@@ -61,6 +78,11 @@ RECORD_TRANSITIONS: dict[str, str] = {
     RECORD_SIGNED: RECORD_SUBMITTED,
 }
 
+CONSENT_TYPES: tuple[str, ...] = ("verbal", "digital", "written")
+
+#: Categoria de dato sensible que cubre el consentimiento (Ley 1581, art. 5).
+DATA_CATEGORY_HEALTH = "health"
+
 
 def fin_de_retencion(ultima_atencion: date) -> date:
     """Fecha hasta la que hay que conservar la historia clinica de un paciente.
@@ -77,49 +99,45 @@ def fin_de_retencion(ultima_atencion: date) -> date:
         return ultima_atencion.replace(year=ultima_atencion.year + RETENTION_YEARS, day=28)
 
 
-CONSENT_TYPES: tuple[str, ...] = ("verbal", "digital", "written")
-
-#: Categoria de dato sensible que cubre el consentimiento (Ley 1581, art. 5).
-DATA_CATEGORY_HEALTH = "health"
-
-
 class ClinicalRecord(TenantBaseModel):
-    """Registro clinico RIPS en borrador, revisado, firmado o enviado.
+    """Registro individual de prestacion de un servicio de salud.
 
     La retencion de 20 anos la garantiza el trigger
-    `clinical_records_protect_trigger` (migracion 016): un registro firmado no
+    `clinical_records_protect_trigger` (migracion 017): un registro firmado no
     se borra ni se modifica mientras corra, salvo `signed -> submitted`.
 
     Attributes:
-        contact_id: Paciente, si ademas es un contacto del tenant.
-        dictated_by_contact_id: Profesional que dicto el registro.
-        conversation_id: Conversacion en la que se dicto.
-        call_record_id: Llamada de origen (Dev A); sin FK todavia.
-        patient_document_type: CC, TI, CE, PA, RC, MS, AS o NU.
-        patient_document_number: Documento del paciente, cifrado.
-        patient_document_hash: Indice ciego por tenant del documento.
+        contact_id: Paciente, si ademas es un contacto del tenant. Opcional
+            desde la migracion 017: quien escribe al agente es el profesional y
+            el paciente se identifica por su documento.
+        dictated_by_contact_id: Profesional que dicto el registro (017).
+        anonymized_at: Cuando se anonimizo, si se hizo (017).
+        conversation_id: Conversacion en la que se dicto, si la hay.
+        call_record_id: Llamada en la que se dicto, si fue por voz.
+        patient_document_type: Tipo de documento (CC, TI, CE, PA, RC...).
+        patient_document_number: Numero de documento, cifrado.
+        patient_document_hash: Indice ciego de tipo + numero, para buscar.
         patient_name: Nombre del paciente, cifrado.
-        service_date: Fecha del servicio.
+        service_date: Fecha de la atencion.
         service_type: consulta, procedimiento, urgencia u hospitalizacion.
         specialty: Especialidad medica.
-        provider_code: Codigo del prestador.
-        diagnosis_codes: `[{code, description, type, catalog_verified}]`.
-        procedure_codes: `[{code, description, laterality?, catalog_verified}]`.
-        diagnosis_type: confirmado, presuntivo o impresion.
-        raw_transcription: Dictado crudo, cifrado.
+        provider_code: Codigo de habilitacion del prestador.
+        diagnosis_codes: CIE-10, cifrado: `[{code, description, type}]`.
+        procedure_codes: CUPS, cifrado: `[{code, description, laterality}]`.
+        diagnosis_type: confirmado, presuntivo o impresion diagnostica.
+        raw_transcription: Transcripcion del dictado, cifrada.
         structured_notes: Notas SOAP, cifradas.
-        medical_entities: Entidades extraidas del dictado, cifradas.
-        rips_type: AC, AP, AU o AH.
-        purpose_code: Finalidad (01-10).
-        external_cause: Causa externa (01-15).
-        discharge_status: Estado de salida.
-        consent_given: Cuando se dio el consentimiento informado.
-        consent_type: verbal, digital o written.
-        data_processing_authorized: Cuando se autorizo el tratamiento de datos.
-        status: Uno de `RECORD_STATUSES`.
-        reviewed_by: Usuario que reviso.
+        medical_entities: Entidades medicas extraidas, cifradas.
+        rips_type: Uno de `RIPS_TYPES`.
+        purpose_code: Finalidad de la consulta.
+        external_cause: Causa externa.
+        discharge_status: Estado a la salida.
+        consent_given: Cuando dio el paciente el consentimiento informado.
+        consent_type: verbal, digital o escrito.
+        data_processing_authorized: Cuando autorizo el tratamiento de datos.
+        status: Uno de `CLINICAL_STATUSES`.
+        reviewed_by: Usuario (profesional) que lo reviso.
         signed_at: Cuando se firmo.
-        anonymized_at: Cuando se anonimizo, si se hizo.
         updated_at: Ultima modificacion.
     """
 
@@ -127,6 +145,7 @@ class ClinicalRecord(TenantBaseModel):
     __table_args__ = (
         Index("idx_clinical_records_client_date", "client_id", "service_date"),
         Index("idx_clinical_records_patient", "client_id", "patient_document_hash"),
+        Index("idx_clinical_records_contact", "client_id", "contact_id"),
         CheckConstraint(
             "status IN ('draft', 'reviewed', 'signed', 'submitted')",
             name="ck_clinical_records_status",
@@ -146,46 +165,51 @@ class ClinicalRecord(TenantBaseModel):
     conversation_id: Mapped[_UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("conversations.id"), nullable=True
     )
-    call_record_id: Mapped[_UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    call_record_id: Mapped[_UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("call_records.id"), nullable=True
+    )
 
-    patient_document_type: Mapped[str | None] = mapped_column(String(5))
+    patient_document_type: Mapped[str | None] = mapped_column(String(5), nullable=True)
     patient_document_number: Mapped[str] = mapped_column(EncryptedString, nullable=False)
     patient_document_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    patient_name: Mapped[str | None] = mapped_column(EncryptedString)
+    patient_name: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
 
     service_date: Mapped[date] = mapped_column(Date, nullable=False)
-    service_type: Mapped[str | None] = mapped_column(String(50))
-    specialty: Mapped[str | None] = mapped_column(String(100))
-    provider_code: Mapped[str | None] = mapped_column(String(20))
+    service_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    specialty: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    provider_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
-    diagnosis_codes: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONB, server_default="[]", nullable=False
+    diagnosis_codes: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        EncryptedJSON, nullable=True
     )
-    procedure_codes: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONB, server_default="[]", nullable=False
+    procedure_codes: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        EncryptedJSON, nullable=True
     )
-    diagnosis_type: Mapped[str | None] = mapped_column(String(20))
+    diagnosis_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
-    raw_transcription: Mapped[str | None] = mapped_column(EncryptedString)
-    # Texto libre del profesional: cifrado (ADR-071). Los codigos si van en JSONB.
-    structured_notes: Mapped[dict[str, Any] | None] = mapped_column(EncryptedJSON)
-    medical_entities: Mapped[list[dict[str, Any]] | None] = mapped_column(EncryptedJSON)
+    raw_transcription: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
+    structured_notes: Mapped[dict[str, Any] | None] = mapped_column(EncryptedJSON, nullable=True)
+    medical_entities: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        EncryptedJSON, nullable=True
+    )
 
-    rips_type: Mapped[str | None] = mapped_column(String(5))
-    purpose_code: Mapped[str | None] = mapped_column(String(5))
-    external_cause: Mapped[str | None] = mapped_column(String(5))
-    discharge_status: Mapped[str | None] = mapped_column(String(5))
+    rips_type: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    purpose_code: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    external_cause: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    discharge_status: Mapped[str | None] = mapped_column(String(5), nullable=True)
 
-    consent_given: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    consent_type: Mapped[str | None] = mapped_column(String(50))
-    data_processing_authorized: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consent_given: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    consent_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    data_processing_authorized: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
-    status: Mapped[str] = mapped_column(String(20), server_default=RECORD_DRAFT, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), server_default="draft", nullable=False)
     reviewed_by: Mapped[_UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
-    signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

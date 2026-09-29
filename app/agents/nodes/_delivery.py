@@ -104,7 +104,7 @@ async def deliver_message(
         stored_text: Texto que se guarda en `messages` y se emite en los
             eventos, si debe ser distinto del que se envia. Lo usa el agente
             clinico para no dejar datos de salud en claro en el historial
-            (ADR-071); al contacto le llega siempre `text`.
+            (ADR-072); al contacto le llega siempre `text`.
 
     Returns:
         Id externo que devolvio el proveedor, o None si no devolvio ninguno.

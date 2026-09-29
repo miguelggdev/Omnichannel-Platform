@@ -20,7 +20,7 @@ el repositorio. Mientras tanto:
   profesional puede dictar cualquiera del listado oficial); se guarda marcado
   como `catalog_verified: false` para que quien revise lo confirme.
 - **Con los catalogos oficiales cargados manda la base.** Las tablas
-  `cie10_catalog` y `cups_catalog` (migracion 017, cargadas por
+  `cie10_catalog` y `cups_catalog` (migracion 018, cargadas por
   `scripts/load_clinical_catalogs.py`) reemplazan al subconjunto: se busca ahi,
   todo codigo queda verificado y uno que no exista se rechaza. Mientras esten
   vacias rige lo de arriba.

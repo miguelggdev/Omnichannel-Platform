@@ -53,7 +53,7 @@ class TestCatalogo:
         assert buscar_cie10("hipertension migrana") == []
 
     def test_sin_coincidencia_no_inventa(self) -> None:
-        """Criterio del ADR-071: nada de caer a un LLM para 'encontrar' un codigo."""
+        """Criterio del ADR-072: nada de caer a un LLM para 'encontrar' un codigo."""
         assert buscar_cie10("sindrome inexistente xyz") == []
         assert buscar_cups("cirugia rara") == []
 

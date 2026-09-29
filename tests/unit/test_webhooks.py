@@ -800,6 +800,19 @@ class TestDedupService:
 
         assert resultado is True
 
+    async def test_redis_caido_con_fail_closed_se_trata_como_duplicado(self) -> None:
+        """Con `fail_open=False` un fallo de Redis rechaza en vez de dejar pasar."""
+
+        class BrokenRedis:
+            async def set(self, *args: Any, **kwargs: Any) -> bool:
+                raise ConnectionError("redis caido")
+
+        resultado = await dedup_module.mark_if_new(
+            "voice_stream", "CA-1", redis_client=BrokenRedis(), fail_open=False
+        )
+
+        assert resultado is False
+
 
 # ─── Resolucion de tenant en el worker ───────────────────────────────────────
 
