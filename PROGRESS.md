@@ -535,6 +535,31 @@ Las siguientes 11 features fueron diseñadas e integradas en los sprints existen
 
 ---
 
+## Sprint 13: Canal de Voz & Agente Clínico (Fase 3)
+
+> Spec: `specs/sprint-13-advanced-modules.md`. Decisiones y defectos del spec corregidos: **ADR-071** (y su addendum) en MEMORY.md.
+
+### Completado — Dev B (agente clínico, hecho por la sesión de Claude; Sesiones 40 y 41)
+- [x] Modelos `ClinicalRecord` y `PatientConsent`, migración `016_clinical_records` (RLS, documento cifrado + índice ciego, notas SOAP cifradas, auditoría sin contenido clínico, trigger de retención de 20 años)
+- [x] Catálogos CIE-10/CUPS: subconjunto de referencia + tablas oficiales (migración `017_clinical_catalogs`) y `scripts/load_clinical_catalogs.py`
+- [x] `app/services/clinical.py` (reglas RIPS, creación idempotente, revisión/firma), `app/core/habeas_data.py` (consentimiento, revocación, exportación, anonimización)
+- [x] Nodo `clinical` en el grafo (11 nodos), 8 tools, intent `clinical`, acceso solo para profesionales declarados por el tenant
+- [x] API `/api/v1/clinical/*` (configuración, consentimiento, exportación/anonimización, listado/detalle/`review`/`sign`/`submit`)
+- [x] Lo dictado fuera del historial: `messages`, `agent_action_logs` y checkpoints de LangGraph
+- [x] Tests: unitarios, RLS de las 2 tablas nuevas e integración contra PostgreSQL real
+
+### Pendiente
+- [ ] **Dev A — canal de voz (nada existe todavía):** `VoiceProvider` (Twilio/Vonage) y registro en `factory.py`, `stt_streaming.py`, `tts_service.py`, `call_manager.py`, `interruption_handler.py`, `app/api/v1/voice.py` y `voice_ws.py`, `voice_tasks.py`, modelo `CallRecord` + migración `call_records`, `schemas/voice.py`, tests (`test_voice_provider`, `test_stt_streaming`, `test_tts_service`, `tests/integration/test_voice_flow.py`). Ojo con el spec: usa `audioop` (fuera de Python 3.13, ver `audioop-lts`), `datetime.utcnow()` naive, `CallManager` como singleton en dos módulos y un `get_current_user` sin importar
+- [ ] **Al mergear la migración de `call_records`:** agregar la FK `clinical_records.call_record_id -> call_records.id` (hoy es un UUID sin FK). `export_patient_data()` ya incluye las llamadas cuando exista `app.models.call_record.CallRecord`
+- [ ] **Cargar el dataset oficial** de CIE-10 y CUPS (Resolución 5171 de 2017) con `scripts/load_clinical_catalogs.py` en cada entorno; no está en el repo. Hasta entonces rige el subconjunto de referencia (36 CIE-10, 2 CUPS)
+- [ ] **Infra:** rol de la aplicación solo con `SELECT` sobre `cie10_catalog`/`cups_catalog`; `REVOKE UPDATE, DELETE` sobre `audit_logs` (deuda de Sprint 8)
+- [ ] **Validación legal (asesor del tenant, antes de producción):** plazo de retención de 20 años y su interacción con la supresión (Ley 1581 art. 15, Decreto 1377 art. 10); autorización del titular y contrato de transmisión por el envío del dictado a OpenAI (transferencia internacional, art. 26)
+- [ ] **Decisión de producto:** rol `medical` dedicado (valor nuevo en el enum `user_role` + política restrictiva); hoy los endpoints clínicos son solo `admin`/`super_admin`
+- [ ] **Decisión de producto:** el JSONB de `diagnosis_codes`/`procedure_codes` va en claro (por diseño: es lo que se conserva anónimo); revisar si el asesor legal exige otra cosa
+- [ ] Tras el merge: `PUT /api/v1/clinical/settings` para declarar los profesionales de cada tenant y habilitar `clinical` en `enabled_agents`; en cada despliegue, `alembic upgrade head` (016 y 017)
+
+---
+
 ## Métricas de Progreso
 
 - **Tests pasando:** 27 / 27 (unit + security; 34 RLS/DB tests skip hasta conexión BD)
