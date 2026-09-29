@@ -36,6 +36,7 @@ from uuid import UUID
 
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy import text
 
 from app.agents.nodes._state import ConversationState
 from app.core.config import get_settings
@@ -134,6 +135,15 @@ async def _compile_graph() -> Any:
     return grafo
 
 
+# Sentencias fijas (no f-strings): el nombre de cada tabla no viene de ningun
+# dato externo y asi no hay nada que un analizador de SQL pueda marcar.
+_PURGAR_CHECKPOINTS = (
+    text("DELETE FROM checkpoint_writes WHERE thread_id = :thread"),
+    text("DELETE FROM checkpoint_blobs WHERE thread_id = :thread"),
+    text("DELETE FROM checkpoints WHERE thread_id = :thread"),
+)
+
+
 async def _purgar_checkpoints(client_id: str, conversation_id: str) -> None:
     """Borra los checkpoints de la conversacion tras un turno clinico.
 
@@ -152,17 +162,12 @@ async def _purgar_checkpoints(client_id: str, conversation_id: str) -> None:
         client_id: Tenant propietario.
         conversation_id: Conversacion cuyos checkpoints se borran.
     """
-    from sqlalchemy import text
-
     from app.core.database import tenant_session
 
     try:
         async with tenant_session(UUID(client_id)) as session:
-            for tabla in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
-                await session.execute(
-                    text(f"DELETE FROM {tabla} WHERE thread_id = :thread"),  # noqa: S608
-                    {"thread": f"{client_id}:{conversation_id}"},
-                )
+            for sentencia in _PURGAR_CHECKPOINTS:
+                await session.execute(sentencia, {"thread": f"{client_id}:{conversation_id}"})
     except Exception:
         logger.exception("No se pudieron purgar los checkpoints clinicos de %s", conversation_id)
 
