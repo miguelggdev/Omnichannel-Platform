@@ -70,7 +70,39 @@ _DETAIL_FIELDS: frozenset[str] = frozenset(
     }
 )
 
+# Intents cuya conversacion lleva datos de salud (Ley 1581, art. 5): el texto que
+# dicta el profesional y lo que responde el agente no se copia a
+# `agent_action_logs`, que cualquier admin/supervisor del tenant lee por
+# `GET /agent-logs/...` y que no esta cifrado ni entra en la anonimizacion
+# clinica. Solo se conserva la traza (nodo, intent, duracion, estado).
+_INTENTS_SENSIBLES: frozenset[str] = frozenset({"clinical"})
+# Nodos que solo procesan datos de salud, con o sin intent en el estado.
+_NODOS_SENSIBLES: frozenset[str] = frozenset({"clinical"})
+CONTENIDO_OMITIDO = "[contenido clinico omitido]"
+
 Node = Callable[[ConversationState], Awaitable[dict[str, Any]]]
+
+
+def _es_sensible(
+    state: ConversationState, result: dict[str, Any] | None = None, node_name: str | None = None
+) -> bool:
+    """Si el turno lleva datos de salud y su contenido no debe registrarse.
+
+    Args:
+        state: Estado del grafo antes de correr el nodo.
+        result: Lo que devolvio el nodo, si ya corrio (un nodo puede fijar el
+            intent en su resultado).
+        node_name: Nodo que corre; algunos solo atienden datos de salud.
+
+    Returns:
+        `True` si el intent del estado o del resultado, o el propio nodo, es
+        sensible.
+    """
+    return (
+        node_name in _NODOS_SENSIBLES
+        or state.get("intent") in _INTENTS_SENSIBLES
+        or (result is not None and result.get("intent") in _INTENTS_SENSIBLES)
+    )
 
 
 def _build_input_summary(state: ConversationState, node_name: str) -> str:
@@ -87,18 +119,21 @@ def _build_input_summary(state: ConversationState, node_name: str) -> str:
     mensaje = state.get("message") or {}
     texto = mensaje.get("text") if isinstance(mensaje, dict) else None
     if texto:
-        partes.append(f"msg: {texto[:200]}")
+        partes.append(
+            f"msg: {CONTENIDO_OMITIDO if _es_sensible(state, node_name=node_name) else texto[:200]}"
+        )
     if state.get("intent"):
         partes.append(f"intent: {state['intent']}")
     return " | ".join(partes) if partes else f"[{node_name} input]"
 
 
-def _build_output_summary(result: dict[str, Any], node_name: str) -> str:
+def _build_output_summary(result: dict[str, Any], node_name: str, *, sensible: bool = False) -> str:
     """Arma un resumen legible de lo que el nodo devolvió.
 
     Args:
         result: Dict parcial que devolvió el nodo.
         node_name: Nombre del nodo, para el fallback si no hay nada que resumir.
+        sensible: Si el turno lleva datos de salud; `response_text` se omite.
 
     Returns:
         Texto corto con los campos relevantes presentes en `result`.
@@ -107,7 +142,7 @@ def _build_output_summary(result: dict[str, Any], node_name: str) -> str:
     for campo in _OUTPUT_SUMMARY_FIELDS:
         if campo not in result:
             continue
-        valor = result[campo]
+        valor = CONTENIDO_OMITIDO if sensible and campo == "response_text" else result[campo]
         if isinstance(valor, str) and len(valor) > 200:
             valor = valor[:200] + "..."
         partes.append(f"{campo}: {valor}")
@@ -234,7 +269,9 @@ def logged_node(node_name: str, action_type: str = "decision") -> Callable[[Node
                 node_name=node_name,
                 action_type=action_type,
                 input_summary=input_summary,
-                output_summary=_build_output_summary(result, node_name),
+                output_summary=_build_output_summary(
+                    result, node_name, sensible=_es_sensible(state, result, node_name)
+                ),
                 details=_extract_details(result),
                 duration_ms=duracion_ms,
                 tokens_used=result.get("_tokens_used", 0),

@@ -1,0 +1,138 @@
+"""Nodo del agente clinico: dictado medico, RIPS, CIE-10 y CUPS (Sprint 13, Dev B).
+
+Contrato: `specs/sprint-13-advanced-modules.md` §9.1. Tool calling sobre
+`clinical_tools.py`, con temperatura 0: nada de datos medicos "creativos".
+
+Quien puede usarlo
+-------------------
+El spec pregunta por `state["user_role"]` (rol `medical`) y por
+`state["habeas_data_consent"]`; ninguno de los dos existe en
+`ConversationState`, y ademas el grafo atiende a *contactos* de un canal, no a
+usuarios con rol. Se resuelve igual que el agente de marketing (BUG-045,
+ADR-070):
+
+- el agente tiene que estar en `agent_configs.config.enabled_agents`;
+- y solo atiende a los contactos declarados en
+  `agent_configs.config.clinical.professional_contact_ids` (se administran con
+  `PUT /api/v1/clinical/settings`). Habilitar el agente no dice nada de quien
+  escribe, y este grafo es el mismo que le contesta a los clientes finales por
+  WhatsApp: sin la lista, cualquiera podria pedirle historial de un paciente.
+
+El consentimiento de Habeas Data no se pregunta aca: depende del *paciente*, que
+no se conoce hasta que el profesional dicta el documento. Lo exige la tool
+`create_rips_record`, dentro de la misma transaccion que inserta (no lo puede
+saltar el modelo).
+
+Con los datos de salud en la conversacion, `logged_node()` no guarda el texto de
+lo dictado ni de la respuesta en `agent_action_logs` (ver
+`app/agents/middleware/logging_middleware.py`).
+"""
+
+import logging
+from datetime import datetime, timezone
+from typing import Any
+from uuid import UUID
+
+from app.agents.nodes._agent_tools import responder_con_tools
+from app.agents.nodes._state import ConversationState
+from app.agents.nodes._tenant import get_agent_settings
+from app.agents.tools.clinical_tools import CLINICAL_TOOLS
+from app.core.database import tenant_session
+from app.services.clinical import es_profesional_clinico
+
+logger = logging.getLogger(__name__)
+
+OPERATION = "clinical"
+AGENTE = "clinical"
+INTENT = "clinical"
+
+MENSAJE_NO_HABILITADO = (
+    "El modulo clinico no esta habilitado para esta cuenta. "
+    "Un administrador puede activarlo desde la configuracion."
+)
+
+#: Respuesta a un contacto que no es profesional del tenant. No menciona
+#: pacientes ni registros: quien escribe es, casi siempre, un cliente.
+MENSAJE_NO_AUTORIZADO = (
+    "No puedo ayudarte con eso por este canal. Si tienes otra consulta, con gusto te ayudo."
+)
+
+SYSTEM_PROMPT_TEMPLATE = """Eres un agente clinico especializado en documentacion medica colombiana.
+
+Tu funcion es ayudar al profesional de salud que te dicta a:
+1. Extraer entidades medicas del dictado (sintomas, diagnosticos, procedimientos, medicamentos)
+2. Codificar diagnosticos segun CIE-10 y procedimientos segun CUPS
+3. Estructurar notas clinicas en formato SOAP (Subjetivo, Objetivo, Evaluacion, Plan)
+4. Crear registros RIPS (Resolucion 3374 de 2000) en BORRADOR
+5. Consultar el historial de registros de un paciente
+
+Reglas ESTRICTAS:
+- NUNCA sugieras diagnosticos ni procedimientos. Solo codifica lo que el profesional
+  dicte de forma explicita.
+- Si una herramienta no encuentra un codigo, NO propongas uno: pidele al profesional
+  que lo dicte.
+- Si hay mas de un codigo posible, presenta las opciones y deja que el profesional elija.
+- Antes de guardar, MUESTRA el detalle completo (paciente, fecha, tipo RIPS,
+  diagnosticos, procedimientos, finalidad) y pide confirmacion expresa del profesional.
+- La finalidad de la atencion (01 a 10) y, en urgencias, la causa externa las dicta el
+  profesional: no las asumas.
+- Los datos del paciente son CONFIDENCIALES (Ley 1581 de 2012, Habeas Data).
+- Solo registra datos de un paciente si el profesional confirma que el paciente autorizo
+  el tratamiento de sus datos de salud; en ese caso registra la autorizacion con
+  register_patient_consent y luego crea el registro. Si la herramienta responde que
+  falta la autorizacion, explicaselo al profesional, no insistas.
+- Los registros que creas quedan en borrador: la revision y la firma son del profesional.
+- No repitas el documento completo del paciente en tus respuestas.
+
+Formato RIPS:
+- AC (Consulta): finalidad, causa externa si aplica, diagnostico principal + hasta 3 relacionados
+- AP (Procedimiento): al menos un codigo CUPS, finalidad
+- AU (Urgencia): causa externa obligatoria, diagnostico principal
+- AH (Hospitalizacion): diagnostico principal, causa externa
+
+Fecha actual: {fecha}
+"""
+
+
+async def clinical_agent_node(state: ConversationState) -> dict[str, Any]:
+    """Atiende un dictado o consulta clinica con el modelo del tenant y sus tools.
+
+    Args:
+        state: Estado del grafo; usa `client_id`, `conversation_id`,
+            `contact_id`, `message` y `model_to_use`.
+
+    Returns:
+        Dict parcial con `response_text` e `intent`.
+    """
+    client_id = state["client_id"]
+    ajustes = await get_agent_settings(UUID(client_id))
+
+    if AGENTE not in ajustes.enabled_agents:
+        logger.info("Agente clinico no habilitado para el tenant %s", client_id)
+        return {"response_text": MENSAJE_NO_HABILITADO, "intent": INTENT}
+
+    # Sin gastar una llamada al LLM: un cliente final que dice "necesito el
+    # historial de un paciente" no tiene que llegar a ver las tools.
+    async with tenant_session(UUID(client_id)) as session:
+        autorizado = await es_profesional_clinico(session, UUID(client_id), state.get("contact_id"))
+    if not autorizado:
+        logger.warning(
+            "Contacto %s del tenant %s pidio el agente clinico sin ser profesional",
+            state.get("contact_id"),
+            client_id,
+        )
+        return {"response_text": MENSAJE_NO_AUTORIZADO, "intent": INTENT}
+
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+        fecha=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    )
+    texto = await responder_con_tools(
+        state=dict(state),
+        tools=CLINICAL_TOOLS,
+        system_prompt=system_prompt,
+        modelo=state.get("model_to_use") or ajustes.model,
+        operacion=OPERATION,
+        # Datos medicos: la temperatura mas baja del grafo (spec §11).
+        temperatura=0.0,
+    )
+    return {"response_text": texto, "intent": INTENT}

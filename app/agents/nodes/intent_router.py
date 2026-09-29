@@ -52,6 +52,11 @@ AGENT_INTENTS: dict[str, str] = {
     # Sprint 12: solo se le ofrecen al clasificador si el tenant los habilito.
     "financial": "financial",
     "marketing": "marketing",
+    # Sprint 13: dictado y codificacion clinica (RIPS, CIE-10, CUPS). El spec
+    # propone tres intents (`clinical`, `clinical_dictation`,
+    # `clinical_coding`) que van todos al mismo nodo; con uno solo el
+    # clasificador no tiene que distinguir tres etiquetas casi iguales.
+    "clinical": "clinical",
 }
 
 INTENT_DESCRIPTIONS: dict[str, str] = {
@@ -66,6 +71,11 @@ INTENT_DESCRIPTIONS: dict[str, str] = {
     "marketing": (
         "Campanas masivas: crear o enviar una campana, segmentar contactos o "
         "consultar las metricas de un envio."
+    ),
+    "clinical": (
+        "Documentacion clinica: dictado medico, nota clinica, registro RIPS, "
+        "codificar un diagnostico (CIE-10) o un procedimiento (CUPS), o consultar "
+        "el historial de un paciente."
     ),
     "complaint": "Queja, reclamo o expresion clara de molestia con el servicio.",
     "human_request": "Pide explicitamente hablar con una persona o un agente humano.",
@@ -90,6 +100,7 @@ class IntentClassification(BaseModel):
         "scheduling",
         "financial",
         "marketing",
+        "clinical",
         "complaint",
         "human_request",
         "unknown",

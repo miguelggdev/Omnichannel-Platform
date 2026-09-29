@@ -5,16 +5,18 @@ Contrato: `specs/sprint-06-langgraph.md` §2-3, 12; `specs/sprint-07-scheduling-
 §4-5 (cada nodo se registra envuelto en `logged_node()`, que escribe su
 actividad en `agent_action_logs`); y `specs/sprint-12-agents-advanced.md` §1-2
 y §8 (nodos `financial` y `marketing`, Sprint 12); y `specs/sprint-10-templates.md`
-§5-6 (nodo `sentiment_analysis`, Sprint 10). Ensambla los 10 nodos en el
+§5-6 (nodo `sentiment_analysis`, Sprint 10); y `specs/sprint-13-advanced-modules.md`
+§9 y §11 (nodo `clinical`, Sprint 13). Ensambla los 11 nodos en el
 flujo:
 
     token_budget_check -> intent_routing -> sentiment_analysis
                        -> [rag_query | respond | human_handoff |
-                           scheduling | financial | marketing]
+                           scheduling | financial | marketing | clinical]
                                               rag_query    -> [training_mode_approval | respond | human_handoff]
                                               scheduling   -> [respond | human_handoff]
                                               financial    -> respond
                                               marketing    -> respond
+                                              clinical     -> respond
 
 `app/tasks/ai_processor.py` (Dev B, ya en `main`) es el unico consumidor: llama
 `await get_graph_with_checkpointer()` una vez por mensaje y despues
@@ -57,6 +59,7 @@ from typing import TYPE_CHECKING, Any, cast
 from langgraph.graph import END, StateGraph
 
 from app.agents.middleware.logging_middleware import logged_node
+from app.agents.nodes.clinical import clinical_agent_node
 from app.agents.nodes.financial import financial_node
 from app.agents.nodes.human_handoff import human_handoff_node
 from app.agents.nodes.intent_router import intent_routing_node
@@ -84,6 +87,7 @@ NODE_TRAINING_APPROVAL = "training_mode_approval"
 NODE_SCHEDULING = "scheduling"
 NODE_FINANCIAL = "financial"
 NODE_MARKETING = "marketing"
+NODE_CLINICAL = "clinical"
 NODE_SENTIMENT = "sentiment_analysis"
 
 # Intents que `respond_node` contesta sin pasar por RAG (ver app/agents/nodes/respond.py).
@@ -129,7 +133,7 @@ def route_after_intent(state: ConversationState) -> str:
 
     Returns:
         `"respond"`, `"human_handoff"`, `"scheduling"`, `"financial"`,
-        `"marketing"` o `"rag_query"`.
+        `"marketing"`, `"clinical"` o `"rag_query"`.
     """
     intent = state.get("intent") or "unknown"
 
@@ -143,6 +147,8 @@ def route_after_intent(state: ConversationState) -> str:
         return "financial"
     if intent == "marketing":
         return "marketing"
+    if intent == "clinical":
+        return "clinical"
     # rag_query y unknown: se intenta RAG primero.
     return "rag_query"
 
@@ -218,7 +224,7 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
     """Arma el grafo de conversacion, sin compilar.
 
     Returns:
-        `StateGraph` con los 10 nodos (envueltos en `logged_node()`) y el
+        `StateGraph` con los 11 nodos (envueltos en `logged_node()`) y el
         routing condicional del sprint.
     """
     graph = StateGraph(ConversationState)
@@ -242,6 +248,7 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
     graph.add_node(NODE_SCHEDULING, _logged(NODE_SCHEDULING, "tool_call", scheduling_node))
     graph.add_node(NODE_FINANCIAL, _logged(NODE_FINANCIAL, "tool_call", financial_node))
     graph.add_node(NODE_MARKETING, _logged(NODE_MARKETING, "tool_call", marketing_node))
+    graph.add_node(NODE_CLINICAL, _logged(NODE_CLINICAL, "tool_call", clinical_agent_node))
     graph.add_node(NODE_SENTIMENT, _logged(NODE_SENTIMENT, "decision", sentiment_analysis_node))
 
     graph.set_entry_point(NODE_TOKEN_BUDGET)
@@ -262,6 +269,7 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
             "scheduling": NODE_SCHEDULING,
             "financial": NODE_FINANCIAL,
             "marketing": NODE_MARKETING,
+            "clinical": NODE_CLINICAL,
         },
     )
     graph.add_conditional_edges(
@@ -284,6 +292,7 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
     # que tiene el agendamiento con Google Calendar.
     graph.add_edge(NODE_FINANCIAL, NODE_RESPOND)
     graph.add_edge(NODE_MARKETING, NODE_RESPOND)
+    graph.add_edge(NODE_CLINICAL, NODE_RESPOND)
 
     graph.add_edge(NODE_RESPOND, END)
     graph.add_edge(NODE_HUMAN_HANDOFF, END)
