@@ -1011,3 +1011,68 @@ class TestSetLocalBehavior:
         assert setting_a == str(rls_harness["tenant_a"])
         assert setting_b == str(rls_harness["tenant_b"])
         assert setting_a != setting_b
+
+
+# ─── Tests por tabla: agente clinico (Sprint 13) ─────────────────────────────
+
+
+class TestRLSClinico:
+    """Aislamiento RLS de las dos tablas del agente clinico."""
+
+    async def test_clinical_records(self, rls_harness: dict) -> None:
+        """clinical_records: un tenant no ve los registros clinicos del otro."""
+        await assert_rls_isolation(
+            rls_harness["session_a"],
+            rls_harness["session_b"],
+            table="clinical_records",
+            insert_sql="""
+                INSERT INTO clinical_records (id, client_id, patient_document_number,
+                                              patient_document_hash, service_date)
+                VALUES (:id, :client_id, pgp_sym_encrypt('1234567890', :clave),
+                        'hash-paciente', '2025-01-15')
+            """,
+            params={
+                "id": str(uuid.uuid4()),
+                "client_id": str(rls_harness["tenant_a"]),
+                "clave": get_settings().ENCRYPTION_KEY,
+            },
+        )
+
+    async def test_patient_consents(self, rls_harness: dict) -> None:
+        """patient_consents: un tenant no ve las autorizaciones del otro."""
+        await assert_rls_isolation(
+            rls_harness["session_a"],
+            rls_harness["session_b"],
+            table="patient_consents",
+            insert_sql="""
+                INSERT INTO patient_consents (id, client_id, patient_document_type,
+                                              patient_document_hash, consent_type)
+                VALUES (:id, :client_id, 'CC', 'hash-paciente', 'verbal')
+            """,
+            params={
+                "id": str(uuid.uuid4()),
+                "client_id": str(rls_harness["tenant_a"]),
+            },
+        )
+
+    async def test_el_estado_de_un_registro_clinico_esta_acotado(self, rls_harness: dict) -> None:
+        """`ck_clinical_records_status`: la base rechaza un estado que no existe."""
+        sa = rls_harness["session_a"]
+
+        with pytest.raises(DBAPIError):
+            async with sa.begin_nested():
+                await sa.execute(
+                    text("""
+                        INSERT INTO clinical_records (id, client_id, patient_document_number,
+                                                      patient_document_hash, service_date, status)
+                        VALUES (:id, :cid, pgp_sym_encrypt('1234567890', :clave),
+                                'h', '2025-01-15', 'inventado')
+                    """),
+                    {
+                        "id": str(uuid.uuid4()),
+                        "cid": str(rls_harness["tenant_a"]),
+                        "clave": get_settings().ENCRYPTION_KEY,
+                    },
+                )
+
+        assert await sa.scalar(text("SELECT 1")) == 1
