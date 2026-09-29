@@ -34,6 +34,16 @@ class FakeResult:
         """Devuelve el escalar prefijado."""
         return self._valor
 
+    def first(self) -> Any:
+        """Primera fila prefijada, o `None` si no hay."""
+        if isinstance(self._valor, list):
+            return self._valor[0] if self._valor else None
+        return self._valor
+
+    def scalar_one(self) -> Any:
+        """Devuelve el escalar prefijado."""
+        return self._valor
+
     def scalars(self) -> "FakeResult":
         """Permite encadenar `.scalars().all()`."""
         return self

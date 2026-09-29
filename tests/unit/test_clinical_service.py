@@ -240,7 +240,7 @@ class TestCrearRegistro:
 
     async def test_sin_consentimiento_no_se_guarda_nada(self) -> None:
         """Criterio 11: el spec lo dejaba solo en el prompt."""
-        sesion = FakeSession(resultados=[None])
+        sesion = FakeSession(resultados=[None, None])
 
         resultado = await self._crear(sesion)
 
@@ -251,7 +251,7 @@ class TestCrearRegistro:
 
     async def test_con_consentimiento_crea_un_borrador(self) -> None:
         # consentimiento, advisory lock, busqueda de duplicado
-        sesion = FakeSession(resultados=[_consentimiento(), None, None])
+        sesion = FakeSession(resultados=[None, _consentimiento(), None, None])
 
         resultado = await self._crear(sesion, conversation_id=uuid.uuid4())
 
@@ -278,7 +278,7 @@ class TestCrearRegistro:
             diagnosis_codes=[{"code": "I10", "type": "principal"}],
             procedure_codes=[],
         )
-        sesion = FakeSession(resultados=[_consentimiento(), None, previo])
+        sesion = FakeSession(resultados=[None, _consentimiento(), None, previo])
 
         resultado = await self._crear(sesion, conversation_id=uuid.uuid4())
 
@@ -287,11 +287,11 @@ class TestCrearRegistro:
         assert sesion.added == []
 
     async def test_el_lock_es_por_paciente(self) -> None:
-        sesion = FakeSession(resultados=[_consentimiento(), None, None])
+        sesion = FakeSession(resultados=[None, _consentimiento(), None, None])
 
         await self._crear(sesion, conversation_id=uuid.uuid4())
 
-        assert "pg_advisory_xact_lock" in str(sesion.executed[1])
+        assert "pg_advisory_xact_lock" in str(sesion.executed[2])
 
 
 class TestAutorizacion:

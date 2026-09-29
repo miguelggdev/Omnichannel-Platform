@@ -268,8 +268,8 @@ class TestAnonimizacion:
         assert borrador.patient_document_number == ANONIMIZADO
         assert borrador.patient_name is None
         assert borrador.raw_transcription is None
-        assert borrador.structured_notes == {}
-        assert borrador.medical_entities == []
+        assert borrador.structured_notes is None
+        assert borrador.medical_entities is None
         assert borrador.contact_id is None
         assert borrador.anonymized_at is not None
         # El hash tambien: si no, el registro seguiria ligado al documento.
@@ -292,10 +292,42 @@ class TestAnonimizacion:
 
         assert resultado["anonymized"] is False
         assert resultado["records_retained"] == 1
-        assert "conservacion" in resultado["note"]
+        assert "20 anos" in resultado["note"]
+        assert resultado["retention_until"] == "2045-01-15"
         assert firmado.patient_document_number == "1234567890"
         assert firmado.structured_notes == {"subjective": "dolor"}
         assert firmado.anonymized_at is None
+
+    async def test_vencido_el_plazo_de_20_anos_tambien_se_anonimiza_lo_firmado(self) -> None:
+        """La conservacion es de 20 anos desde la ultima atencion, no para siempre."""
+        antiguo = _registro("signed", service_date=date(2001, 3, 1))
+
+        resultado = await HabeasDataCompliance.anonymize_patient_data(
+            FakeSession(resultados=[[antiguo]]),  # type: ignore[arg-type]
+            CLIENT_ID,
+            "CC",
+            "1234567890",
+        )
+
+        assert resultado["records_anonymized"] == 1
+        assert resultado["records_retained"] == 0
+        assert antiguo.patient_document_number == ANONIMIZADO
+
+    async def test_una_atencion_reciente_extiende_la_retencion_de_las_antiguas(self) -> None:
+        """El plazo corre desde la ULTIMA atencion del paciente, para todos sus registros."""
+        antiguo = _registro("signed", service_date=date(2001, 3, 1))
+        reciente = _registro("draft", service_date=date.today())
+
+        resultado = await HabeasDataCompliance.anonymize_patient_data(
+            FakeSession(resultados=[[antiguo, reciente]]),  # type: ignore[arg-type]
+            CLIENT_ID,
+            "CC",
+            "1234567890",
+        )
+
+        assert resultado["records_retained"] == 1
+        assert antiguo.anonymized_at is None
+        assert reciente.anonymized_at is not None
 
     async def test_mezcla_de_estados(self) -> None:
         borrador, firmado = _registro("draft"), _registro("signed")

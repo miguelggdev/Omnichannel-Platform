@@ -49,16 +49,27 @@ def _sesion(monkeypatch: pytest.MonkeyPatch, sesion: FakeSession) -> FakeSession
     return sesion
 
 
+@pytest.fixture
+def catalogo_vacio(monkeypatch: pytest.MonkeyPatch) -> FakeSession:
+    """Sin catalogo oficial cargado: rige el subconjunto de referencia."""
+    return _sesion(monkeypatch, FakeSession(resultados=[None] * 8))
+
+
+@pytest.mark.usefixtures("catalogo_vacio")
 class TestCodificacion:
     async def test_cie10_hipertension_esencial(self) -> None:
         """Criterio 8 del spec."""
-        resultado = await ct.code_cie10.ainvoke({"diagnosis": "Hipertensión esencial"})
+        resultado = await ct.code_cie10.ainvoke(
+            {"diagnosis": "Hipertensión esencial"}, config=CONFIG
+        )
 
         assert any(m["code"] == "I10" for m in resultado["matches"])
 
     async def test_cie10_sin_coincidencia_no_propone_un_codigo(self) -> None:
         """ADR-071: el spec caia a un LLM y devolvia un codigo inventado."""
-        resultado = await ct.code_cie10.ainvoke({"diagnosis": "sindrome inexistente xyz"})
+        resultado = await ct.code_cie10.ainvoke(
+            {"diagnosis": "sindrome inexistente xyz"}, config=CONFIG
+        )
 
         assert resultado["matches"] == []
         assert "No propongas un codigo" in resultado["note"]
@@ -66,30 +77,40 @@ class TestCodificacion:
     async def test_cups_consulta_primera_vez(self) -> None:
         """Criterio 9 del spec."""
         resultado = await ct.code_cups.ainvoke(
-            {"procedure": "Consulta de primera vez por medicina general"}
+            {"procedure": "Consulta de primera vez por medicina general"}, config=CONFIG
         )
 
         assert any(m["code"] == "890201" for m in resultado["matches"])
 
     async def test_cups_sin_coincidencia(self) -> None:
-        assert (await ct.code_cups.ainvoke({"procedure": "cirugia rara"}))["matches"] == []
+        assert (await ct.code_cups.ainvoke({"procedure": "cirugia rara"}, config=CONFIG))[
+            "matches"
+        ] == []
 
     async def test_buscar_cie10_por_capitulo(self) -> None:
-        resultado = await ct.search_cie10.ainvoke({"query": "aguda", "category": "J"})
+        resultado = await ct.search_cie10.ainvoke(
+            {"query": "aguda", "category": "J"}, config=CONFIG
+        )
 
         assert resultado["total"] > 0
         assert all(r["code"].startswith("J") for r in resultado["results"])
 
     async def test_buscar_cie10_por_rango(self) -> None:
-        resultado = await ct.search_cie10.ainvoke({"query": "diarrea", "category": "A00-B99"})
+        resultado = await ct.search_cie10.ainvoke(
+            {"query": "diarrea", "category": "A00-B99"}, config=CONFIG
+        )
 
         assert [r["code"] for r in resultado["results"]] == ["A09"]
 
     async def test_buscar_cups_por_grupo(self) -> None:
-        resultado = await ct.search_cups.ainvoke({"query": "consulta", "group": "89"})
+        resultado = await ct.search_cups.ainvoke(
+            {"query": "consulta", "group": "89"}, config=CONFIG
+        )
 
         assert resultado["total"] == 2
-        assert (await ct.search_cups.ainvoke({"query": "consulta", "group": "87"}))["total"] == 0
+        assert (await ct.search_cups.ainvoke({"query": "consulta", "group": "87"}, config=CONFIG))[
+            "total"
+        ] == 0
 
 
 _RIPS_OK: dict[str, Any] = {
@@ -137,7 +158,7 @@ class TestRips:
 
     async def test_sin_consentimiento_no_guarda(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Criterio 11: el tool lo exige en codigo, no solo el prompt."""
-        sesion = _sesion(monkeypatch, FakeSession(resultados=[None]))
+        sesion = _sesion(monkeypatch, FakeSession(resultados=[None, None]))
 
         resultado = await ct.create_rips_record.ainvoke(_RIPS_OK, config=CONFIG)
 
@@ -149,7 +170,7 @@ class TestRips:
         consentimiento = SimpleNamespace(
             granted_at=datetime(2025, 1, 10, tzinfo=timezone.utc), consent_type="verbal"
         )
-        sesion = _sesion(monkeypatch, FakeSession(resultados=[consentimiento, None, None]))
+        sesion = _sesion(monkeypatch, FakeSession(resultados=[None, consentimiento, None, None]))
 
         resultado = await ct.create_rips_record.ainvoke(_RIPS_OK, config=CONFIG)
 
@@ -165,7 +186,7 @@ class TestRips:
         consentimiento = SimpleNamespace(
             granted_at=datetime(2025, 1, 10, tzinfo=timezone.utc), consent_type="verbal"
         )
-        _sesion(monkeypatch, FakeSession(resultados=[consentimiento, None, None]))
+        _sesion(monkeypatch, FakeSession(resultados=[None, consentimiento, None, None]))
 
         resultado = await ct.create_rips_record.ainvoke(
             {**_RIPS_OK, "diagnosis_codes": [{"code": "S72.00", "type": "principal"}]},
