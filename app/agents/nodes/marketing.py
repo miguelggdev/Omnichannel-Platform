@@ -28,6 +28,7 @@ from app.agents.nodes._tenant import get_agent_settings
 from app.agents.tools.marketing_tools import CANALES_VALIDOS, MARKETING_TOOLS
 from app.core.database import tenant_session
 from app.services.campaigns import es_operador_de_marketing
+from app.services.channel_identity import identidad_verificada
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +91,14 @@ async def marketing_node(state: ConversationState) -> dict[str, Any]:
 
     # Sin gastar una llamada al LLM: un cliente final que pide "manda una
     # promo a todos" no tiene que llegar a ver las tools.
-    async with tenant_session(UUID(client_id)) as session:
-        autorizado = await es_operador_de_marketing(
-            session, UUID(client_id), state.get("contact_id")
-        )
+    # Solo cuenta un canal que identifique de verdad al contacto (el caller ID
+    # de una llamada o el `From` de un email se falsifican).
+    autorizado = identidad_verificada(state.get("channel"))
+    if autorizado:
+        async with tenant_session(UUID(client_id)) as session:
+            autorizado = await es_operador_de_marketing(
+                session, UUID(client_id), state.get("contact_id")
+            )
     if not autorizado:
         logger.warning(
             "Contacto %s del tenant %s pidio el agente de marketing sin ser operador",
