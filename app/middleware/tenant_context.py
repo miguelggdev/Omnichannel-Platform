@@ -40,6 +40,9 @@ PUBLIC_PATHS: set[str] = {
 
 # Prefijos de rutas con autenticación propia (firma, no JWT)
 WEBHOOK_PATHS_PREFIX = "/api/v1/webhooks/"
+# Webhooks de Twilio Voice (Sprint 13): firmados con `X-Twilio-Signature`. Solo
+# este prefijo; el resto de `/api/v1/voice` (llamadas salientes, listado) va con JWT.
+VOICE_WEBHOOK_PATHS_PREFIX = "/api/v1/voice/twilio/"
 
 
 class TenantContextMiddleware(BaseHTTPMiddleware):
@@ -68,7 +71,9 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         # Rutas públicas: no requieren JWT
-        if path in PUBLIC_PATHS or path.startswith(WEBHOOK_PATHS_PREFIX):
+        if path in PUBLIC_PATHS or path.startswith(
+            (WEBHOOK_PATHS_PREFIX, VOICE_WEBHOOK_PATHS_PREFIX)
+        ):
             return await call_next(request)
 
         # Extraer header Authorization

@@ -82,6 +82,7 @@ async def mark_if_new(
     *,
     redis_client: "aioredis.Redis[str] | None" = None,
     ttl_seconds: int = DEDUP_TTL_SECONDS,
+    fail_open: bool = True,
 ) -> bool:
     """Marca el mensaje como visto en Redis y dice si era nuevo.
 
@@ -93,10 +94,13 @@ async def mark_if_new(
         external_message_id: ID del mensaje en el proveedor externo.
         redis_client: Cliente a usar. Por defecto, el del servicio.
         ttl_seconds: Vigencia de la marca. Por defecto 24h.
+        fail_open: Que devolver si Redis falla. `True` (por defecto) deja pasar
+            el mensaje y la unicidad a PostgreSQL; `False` lo trata como
+            duplicado, para los llamadores sin otra barrera detras.
 
     Returns:
         True si el mensaje no se habia visto (hay que procesarlo), False si es duplicado.
-        Ante un fallo de Redis devuelve True (fail-open) y deja la unicidad a PostgreSQL.
+        Ante un fallo de Redis devuelve `fail_open`.
     """
     client = redis_client or get_redis()
     key = build_dedup_key(channel, external_message_id)
@@ -104,6 +108,11 @@ async def mark_if_new(
     try:
         was_set = await client.set(key, "1", nx=True, ex=ttl_seconds)
     except Exception as exc:  # cualquier fallo de Redis es no fatal
+        if not fail_open:
+            logger.warning(
+                "Redis no disponible para deduplicacion (key=%s): %s. Se rechaza.", key, exc
+            )
+            return False
         logger.warning(
             "Redis no disponible para deduplicacion (key=%s): %s. "
             "Se continua; la unicidad la garantiza webhook_dedup en el worker.",

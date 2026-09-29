@@ -58,6 +58,7 @@ CHANNEL_PROVIDERS: dict[str, str] = {
     "telegram": "telegram",
     "email": "email",
     "webchat": "webchat",
+    "voice": "twilio",
 }
 
 
@@ -269,6 +270,16 @@ def get_channel_config(channel: str) -> tuple[str, dict[str, Any]]:
         # Sin credenciales: el tenant forma parte del nombre del canal de Redis
         # por el que se entrega (`DEFAULT_CLIENT_ID`, ADR-030).
         config = {"client_id": settings.DEFAULT_CLIENT_ID}
+    elif provider_name == "twilio":
+        # `client_id` arma el canal de Redis de la llamada; el resto hace falta
+        # para las llamadas salientes.
+        config = {
+            "client_id": settings.DEFAULT_CLIENT_ID,
+            "account_sid": settings.TWILIO_ACCOUNT_SID,
+            "auth_token": settings.TWILIO_AUTH_TOKEN,
+            "phone_number": settings.TWILIO_PHONE_NUMBER,
+            "api_base_url": settings.TWILIO_API_BASE_URL,
+        }
     elif provider_name == "email":
         config = {
             "smtp_host": settings.EMAIL_SMTP_HOST,
@@ -286,7 +297,20 @@ def get_channel_config(channel: str) -> tuple[str, dict[str, Any]]:
 
     # En email, usuario y password son opcionales (un relay interno puede no
     # pedirlos): solo el servidor y la direccion de origen son imprescindibles.
-    obligatorias = ("smtp_host", "from_email") if provider_name == "email" else tuple(config)
+    #
+    # En twilio (voz) solo `client_id` es imprescindible, que es lo unico que
+    # lee `send_message()` para publicar la respuesta en Redis. Las credenciales
+    # REST solo hacen falta para llamar hacia fuera, y las valida
+    # `start_outbound_call()`. Exigirlas aqui dejaba muda cada respuesta del
+    # agente en un despliegue de solo entrada —con el auth token puesto para
+    # validar firmas y sin numero propio—, mientras el audio entrante, el STT y
+    # el grafo funcionaban.
+    if provider_name == "email":
+        obligatorias: tuple[str, ...] = ("smtp_host", "from_email")
+    elif provider_name == "twilio":
+        obligatorias = ("client_id",)
+    else:
+        obligatorias = tuple(config)
     faltantes = [clave for clave in obligatorias if not config[clave]]
     if faltantes:
         raise ChannelNotConfiguredError(
