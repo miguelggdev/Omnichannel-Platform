@@ -88,6 +88,7 @@ async def deliver_message(
     channel: str,
     text: str,
     metadata: dict[str, Any] | None = None,
+    stored_text: str | None = None,
 ) -> str | None:
     """Envia un texto al contacto y lo registra como mensaje saliente.
 
@@ -100,6 +101,10 @@ async def deliver_message(
         metadata: Datos propios del canal para este envio (por ejemplo, el teclado
             `request_contact` de Telegram). Se suman al contexto de hilo de email,
             y el llamador manda si coinciden.
+        stored_text: Texto que se guarda en `messages` y se emite en los
+            eventos, si debe ser distinto del que se envia. Lo usa el agente
+            clinico para no dejar datos de salud en claro en el historial
+            (ADR-071); al contacto le llega siempre `text`.
 
     Returns:
         Id externo que devolvio el proveedor, o None si no devolvio ninguno.
@@ -133,7 +138,7 @@ async def deliver_message(
                 conversation_id=conversation_id,
                 direction="outbound",
                 message_type="text",
-                content=text,
+                content=stored_text if stored_text is not None else text,
                 external_message_id=external_id or None,
                 sender_type="bot",
                 sender_id=None,
@@ -161,7 +166,7 @@ async def deliver_message(
             "conversation_id": str(conversation_id),
             "contact_id": str(contact_id),
             "channel": channel,
-            "content": text,
+            "content": stored_text if stored_text is not None else text,
             "direction": "outgoing",
             "external_message_id": external_id or None,
         },

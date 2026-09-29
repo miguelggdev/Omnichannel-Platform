@@ -20,6 +20,9 @@ from app.agents.nodes._tenant import get_agent_settings
 
 logger = logging.getLogger(__name__)
 
+#: Lo que queda en `messages.content` de un turno clinico (ver `clinical.py`).
+CONTENIDO_CLINICO_PROTEGIDO = "[contenido clínico protegido]"
+
 DEFAULT_GREETING = "Hola! En que puedo ayudarte hoy?"
 DEFAULT_FAREWELL = "Hasta luego! Si necesitas algo mas, no dudes en escribirme."
 DEFAULT_FALLBACK = "Disculpa, no entendi tu mensaje. Podrias reformularlo?"
@@ -68,6 +71,9 @@ async def respond_node(state: ConversationState) -> dict[str, Any]:
         contact_id=contact_id,
         channel=channel,
         text=texto,
+        # Lo dictado por un profesional y lo que se le responde son datos de
+        # salud: al contacto le llega completo, pero el historial no lo guarda.
+        stored_text=CONTENIDO_CLINICO_PROTEGIDO if state.get("intent") == "clinical" else None,
     )
     logger.info("Respuesta enviada en la conversacion %s", conversation_id)
     return {"response_text": texto}

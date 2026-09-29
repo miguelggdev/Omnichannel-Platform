@@ -32,6 +32,7 @@ lo lleno, que es la regla para todo `app/tasks/*.py` desde PR #12.
 
 import logging
 from typing import Any
+from uuid import UUID
 
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
@@ -133,6 +134,39 @@ async def _compile_graph() -> Any:
     return grafo
 
 
+async def _purgar_checkpoints(client_id: str, conversation_id: str) -> None:
+    """Borra los checkpoints de la conversacion tras un turno clinico.
+
+    El checkpointer guarda el estado completo del grafo —el texto dictado y la
+    respuesta— en `checkpoints`/`checkpoint_blobs`/`checkpoint_writes`, tablas
+    de LangGraph sin cifrado ni RLS. Con datos de salud (Ley 1581, art. 5) eso
+    los dejaria en claro y fuera de la retencion de la historia clinica (el
+    registro que interesa vive cifrado en `clinical_records`). Se pierde el
+    contexto persistido de esa conversacion (por ejemplo, el contador de
+    mensajes muy negativos), que en un dictado clinico no aplica.
+
+    Es un control de privacidad: si falla se registra como error y no tumba la
+    respuesta que ya se envio.
+
+    Args:
+        client_id: Tenant propietario.
+        conversation_id: Conversacion cuyos checkpoints se borran.
+    """
+    from sqlalchemy import text
+
+    from app.core.database import tenant_session
+
+    try:
+        async with tenant_session(UUID(client_id)) as session:
+            for tabla in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+                await session.execute(
+                    text(f"DELETE FROM {tabla} WHERE thread_id = :thread"),  # noqa: S608
+                    {"thread": f"{client_id}:{conversation_id}"},
+                )
+    except Exception:
+        logger.exception("No se pudieron purgar los checkpoints clinicos de %s", conversation_id)
+
+
 async def _invoke_graph(
     client_id: str,
     conversation_id: str,
@@ -160,6 +194,8 @@ async def _invoke_graph(
     config = {"configurable": {"thread_id": f"{client_id}:{conversation_id}"}}
 
     resultado: dict[str, Any] = await compiled.ainvoke(estado, config=config)
+    if resultado.get("intent") == "clinical":
+        await _purgar_checkpoints(client_id, conversation_id)
     logger.info(
         "Grafo completado para %s: intent=%s handoff=%s",
         conversation_id,

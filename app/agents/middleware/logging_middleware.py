@@ -105,12 +105,16 @@ def _es_sensible(
     )
 
 
-def _build_input_summary(state: ConversationState, node_name: str) -> str:
+def _build_input_summary(
+    state: ConversationState, node_name: str, result: dict[str, Any] | None = None
+) -> str:
     """Arma un resumen legible de lo que el nodo recibió.
 
     Args:
         state: Estado del grafo antes de correr el nodo.
         node_name: Nombre del nodo, para el fallback si no hay nada que resumir.
+        result: Lo que devolvio el nodo, si ya corrio; permite ocultar el texto
+            cuando el propio nodo descubre que el turno es clinico.
 
     Returns:
         Texto corto con el mensaje y el intent conocido, o un placeholder.
@@ -120,7 +124,7 @@ def _build_input_summary(state: ConversationState, node_name: str) -> str:
     texto = mensaje.get("text") if isinstance(mensaje, dict) else None
     if texto:
         partes.append(
-            f"msg: {CONTENIDO_OMITIDO if _es_sensible(state, node_name=node_name) else texto[:200]}"
+            f"msg: {CONTENIDO_OMITIDO if _es_sensible(state, result, node_name) else texto[:200]}"
         )
     if state.get("intent"):
         partes.append(f"intent: {state['intent']}")
@@ -263,6 +267,10 @@ def logged_node(node_name: str, action_type: str = "decision") -> Callable[[Node
                 raise
 
             duracion_ms = int((time.monotonic() - inicio) * 1000)
+            if _es_sensible(state, result, node_name):
+                # El intent se conoce recien al terminar `intent_routing`: el
+                # resumen calculado antes de correr todavia llevaba el texto.
+                input_summary = _build_input_summary(state, node_name, result)
             await _registrar(
                 client_id=client_id,
                 conversation_id=conversation_id,

@@ -33,11 +33,15 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import update
+
 from app.agents.nodes._agent_tools import responder_con_tools
 from app.agents.nodes._state import ConversationState
 from app.agents.nodes._tenant import get_agent_settings
+from app.agents.nodes.respond import CONTENIDO_CLINICO_PROTEGIDO
 from app.agents.tools.clinical_tools import CLINICAL_TOOLS
 from app.core.database import tenant_session
+from app.models.message import Message
 from app.services.clinical import es_profesional_clinico
 
 logger = logging.getLogger(__name__)
@@ -94,6 +98,41 @@ Fecha actual: {fecha}
 """
 
 
+async def _proteger_mensaje_entrante(state: ConversationState) -> None:
+    """Reemplaza en `messages` lo que dicto el profesional por un marcador.
+
+    El dictado ya se uso (esta en el estado en memoria y en la respuesta del
+    LLM); dejarlo ademas en `messages.content` lo pondria en claro en el
+    historial, en el inbox y en el export RGPD de contactos, fuera del cifrado
+    y de la retencion de la historia clinica. El registro que interesa vive
+    cifrado en `clinical_records`.
+
+    Es un control de privacidad: si falla se registra como error, pero no
+    tumba la respuesta al profesional.
+
+    Args:
+        state: Estado del grafo; usa `client_id`, `conversation_id` y
+            `message.external_message_id`.
+    """
+    externo = (state.get("message") or {}).get("external_message_id")
+    if not externo or not state.get("conversation_id"):
+        return
+    try:
+        async with tenant_session(UUID(state["client_id"])) as session:
+            await session.execute(
+                update(Message)
+                .where(
+                    Message.client_id == UUID(state["client_id"]),
+                    Message.conversation_id == UUID(state["conversation_id"]),
+                    Message.direction == "inbound",
+                    Message.external_message_id == externo,
+                )
+                .values(content=CONTENIDO_CLINICO_PROTEGIDO)
+            )
+    except Exception:
+        logger.exception("No se pudo proteger el mensaje clinico entrante en la conversacion")
+
+
 async def clinical_agent_node(state: ConversationState) -> dict[str, Any]:
     """Atiende un dictado o consulta clinica con el modelo del tenant y sus tools.
 
@@ -126,13 +165,18 @@ async def clinical_agent_node(state: ConversationState) -> dict[str, Any]:
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         fecha=datetime.now(timezone.utc).strftime("%Y-%m-%d")
     )
-    texto = await responder_con_tools(
-        state=dict(state),
-        tools=CLINICAL_TOOLS,
-        system_prompt=system_prompt,
-        modelo=state.get("model_to_use") or ajustes.model,
-        operacion=OPERATION,
-        # Datos medicos: la temperatura mas baja del grafo (spec §11).
-        temperatura=0.0,
-    )
+    try:
+        texto = await responder_con_tools(
+            state=dict(state),
+            tools=CLINICAL_TOOLS,
+            system_prompt=system_prompt,
+            modelo=state.get("model_to_use") or ajustes.model,
+            operacion=OPERATION,
+            # Datos medicos: la temperatura mas baja del grafo (spec §11).
+            temperatura=0.0,
+        )
+    finally:
+        # Tambien si el LLM fallo: el reintento de la tarea usa el texto del
+        # argumento de Celery, no el de la base.
+        await _proteger_mensaje_entrante(state)
     return {"response_text": texto, "intent": INTENT}
