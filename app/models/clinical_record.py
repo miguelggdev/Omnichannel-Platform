@@ -1,8 +1,8 @@
-"""Modelo ClinicalRecord — registro clinico RIPS (Sprint 13, Dev A).
+"""Modelos clinicos: `ClinicalRecord` (RIPS) y `PatientConsent` (Sprint 13).
 
-La tabla la crea Dev A (modelos y migraciones); el agente clinico que la
-escribe (`app/agents/nodes/clinical.py`, tools de CIE-10/CUPS y RIPS) y el
-modulo de Habeas Data son de Dev B.
+`ClinicalRecord` lo creo Dev A (migracion 016); Dev B lo extiende en la
+migracion 017 (ADR-072): el profesional que dicta (`dictated_by_contact_id`),
+`anonymized_at`, y `contact_id` pasa a opcional. `PatientConsent` es de Dev B.
 
 Que va cifrado y por que
 ------------------------
@@ -54,12 +54,64 @@ CLINICAL_STATUSES: tuple[str, ...] = ("draft", "reviewed", "signed", "submitted"
 #: Tipos de archivo RIPS: consulta, procedimiento, urgencia, hospitalizacion.
 RIPS_TYPES: tuple[str, ...] = ("AC", "AP", "AU", "AH")
 
+RECORD_DRAFT = "draft"
+RECORD_REVIEWED = "reviewed"
+RECORD_SIGNED = "signed"
+RECORD_SUBMITTED = "submitted"
+
+#: Alias de `CLINICAL_STATUSES` con el nombre que usa el servicio clinico.
+RECORD_STATUSES: tuple[str, ...] = CLINICAL_STATUSES
+
+#: Estados en los que el registro ya es parte de la historia clinica y no se
+#: puede anonimizar ni modificar (deber de conservacion).
+RECORD_RETAINED_STATUSES: tuple[str, ...] = (RECORD_SIGNED, RECORD_SUBMITTED)
+
+#: Anos que se conserva la historia clinica desde la ultima atencion del
+#: paciente: 5 en el archivo de gestion y 15 en el archivo central (Resolucion
+#: 839 de 2017 del Ministerio de Salud, que reemplaza a la 1995 de 1999).
+RETENTION_YEARS = 20
+
+#: Transiciones validas: cada estado solo puede pasar al siguiente.
+RECORD_TRANSITIONS: dict[str, str] = {
+    RECORD_DRAFT: RECORD_REVIEWED,
+    RECORD_REVIEWED: RECORD_SIGNED,
+    RECORD_SIGNED: RECORD_SUBMITTED,
+}
+
+CONSENT_TYPES: tuple[str, ...] = ("verbal", "digital", "written")
+
+#: Categoria de dato sensible que cubre el consentimiento (Ley 1581, art. 5).
+DATA_CATEGORY_HEALTH = "health"
+
+
+def fin_de_retencion(ultima_atencion: date) -> date:
+    """Fecha hasta la que hay que conservar la historia clinica de un paciente.
+
+    Args:
+        ultima_atencion: Fecha de la ultima atencion registrada del paciente.
+
+    Returns:
+        `ultima_atencion` mas `RETENTION_YEARS` anos (el 29 de febrero cae el 28).
+    """
+    try:
+        return ultima_atencion.replace(year=ultima_atencion.year + RETENTION_YEARS)
+    except ValueError:
+        return ultima_atencion.replace(year=ultima_atencion.year + RETENTION_YEARS, day=28)
+
 
 class ClinicalRecord(TenantBaseModel):
     """Registro individual de prestacion de un servicio de salud.
 
+    La retencion de 20 anos la garantiza el trigger
+    `clinical_records_protect_trigger` (migracion 017): un registro firmado no
+    se borra ni se modifica mientras corra, salvo `signed -> submitted`.
+
     Attributes:
-        contact_id: Paciente, como contacto del tenant.
+        contact_id: Paciente, si ademas es un contacto del tenant. Opcional
+            desde la migracion 017: quien escribe al agente es el profesional y
+            el paciente se identifica por su documento.
+        dictated_by_contact_id: Profesional que dicto el registro (017).
+        anonymized_at: Cuando se anonimizo, si se hizo (017).
         conversation_id: Conversacion en la que se dicto, si la hay.
         call_record_id: Llamada en la que se dicto, si fue por voz.
         patient_document_type: Tipo de documento (CC, TI, CE, PA, RC...).
@@ -104,8 +156,11 @@ class ClinicalRecord(TenantBaseModel):
         ),
     )
 
-    contact_id: Mapped[_UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=False
+    contact_id: Mapped[_UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=True
+    )
+    dictated_by_contact_id: Mapped[_UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=True
     )
     conversation_id: Mapped[_UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("conversations.id"), nullable=True
@@ -154,6 +209,54 @@ class ClinicalRecord(TenantBaseModel):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
     signed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PatientConsent(TenantBaseModel):
+    """Autorizacion del titular para tratar sus datos de salud (Ley 1581, art. 6).
+
+    Una fila por autorizacion; la vigente es la mas reciente sin `revoked_at`.
+    No guarda el documento en claro: solo el indice ciego y el tipo.
+
+    Attributes:
+        patient_document_type: Tipo de documento del titular.
+        patient_document_hash: Indice ciego por tenant del documento.
+        contact_id: Titular, si tambien es un contacto del tenant.
+        data_category: Categoria de dato sensible autorizada.
+        consent_type: verbal, digital o written.
+        granted_at: Cuando se autorizo.
+        revoked_at: Cuando se revoco, si se hizo.
+        registered_by_contact_id: Profesional que registro la autorizacion
+            desde el chat.
+        registered_by_user_id: Usuario que la registro desde la API.
+    """
+
+    __tablename__ = "patient_consents"
+    __table_args__ = (
+        Index("idx_patient_consents_patient", "client_id", "patient_document_hash"),
+        CheckConstraint(
+            "consent_type IN ('verbal', 'digital', 'written')",
+            name="ck_patient_consents_type",
+        ),
+    )
+
+    patient_document_type: Mapped[str] = mapped_column(String(5), nullable=False)
+    patient_document_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    contact_id: Mapped[_UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=True
+    )
+    data_category: Mapped[str] = mapped_column(
+        String(30), server_default=DATA_CATEGORY_HEALTH, nullable=False
+    )
+    consent_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    registered_by_contact_id: Mapped[_UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("contacts.id"), nullable=True
+    )
+    registered_by_user_id: Mapped[_UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )

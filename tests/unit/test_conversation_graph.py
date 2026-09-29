@@ -101,8 +101,8 @@ class TestBuildConversationGraph:
 
         assert compiled is not None
 
-    def test_tiene_los_diez_nodos(self) -> None:
-        """Los 6 de Sprint 6, `scheduling` (7), los agentes del 12 y `sentiment_analysis` (10)."""
+    def test_tiene_los_once_nodos(self) -> None:
+        """Los 6 de Sprint 6, `scheduling` (7), los agentes del 12, `sentiment_analysis` (10) y `clinical` (13)."""
         graph = build_conversation_graph()
 
         assert set(graph.nodes.keys()) == {
@@ -115,6 +115,7 @@ class TestBuildConversationGraph:
             "scheduling",
             "financial",
             "marketing",
+            "clinical",
             "sentiment_analysis",
         }
 

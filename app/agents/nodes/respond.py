@@ -17,6 +17,7 @@ from uuid import UUID
 from app.agents.nodes._delivery import deliver_message
 from app.agents.nodes._state import ConversationState
 from app.agents.nodes._tenant import get_agent_settings
+from app.services.clinical_privacy import CONTENIDO_CLINICO_PROTEGIDO
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,9 @@ async def respond_node(state: ConversationState) -> dict[str, Any]:
         contact_id=contact_id,
         channel=channel,
         text=texto,
+        # Lo dictado por un profesional y lo que se le responde son datos de
+        # salud: al contacto le llega completo, pero el historial no lo guarda.
+        stored_text=CONTENIDO_CLINICO_PROTEGIDO if state.get("intent") == "clinical" else None,
     )
     logger.info("Respuesta enviada en la conversacion %s", conversation_id)
     return {"response_text": texto}
