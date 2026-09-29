@@ -33,7 +33,7 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.encryption import mask_identifier
@@ -44,7 +44,13 @@ from app.core.habeas_data import (
     normalizar_documento,
 )
 from app.models.agent_config import AgentConfig
-from app.models.clinical_record import RECORD_DRAFT, ClinicalRecord
+from app.models.clinical_record import (
+    RECORD_DRAFT,
+    RECORD_STATUSES,
+    RECORD_TRANSITIONS,
+    ClinicalRecord,
+    fin_de_retencion,
+)
 from app.services.clinical_catalog import (
     CIE10_COMMON,
     CIE10_PATTERN,
@@ -52,6 +58,7 @@ from app.services.clinical_catalog import (
     CUPS_PATTERN,
     normalizar_codigo,
     normalizar_texto,
+    verificar_codigos,
 )
 
 logger = logging.getLogger(__name__)
@@ -335,6 +342,41 @@ def resumen_registro(registro: ClinicalRecord, documento: str) -> dict[str, Any]
     }
 
 
+async def _aplicar_catalogo_oficial(session: AsyncSession, datos: dict[str, Any]) -> None:
+    """Contrasta los codigos con el catalogo oficial, si esta cargado.
+
+    Con el catalogo oficial en la base, un codigo que no exista en el es un
+    error de dictado y se rechaza; los que existen quedan `catalog_verified` y
+    heredan la descripcion oficial si el profesional no la dicto. Con las
+    tablas vacias no hace nada (rige el subconjunto de referencia).
+
+    Args:
+        session: Sesion de base de datos.
+        datos: Salida de `validar_registro_rips()`; se modifica en el lugar.
+
+    Raises:
+        ClinicalValidationError: Si un codigo no esta en el catalogo oficial.
+    """
+    for tipo, clave in (("cie10", "diagnosis_codes"), ("cups", "procedure_codes")):
+        items: list[dict[str, Any]] = datos[clave]
+        cargado, encontrados = await verificar_codigos(
+            session,
+            tipo,  # type: ignore[arg-type]
+            [i["code"] for i in items],
+        )
+        if not cargado:
+            continue
+        for item in items:
+            oficial = encontrados.get(item["code"])
+            if oficial is None:
+                raise ClinicalValidationError(
+                    f"El codigo {item['code']} no existe en el catalogo oficial "
+                    f"{tipo.upper()}. Pidele al profesional que lo confirme."
+                )
+            item["catalog_verified"] = True
+            item["description"] = item["description"] or oficial
+
+
 async def crear_registro_rips(
     session: AsyncSession,
     *,
@@ -368,9 +410,11 @@ async def crear_registro_rips(
 
     Raises:
         HabeasDataError: Si el documento no es valido.
+        ClinicalValidationError: Si un codigo no existe en el catalogo oficial.
     """
     tipo, numero = normalizar_documento(document_type, document_number)
     hash_documento = hash_paciente(client_id, tipo, numero)
+    await _aplicar_catalogo_oficial(session, datos)
 
     consentimiento = await HabeasDataCompliance.verify_consent(session, client_id, tipo, numero)
     if not consentimiento["has_consent"]:
@@ -557,10 +601,222 @@ __all__ = [
     "TIPOS_RIPS",
     "ClinicalValidationError",
     "HabeasDataError",
+    "RegistroNoEncontradoError",
+    "TransicionInvalidaError",
+    "avanzar_registro",
     "crear_registro_rips",
     "es_profesional_clinico",
     "leer_config_clinica",
+    "listar_registros",
     "obtener_historial",
+    "obtener_registro",
     "resumen_registro",
     "validar_registro_rips",
 ]
+
+
+class RegistroNoEncontradoError(LookupError):
+    """El registro clinico no existe en este tenant."""
+
+
+class TransicionInvalidaError(ValueError):
+    """El registro no esta en el estado desde el que se pidio avanzar."""
+
+
+def _detalle(registro: ClinicalRecord, ultima_atencion: date) -> dict[str, Any]:
+    """Arma la vista de un registro para quien lo revisa, con el documento enmascarado.
+
+    Args:
+        registro: Registro clinico.
+        ultima_atencion: Fecha de la ultima atencion del paciente.
+
+    Returns:
+        Datos del registro; nunca el documento completo ni el dictado crudo.
+    """
+    return {
+        "id": str(registro.id),
+        "status": registro.status,
+        "patient_document_type": registro.patient_document_type,
+        "patient_document": mask_identifier(registro.patient_document_number),
+        "patient_name": registro.patient_name,
+        "service_date": registro.service_date.isoformat(),
+        "service_type": registro.service_type,
+        "specialty": registro.specialty,
+        "rips_type": registro.rips_type,
+        "purpose_code": registro.purpose_code,
+        "external_cause": registro.external_cause,
+        "diagnosis_type": registro.diagnosis_type,
+        "diagnosis_codes": registro.diagnosis_codes,
+        "procedure_codes": registro.procedure_codes,
+        "structured_notes": registro.structured_notes or {},
+        "dictated_by_contact_id": (
+            str(registro.dictated_by_contact_id) if registro.dictated_by_contact_id else None
+        ),
+        "reviewed_by": str(registro.reviewed_by) if registro.reviewed_by else None,
+        "signed_at": registro.signed_at.isoformat() if registro.signed_at else None,
+        "anonymized": registro.anonymized_at is not None,
+        "retention_until": fin_de_retencion(ultima_atencion).isoformat(),
+    }
+
+
+async def listar_registros(
+    session: AsyncSession,
+    *,
+    client_id: UUID,
+    estado: str | None = None,
+    limite: int = 50,
+    desplazamiento: int = 0,
+) -> list[dict[str, Any]]:
+    """Lista registros clinicos para revision, del mas reciente al mas antiguo.
+
+    Args:
+        session: Sesion con el contexto de tenant aplicado.
+        client_id: Tenant dueno.
+        estado: Filtra por estado, si se da.
+        limite: Maximo de filas (tope de 200).
+        desplazamiento: Filas a saltar.
+
+    Returns:
+        Resumen por registro: sin notas ni documento.
+
+    Raises:
+        ClinicalValidationError: Si `estado` no existe.
+    """
+    if estado is not None and estado not in RECORD_STATUSES:
+        raise ClinicalValidationError(f"Estado invalido. Validos: {list(RECORD_STATUSES)}")
+    consulta = select(ClinicalRecord).where(ClinicalRecord.client_id == client_id)
+    if estado is not None:
+        consulta = consulta.where(ClinicalRecord.status == estado)
+    filas = (
+        (
+            await session.execute(
+                consulta.order_by(
+                    ClinicalRecord.service_date.desc(), ClinicalRecord.created_at.desc()
+                )
+                .limit(max(1, min(limite, 200)))
+                .offset(max(0, desplazamiento))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [
+        {
+            "id": str(f.id),
+            "status": f.status,
+            "service_date": f.service_date.isoformat(),
+            "rips_type": f.rips_type,
+            "main_diagnosis": next(
+                (d["code"] for d in f.diagnosis_codes if d.get("type") == "principal"), None
+            ),
+            "anonymized": f.anonymized_at is not None,
+        }
+        for f in filas
+    ]
+
+
+async def obtener_registro(
+    session: AsyncSession, *, client_id: UUID, record_id: UUID
+) -> dict[str, Any]:
+    """Devuelve el detalle de un registro para su revision.
+
+    Args:
+        session: Sesion con el contexto de tenant aplicado.
+        client_id: Tenant dueno.
+        record_id: Registro pedido.
+
+    Returns:
+        El detalle, con la fecha hasta la que se conserva.
+
+    Raises:
+        RegistroNoEncontradoError: Si no existe en este tenant.
+    """
+    registro = (
+        await session.execute(
+            select(ClinicalRecord).where(
+                ClinicalRecord.id == record_id, ClinicalRecord.client_id == client_id
+            )
+        )
+    ).scalar_one_or_none()
+    if registro is None:
+        raise RegistroNoEncontradoError(str(record_id))
+    ultima = (
+        await session.execute(
+            select(func.max(ClinicalRecord.service_date)).where(
+                ClinicalRecord.client_id == client_id,
+                ClinicalRecord.patient_document_hash == registro.patient_document_hash,
+            )
+        )
+    ).scalar_one_or_none()
+    return _detalle(registro, ultima or registro.service_date)
+
+
+async def avanzar_registro(
+    session: AsyncSession,
+    *,
+    client_id: UUID,
+    record_id: UUID,
+    destino: str,
+    user_id: UUID,
+) -> dict[str, Any]:
+    """Avanza un registro al siguiente estado: `draft -> reviewed -> signed -> submitted`.
+
+    Es un `UPDATE ... WHERE status = <origen>` atomico: dos firmas simultaneas
+    no se pisan y la segunda recibe `TransicionInvalidaError`. El trigger de la
+    base (migracion 016) hace cumplir lo mismo aunque alguien salte esta
+    funcion. Un registro firmado ya no se puede modificar ni borrar durante 20
+    anos.
+
+    Args:
+        session: Sesion con el contexto de tenant aplicado.
+        client_id: Tenant dueno.
+        record_id: Registro a avanzar.
+        destino: `reviewed`, `signed` o `submitted`.
+        user_id: Usuario que lo hace; queda como `reviewed_by` al revisar.
+
+    Returns:
+        El detalle del registro ya avanzado.
+
+    Raises:
+        RegistroNoEncontradoError: Si no existe en este tenant.
+        TransicionInvalidaError: Si el registro no esta en el estado previo, o
+            ya fue anonimizado.
+    """
+    origen = next((o for o, d in RECORD_TRANSITIONS.items() if d == destino), None)
+    if origen is None:
+        raise TransicionInvalidaError(f"Estado destino invalido: {destino}")
+
+    valores: dict[str, Any] = {"status": destino}
+    if destino == "reviewed":
+        valores["reviewed_by"] = user_id
+    elif destino == "signed":
+        valores["signed_at"] = datetime.now(timezone.utc)
+
+    actualizado = (
+        await session.execute(
+            update(ClinicalRecord)
+            .where(
+                ClinicalRecord.id == record_id,
+                ClinicalRecord.client_id == client_id,
+                ClinicalRecord.status == origen,
+                ClinicalRecord.anonymized_at.is_(None),
+            )
+            .values(**valores)
+            .returning(ClinicalRecord.id)
+        )
+    ).scalar_one_or_none()
+
+    if actualizado is None:
+        existe = (
+            await session.execute(
+                select(ClinicalRecord.status).where(
+                    ClinicalRecord.id == record_id, ClinicalRecord.client_id == client_id
+                )
+            )
+        ).scalar_one_or_none()
+        if existe is None:
+            raise RegistroNoEncontradoError(str(record_id))
+        raise TransicionInvalidaError(
+            f"El registro esta en '{existe}'; para pasar a '{destino}' tiene que estar en '{origen}'"
+        )
+    return await obtener_registro(session, client_id=client_id, record_id=record_id)

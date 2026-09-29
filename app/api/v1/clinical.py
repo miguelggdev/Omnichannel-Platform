@@ -5,6 +5,13 @@ POST    /api/v1/clinical/consents           registrar la autorizacion de un paci
 POST    /api/v1/clinical/consents/revoke    revocarla
 POST    /api/v1/clinical/patients/export    derecho de acceso (Ley 1581, art. 8 y 14)
 POST    /api/v1/clinical/patients/anonymize derecho de supresion (Ley 1581, art. 8, e)
+GET     /api/v1/clinical/records            registros para revision (sin notas ni documento)
+GET     /api/v1/clinical/records/{id}       detalle de un registro, documento enmascarado
+POST    /api/v1/clinical/records/{id}/review|sign|submit   draft -> reviewed -> signed -> submitted
+
+Un registro firmado no se modifica ni se borra durante 20 anos desde la ultima
+atencion del paciente (Resolucion 839 de 2017); lo garantiza el trigger de la
+migracion 016, no solo esta API.
 
 Solo `super_admin` y `admin`: son datos de salud. El spec propone un rol
 `medical` con una politica RLS propia, pero el enum `user_role` no lo tiene y
@@ -24,14 +31,15 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select, text
 
 from app.core.database import tenant_session
 from app.core.dependencies import require_role
-from app.core.exceptions import VALIDATION_ERROR, AppException
+from app.core.exceptions import NOT_FOUND, VALIDATION_ERROR, AppException
 from app.core.habeas_data import HabeasDataCompliance, HabeasDataError
 from app.models.agent_config import AgentConfig
+from app.models.clinical_record import RECORD_STATUSES
 from app.models.contact import Contact
 from app.schemas.clinical import (
     ClinicalSettings,
@@ -39,11 +47,22 @@ from app.schemas.clinical import (
     ConsentCreate,
     PatientRef,
 )
-from app.services.clinical import leer_config_clinica
+from app.services.clinical import (
+    ClinicalValidationError,
+    RegistroNoEncontradoError,
+    TransicionInvalidaError,
+    avanzar_registro,
+    leer_config_clinica,
+    listar_registros,
+    obtener_registro,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+#: No hay un codigo de error estandar para un conflicto de estado.
+CONFLICT = "CONFLICT"
 
 _ROLES = ("super_admin", "admin")
 
@@ -324,3 +343,163 @@ async def anonymize_patient_data(
         resultado["records_retained"],
     )
     return resultado
+
+
+@router.get("/records")
+async def list_records(
+    status: str | None = Query(default=None, max_length=20),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: dict[str, Any] = Depends(require_role(*_ROLES)),
+) -> list[dict[str, Any]]:
+    """Lista los registros clinicos del tenant para su revision.
+
+    Args:
+        status: Filtra por estado (`draft`, `reviewed`, `signed`, `submitted`).
+        limit: Maximo de filas.
+        offset: Filas a saltar.
+        user: Usuario autenticado.
+
+    Returns:
+        Resumen por registro, sin notas ni documento.
+
+    Raises:
+        AppException: 400 si el estado no existe.
+    """
+    client_id: UUID = user["client_id"]
+    if status is not None and status not in RECORD_STATUSES:
+        # Antes de abrir la sesion: un filtro invalido no gasta una conexion.
+        raise AppException(
+            status_code=400,
+            error_code=VALIDATION_ERROR,
+            message=f"Estado invalido. Validos: {list(RECORD_STATUSES)}",
+        )
+    try:
+        async with tenant_session(client_id) as session:
+            return await listar_registros(
+                session, client_id=client_id, estado=status, limite=limit, desplazamiento=offset
+            )
+    except ClinicalValidationError as exc:
+        raise AppException(status_code=400, error_code=VALIDATION_ERROR, message=str(exc)) from exc
+
+
+@router.get("/records/{record_id}")
+async def get_record(
+    record_id: UUID,
+    user: dict[str, Any] = Depends(require_role(*_ROLES)),
+) -> dict[str, Any]:
+    """Devuelve el detalle de un registro clinico para revisarlo.
+
+    Args:
+        record_id: Registro pedido.
+        user: Usuario autenticado.
+
+    Returns:
+        Detalle con el documento enmascarado y la fecha hasta la que se conserva.
+
+    Raises:
+        AppException: 404 si no existe en este tenant.
+    """
+    client_id: UUID = user["client_id"]
+    try:
+        async with tenant_session(client_id) as session:
+            detalle = await obtener_registro(session, client_id=client_id, record_id=record_id)
+    except RegistroNoEncontradoError as exc:
+        raise AppException(
+            status_code=404, error_code=NOT_FOUND, message="Registro clinico no encontrado"
+        ) from exc
+    logger.info(
+        "Registro clinico %s consultado por %s (tenant %s)",
+        record_id,
+        user.get("user_id"),
+        client_id,
+    )
+    return detalle
+
+
+async def _avanzar(record_id: UUID, destino: str, user: dict[str, Any]) -> dict[str, Any]:
+    """Avanza un registro un estado y traduce los errores a HTTP.
+
+    Args:
+        record_id: Registro a avanzar.
+        destino: Estado al que se avanza.
+        user: Usuario autenticado.
+
+    Returns:
+        El detalle del registro ya avanzado.
+
+    Raises:
+        AppException: 404 si no existe; 409 si no esta en el estado previo.
+    """
+    client_id: UUID = user["client_id"]
+    try:
+        async with tenant_session(client_id) as session:
+            detalle = await avanzar_registro(
+                session,
+                client_id=client_id,
+                record_id=record_id,
+                destino=destino,
+                user_id=user["user_id"],
+            )
+    except RegistroNoEncontradoError as exc:
+        raise AppException(
+            status_code=404, error_code=NOT_FOUND, message="Registro clinico no encontrado"
+        ) from exc
+    except TransicionInvalidaError as exc:
+        raise AppException(status_code=409, error_code=CONFLICT, message=str(exc)) from exc
+    logger.info(
+        "Registro clinico %s -> %s por %s (tenant %s)",
+        record_id,
+        destino,
+        user["user_id"],
+        client_id,
+    )
+    return detalle
+
+
+@router.post("/records/{record_id}/review")
+async def review_record(
+    record_id: UUID, user: dict[str, Any] = Depends(require_role(*_ROLES))
+) -> dict[str, Any]:
+    """Marca un borrador como revisado; el usuario queda como revisor.
+
+    Args:
+        record_id: Registro a revisar.
+        user: Usuario autenticado.
+
+    Returns:
+        El registro revisado.
+    """
+    return await _avanzar(record_id, "reviewed", user)
+
+
+@router.post("/records/{record_id}/sign")
+async def sign_record(
+    record_id: UUID, user: dict[str, Any] = Depends(require_role(*_ROLES))
+) -> dict[str, Any]:
+    """Firma un registro revisado. Desde aqui no se modifica ni se borra durante 20 anos.
+
+    Args:
+        record_id: Registro a firmar.
+        user: Usuario autenticado.
+
+    Returns:
+        El registro firmado.
+    """
+    return await _avanzar(record_id, "signed", user)
+
+
+@router.post("/records/{record_id}/submit")
+async def submit_record(
+    record_id: UUID, user: dict[str, Any] = Depends(require_role(*_ROLES))
+) -> dict[str, Any]:
+    """Marca un registro firmado como enviado (RIPS presentado).
+
+    Args:
+        record_id: Registro a marcar.
+        user: Usuario autenticado.
+
+    Returns:
+        El registro enviado.
+    """
+    return await _avanzar(record_id, "submitted", user)
