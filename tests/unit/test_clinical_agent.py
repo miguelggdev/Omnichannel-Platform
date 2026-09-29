@@ -33,11 +33,12 @@ PROFESIONAL = str(uuid.uuid4())
 CONFIG = {
     "configurable": {
         "client_id": CLIENT_ID,
+        "channel": "whatsapp",
         "contact_id": PROFESIONAL,
         "conversation_id": str(uuid.uuid4()),
     }
 }
-SIN_CONTACTO = {"configurable": {"client_id": CLIENT_ID, "contact_id": None}}
+SIN_CONTACTO = {"configurable": {"client_id": CLIENT_ID, "channel": "whatsapp", "contact_id": None}}
 
 
 def _sesion(monkeypatch: pytest.MonkeyPatch, sesion: FakeSession) -> FakeSession:
@@ -47,6 +48,19 @@ def _sesion(monkeypatch: pytest.MonkeyPatch, sesion: FakeSession) -> FakeSession
 
     monkeypatch.setattr(ct, "tenant_session", _cm)
     return sesion
+
+
+@pytest.fixture(autouse=True)
+def profesional_autorizado(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Por defecto quien invoca la tool es un profesional declarado del tenant.
+
+    Las pruebas de autorizacion (`TestAutorizacionDeLasTools`) lo cambian; el
+    resto prueba las reglas de cada tool sin repetir ese preambulo.
+    """
+    es_profesional = AsyncMock(return_value=True)
+    monkeypatch.setattr(ct, "es_profesional_clinico", es_profesional)
+    _sesion(monkeypatch, FakeSession())
+    return es_profesional
 
 
 @pytest.fixture
@@ -375,7 +389,7 @@ class TestNodo:
         llamadas = _nodo(monkeypatch, agentes=("rag", "clinical"), profesional=False)
 
         resultado = await nodo.clinical_agent_node(
-            estado(client_id=CLIENT_ID, contact_id=str(uuid.uuid4()))
+            estado(client_id=CLIENT_ID, channel="whatsapp", contact_id=str(uuid.uuid4()))
         )
 
         assert resultado["response_text"] == nodo.MENSAJE_NO_AUTORIZADO
@@ -389,7 +403,12 @@ class TestNodo:
         llamadas = _nodo(monkeypatch, agentes=("rag", "clinical"), profesional=True)
 
         resultado = await nodo.clinical_agent_node(
-            estado(client_id=CLIENT_ID, contact_id=PROFESIONAL, model_to_use="gpt-4o-mini")
+            estado(
+                client_id=CLIENT_ID,
+                channel="whatsapp",
+                contact_id=PROFESIONAL,
+                model_to_use="gpt-4o-mini",
+            )
         )
 
         assert resultado == {"response_text": "respuesta del agente", "intent": "clinical"}
@@ -399,6 +418,97 @@ class TestNodo:
         assert pedido["temperatura"] == 0.0
         assert pedido["modelo"] == "gpt-4o-mini"
         assert "NUNCA sugieras diagnosticos" in pedido["system_prompt"]
+
+
+class TestCanalSinIdentidadVerificada:
+    """El caller ID de una llamada y el `From` de un email se falsifican (ADR-072)."""
+
+    @pytest.mark.parametrize("canal", ["voice", "email", "webchat", None])
+    async def test_el_nodo_no_atiende_a_un_profesional_por_ese_canal(
+        self, monkeypatch: pytest.MonkeyPatch, canal: str | None
+    ) -> None:
+        llamadas = _nodo(monkeypatch, agentes=("rag", "clinical"), profesional=True)
+
+        resultado = await nodo.clinical_agent_node(
+            estado(client_id=CLIENT_ID, channel=canal, contact_id=PROFESIONAL)
+        )
+
+        assert resultado["response_text"] == nodo.MENSAJE_NO_AUTORIZADO
+        assert "responder" not in llamadas
+        assert "contacto" not in llamadas, "ni siquiera se consulta la lista de profesionales"
+
+    @pytest.mark.parametrize("canal", ["whatsapp", "telegram", "instagram", "facebook"])
+    async def test_los_canales_que_autentican_la_cuenta_si_valen(
+        self, monkeypatch: pytest.MonkeyPatch, canal: str
+    ) -> None:
+        llamadas = _nodo(monkeypatch, agentes=("rag", "clinical"), profesional=True)
+
+        await nodo.clinical_agent_node(
+            estado(client_id=CLIENT_ID, channel=canal, contact_id=PROFESIONAL)
+        )
+
+        assert "responder" in llamadas
+
+
+_TOOLS_CON_DATOS_DEL_PACIENTE: list[tuple[Any, dict[str, Any]]] = [
+    (
+        ct.register_patient_consent,
+        {"document_type": "CC", "document_number": "1234567890", "consent_type": "verbal"},
+    ),
+    (ct.create_rips_record, _RIPS_OK),
+    (ct.get_patient_history, {"document_type": "CC", "document_number": "1234567890"}),
+    (ct.extract_medical_entities, {"text": "paciente con tos"}),
+]
+
+
+class TestAutorizacionDeLasTools:
+    """Defensa en profundidad: las tools no dependen solo del filtro del nodo."""
+
+    @pytest.mark.parametrize(("herramienta", "args"), _TOOLS_CON_DATOS_DEL_PACIENTE)
+    async def test_quien_no_es_profesional_no_opera(
+        self,
+        herramienta: Any,
+        args: dict[str, Any],
+        profesional_autorizado: AsyncMock,
+    ) -> None:
+        profesional_autorizado.return_value = False
+
+        resultado = await herramienta.ainvoke(args, config=CONFIG)
+
+        assert resultado["success"] is False
+        assert resultado["error"] == ct.NO_AUTORIZADO
+
+    @pytest.mark.parametrize("canal", ["voice", "email", "webchat", None])
+    @pytest.mark.parametrize(("herramienta", "args"), _TOOLS_CON_DATOS_DEL_PACIENTE)
+    async def test_un_canal_sin_identidad_verificada_no_opera_aunque_este_en_la_lista(
+        self,
+        herramienta: Any,
+        args: dict[str, Any],
+        canal: str | None,
+        profesional_autorizado: AsyncMock,
+    ) -> None:
+        config = {"configurable": {**CONFIG["configurable"], "channel": canal}}
+
+        resultado = await herramienta.ainvoke(args, config=config)
+
+        assert resultado["error"] == ct.NO_AUTORIZADO
+        profesional_autorizado.assert_not_awaited()
+
+    @pytest.mark.parametrize(("herramienta", "args"), _TOOLS_CON_DATOS_DEL_PACIENTE)
+    async def test_el_profesional_de_un_canal_verificado_pasa_el_filtro(
+        self,
+        herramienta: Any,
+        args: dict[str, Any],
+        profesional_autorizado: AsyncMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(ct, "get_chat_model", lambda *_a, **_k: _LlmFalso("{}"))
+        monkeypatch.setattr(ct.TokenBudgetGuard, "record_usage", AsyncMock())
+
+        resultado = await herramienta.ainvoke(args, config=CONFIG)
+
+        assert resultado.get("error") != ct.NO_AUTORIZADO
+        profesional_autorizado.assert_awaited()
 
 
 class TestRoutingEIntent:
