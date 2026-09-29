@@ -30,7 +30,7 @@ from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Index, Strin
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.encryption import EncryptedString
+from app.core.encryption import EncryptedJSON, EncryptedString
 from app.models.base import TenantBaseModel
 
 RECORD_DRAFT = "draft"
@@ -49,6 +49,34 @@ RECORD_STATUSES: tuple[str, ...] = (
 #: puede anonimizar ni modificar (deber de conservacion).
 RECORD_RETAINED_STATUSES: tuple[str, ...] = (RECORD_SIGNED, RECORD_SUBMITTED)
 
+#: Anos que se conserva la historia clinica desde la ultima atencion del
+#: paciente: 5 en el archivo de gestion y 15 en el archivo central (Resolucion
+#: 839 de 2017 del Ministerio de Salud, que reemplaza a la 1995 de 1999).
+RETENTION_YEARS = 20
+
+#: Transiciones validas: cada estado solo puede pasar al siguiente.
+RECORD_TRANSITIONS: dict[str, str] = {
+    RECORD_DRAFT: RECORD_REVIEWED,
+    RECORD_REVIEWED: RECORD_SIGNED,
+    RECORD_SIGNED: RECORD_SUBMITTED,
+}
+
+
+def fin_de_retencion(ultima_atencion: date) -> date:
+    """Fecha hasta la que hay que conservar la historia clinica de un paciente.
+
+    Args:
+        ultima_atencion: Fecha de la ultima atencion registrada del paciente.
+
+    Returns:
+        `ultima_atencion` mas `RETENTION_YEARS` anos (el 29 de febrero cae el 28).
+    """
+    try:
+        return ultima_atencion.replace(year=ultima_atencion.year + RETENTION_YEARS)
+    except ValueError:
+        return ultima_atencion.replace(year=ultima_atencion.year + RETENTION_YEARS, day=28)
+
+
 CONSENT_TYPES: tuple[str, ...] = ("verbal", "digital", "written")
 
 #: Categoria de dato sensible que cubre el consentimiento (Ley 1581, art. 5).
@@ -57,6 +85,10 @@ DATA_CATEGORY_HEALTH = "health"
 
 class ClinicalRecord(TenantBaseModel):
     """Registro clinico RIPS en borrador, revisado, firmado o enviado.
+
+    La retencion de 20 anos la garantiza el trigger
+    `clinical_records_protect_trigger` (migracion 016): un registro firmado no
+    se borra ni se modifica mientras corra, salvo `signed -> submitted`.
 
     Attributes:
         contact_id: Paciente, si ademas es un contacto del tenant.
@@ -75,8 +107,8 @@ class ClinicalRecord(TenantBaseModel):
         procedure_codes: `[{code, description, laterality?, catalog_verified}]`.
         diagnosis_type: confirmado, presuntivo o impresion.
         raw_transcription: Dictado crudo, cifrado.
-        structured_notes: Notas SOAP.
-        medical_entities: Entidades extraidas del dictado.
+        structured_notes: Notas SOAP, cifradas.
+        medical_entities: Entidades extraidas del dictado, cifradas.
         rips_type: AC, AP, AU o AH.
         purpose_code: Finalidad (01-10).
         external_cause: Causa externa (01-15).
@@ -135,12 +167,9 @@ class ClinicalRecord(TenantBaseModel):
     diagnosis_type: Mapped[str | None] = mapped_column(String(20))
 
     raw_transcription: Mapped[str | None] = mapped_column(EncryptedString)
-    structured_notes: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, server_default="{}", nullable=False
-    )
-    medical_entities: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONB, server_default="[]", nullable=False
-    )
+    # Texto libre del profesional: cifrado (ADR-071). Los codigos si van en JSONB.
+    structured_notes: Mapped[dict[str, Any] | None] = mapped_column(EncryptedJSON)
+    medical_entities: Mapped[list[dict[str, Any]] | None] = mapped_column(EncryptedJSON)
 
     rips_type: Mapped[str | None] = mapped_column(String(5))
     purpose_code: Mapped[str | None] = mapped_column(String(5))

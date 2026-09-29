@@ -20,21 +20,26 @@ Desviaciones sobre el pseudocodigo del spec (ADR-071):
   `clinical_records.data_processing_authorized`: en el spec el registro clinico
   es lo unico que guarda el consentimiento, y ese registro no puede crearse sin
   consentimiento previo — la verificacion nunca podria pasar.
-- **La supresion no alcanza a la historia clinica firmada.** El spec anonimiza
-  todo registro del paciente. Pero un registro firmado o enviado ya es parte de
-  la historia clinica, que la normativa colombiana obliga a conservar (Ley 23
-  de 1981 y Resolucion 839 de 2017, 20 anos desde la ultima atencion): el
-  derecho de supresion cede ante un deber legal de conservacion (Ley 1581,
-  art. 15 y Decreto 1377 de 2013, art. 10). Solo se anonimizan los borradores y
-  los revisados sin firmar; el resto se informa como retenido. **Esta lectura
-  de la norma debe validarla el asesor legal del tenant** antes de produccion.
+- **La supresion no alcanza a la historia clinica firmada mientras corra su
+  plazo de conservacion.** El spec anonimiza todo registro del paciente. Pero
+  un registro firmado o enviado ya es parte de la historia clinica, que la
+  normativa colombiana obliga a conservar 20 anos desde la ultima atencion (5
+  en el archivo de gestion y 15 en el central; Ley 23 de 1981 y Resolucion 839
+  de 2017): el derecho de supresion cede ante un deber legal de conservacion
+  (Ley 1581, art. 15 y Decreto 1377 de 2013, art. 10). Hasta entonces solo se
+  anonimizan los borradores y los revisados sin firmar y el resto se informa
+  como retenido, con la fecha en que vence (`retention_until`). Vencido el
+  plazo, tambien se anonimizan los firmados. El plazo se cuenta desde la
+  ultima atencion **del paciente**: cada registro nuevo lo extiende para todos
+  los anteriores. La conservacion la impone ademas el trigger de la base
+  (migracion 016), no solo este modulo.
 - **`anonymize_patient_data` no hace `commit()`**: lo hace `tenant_session()`
   al cerrar el contexto. Un commit aca partiria la transaccion del llamante.
 """
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from importlib import import_module
 from typing import Any, cast
 from uuid import UUID
@@ -47,8 +52,10 @@ from app.models.clinical_record import (
     CONSENT_TYPES,
     DATA_CATEGORY_HEALTH,
     RECORD_RETAINED_STATUSES,
+    RETENTION_YEARS,
     ClinicalRecord,
     PatientConsent,
+    fin_de_retencion,
 )
 
 logger = logging.getLogger(__name__)
@@ -145,6 +152,20 @@ async def _consentimiento_vigente(
             .limit(1)
         )
     ).scalar_one_or_none()
+
+
+def _fin_de_retencion(registros: Any) -> date | None:
+    """Fecha en que vence la conservacion de la historia clinica de un paciente.
+
+    Args:
+        registros: Registros clinicos del paciente.
+
+    Returns:
+        La ultima atencion mas `RETENTION_YEARS` anos, o `None` si no hay
+        registros.
+    """
+    fechas = [r.service_date for r in registros]
+    return fin_de_retencion(max(fechas)) if fechas else None
 
 
 class HabeasDataCompliance:
@@ -377,7 +398,7 @@ class HabeasDataCompliance:
                     "specialty": r.specialty,
                     "diagnosis_codes": r.diagnosis_codes,
                     "procedure_codes": r.procedure_codes,
-                    "structured_notes": r.structured_notes,
+                    "structured_notes": r.structured_notes or {},
                     "status": r.status,
                     "anonymized": r.anonymized_at is not None,
                 }
@@ -393,6 +414,9 @@ class HabeasDataCompliance:
                 for c in consentimientos
             ],
             "call_records": await _llamadas_del_paciente(session, client_id, registros),
+            "retention_until": (
+                fin.isoformat() if (fin := _fin_de_retencion(registros)) is not None else None
+            ),
             "legal_basis": "Ley 1581 de 2012, art. 8 y 14 — Derecho de acceso",
         }
 
@@ -436,17 +460,20 @@ class HabeasDataCompliance:
         )
 
         ahora = datetime.now(timezone.utc)
+        fin = _fin_de_retencion(registros)
+        # Un dia de margen sobre el trigger, que compara con la fecha de la base.
+        en_retencion = fin is not None and ahora.date() <= fin
         anonimizados = 0
         retenidos = 0
         for registro in registros:
-            if registro.status in RECORD_RETAINED_STATUSES:
+            if registro.status in RECORD_RETAINED_STATUSES and en_retencion:
                 retenidos += 1
                 continue
             registro.patient_document_number = ANONIMIZADO
             registro.patient_name = None
             registro.raw_transcription = None
-            registro.structured_notes = {}
-            registro.medical_entities = []
+            registro.structured_notes = None
+            registro.medical_entities = None
             registro.contact_id = None
             # El hash tambien: si no, seguiria ligando el registro al documento.
             registro.patient_document_hash = hash_paciente_anonimo(client_id, registro.id)
@@ -464,11 +491,12 @@ class HabeasDataCompliance:
             "anonymized": anonimizados > 0,
             "records_anonymized": anonimizados,
             "records_retained": retenidos,
+            "retention_until": fin.isoformat() if fin else None,
             "legal_basis": "Ley 1581 de 2012, art. 8, literal e — Derecho de supresion",
             "note": (
                 "Se conservan de forma anonima los codigos diagnosticos y de procedimiento. "
                 "Los registros firmados o enviados forman parte de la historia clinica y se "
-                "retienen por el deber legal de conservacion."
+                f"retienen {RETENTION_YEARS} anos desde la ultima atencion (Resolucion 839 de 2017)."
                 if retenidos
                 else "Se conservan de forma anonima los codigos diagnosticos y de procedimiento."
             ),

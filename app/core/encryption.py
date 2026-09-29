@@ -76,10 +76,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Text, type_coerce
-from sqlalchemy.dialects.postgresql import BYTEA
+from sqlalchemy import Text, cast, type_coerce
+from sqlalchemy.dialects.postgresql import BYTEA, JSONB
 from sqlalchemy.sql import func
 from sqlalchemy.types import TypeDecorator
 
@@ -146,6 +147,66 @@ class EncryptedString(TypeDecorator[str]):
             Expresión SQL que devuelve el texto en claro.
         """
         return func.pgp_sym_decrypt(col, _clave(), type_=Text)
+
+
+class EncryptedJSON(TypeDecorator[Any]):
+    """Columna `BYTEA` que guarda un valor JSON cifrado con pgcrypto.
+
+    Para texto libre estructurado que no se consulta por dentro (notas
+    clinicas SOAP, entidades extraidas del dictado): en `JSONB` quedaria en
+    claro para cualquiera con lectura de la tabla. Serializa a JSON, cifra en
+    PostgreSQL igual que `EncryptedString`, y al leer descifra y parsea.
+
+    Un `None` de Python se guarda como `NULL` (no como el JSON `null`). Los
+    valores son los de `JSONB`: `jsonb::text` normaliza el espacio en blanco.
+
+    Attributes:
+        impl: Tipo real de la columna en PostgreSQL (`BYTEA`).
+        cache_ok: El tipo no lleva estado propio.
+    """
+
+    impl = BYTEA
+    cache_ok = True
+
+    def process_result_value(self, value: Any, dialect: Any) -> Any:
+        """Parsea el JSON que devolvio el descifrado.
+
+        Args:
+            value: Texto ya descifrado por `column_expression`, o `None`.
+            dialect: Dialecto en uso (no se usa).
+
+        Returns:
+            El objeto original, o `None`.
+        """
+        return None if value is None else json.loads(value)
+
+    def bind_expression(self, bindvalue: Any) -> ColumnElement[Any]:
+        """Envuelve el parametro con `pgp_sym_encrypt()` al escribir.
+
+        Args:
+            bindvalue: Parametro con el JSON en claro.
+
+        Returns:
+            Expresion SQL que cifra el valor.
+        """
+        # JSONB serializa el objeto Python (y `none_as_null` deja un None como
+        # NULL, que `pgp_sym_encrypt` devuelve como NULL: la columna queda
+        # vacia en vez de cifrar el texto "null").
+        return func.pgp_sym_encrypt(
+            cast(type_coerce(bindvalue, JSONB(none_as_null=True)), Text), _clave()
+        )
+
+    def column_expression(self, col: Any) -> ColumnElement[Any]:
+        """Envuelve la columna con `pgp_sym_decrypt()` al leer.
+
+        Args:
+            col: Columna cifrada.
+
+        Returns:
+            Expresion SQL que devuelve el JSON en claro como texto; el
+            resultado lo parsea `process_result_value()`.
+        """
+        return func.pgp_sym_decrypt(col, _clave(), type_=self)
 
 
 def blind_index(valor: str | None, client_id: UUID | str, *, normalizar: bool = True) -> str | None:

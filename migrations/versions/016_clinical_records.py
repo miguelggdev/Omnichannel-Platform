@@ -1,7 +1,7 @@
 """clinical_records y patient_consents — Sprint 13: agente clinico (RIPS).
 
 Dos tablas multi-tenant normales: `client_id` + FORCE RLS, mismo patron que
-004/005/011/013. Se aparta del SQL del spec (§8.3) en tres cosas (ADR-071):
+004/005/011/013. Se aparta del SQL del spec (§8.3) en cinco cosas (ADR-071):
 
 1. **Sin la politica `clinical_records_medical_access`.** Lee
    `current_setting('app.current_user_role')`, un parametro que nada en el repo
@@ -21,7 +21,17 @@ Dos tablas multi-tenant normales: `client_id` + FORCE RLS, mismo patron que
    metadatos (ids, fechas, estado): que se creo, quien y cuando, no el
    contenido clinico. `patient_consents` no lleva contenido sensible (solo el
    indice ciego) y usa el generico.
-3. **Documento cifrado + indice ciego** (`patient_document_hash`), como los
+3. **Retencion de 20 anos por trigger** (`clinical_records_protect_function`).
+   La historia clinica se conserva 20 anos desde la ultima atencion del
+   paciente (Resolucion 839 de 2017). Un registro `signed`/`submitted` no se
+   borra ni se modifica mientras corra ese plazo —solo puede pasar de `signed`
+   a `submitted`—, aunque lo intente un admin o un bug: lo garantiza la base,
+   no la aplicacion. El estado solo avanza `draft -> reviewed -> signed ->
+   submitted`. Vencido el plazo se puede anonimizar (derecho de supresion).
+4. **Notas SOAP y entidades cifradas** (`EncryptedJSON`), no JSONB en claro.
+   Los codigos CIE-10/CUPS siguen en JSONB: no son texto libre y son lo unico
+   que se conserva, anonimo, tras la supresion.
+5. **Documento cifrado + indice ciego** (`patient_document_hash`), como los
    identificadores de contacto desde 008/009, y `patient_consents` como tabla
    aparte (ver `app/models/clinical_record.py`).
 
@@ -44,6 +54,10 @@ revision: str = "016_clinical_records"
 down_revision: str | None = "015_list_active_tenants_function"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
+
+# Congelado a proposito: una migracion no importa constantes de la aplicacion
+# (cambiarlas no debe reescribir lo que ya corrio). Igual a `RETENTION_YEARS`.
+RETENTION_YEARS = 20
 
 
 def _habilitar_rls(tabla: str) -> None:
@@ -105,18 +119,9 @@ def upgrade() -> None:
         ),
         sa.Column("diagnosis_type", sa.String(length=20), nullable=True),
         sa.Column("raw_transcription", postgresql.BYTEA(), nullable=True),
-        sa.Column(
-            "structured_notes",
-            postgresql.JSONB(astext_type=sa.Text()),
-            server_default="{}",
-            nullable=False,
-        ),
-        sa.Column(
-            "medical_entities",
-            postgresql.JSONB(astext_type=sa.Text()),
-            server_default="[]",
-            nullable=False,
-        ),
+        # Texto libre del profesional: JSON cifrado (EncryptedJSON).
+        sa.Column("structured_notes", postgresql.BYTEA(), nullable=True),
+        sa.Column("medical_entities", postgresql.BYTEA(), nullable=True),
         sa.Column("rips_type", sa.String(length=5), nullable=True),
         sa.Column("purpose_code", sa.String(length=5), nullable=True),
         sa.Column("external_cause", sa.String(length=5), nullable=True),
@@ -289,6 +294,58 @@ def upgrade() -> None:
         END;
         $$ LANGUAGE plpgsql SECURITY DEFINER;
     """)
+    op.execute(f"""
+        CREATE OR REPLACE FUNCTION clinical_records_protect_function()
+        RETURNS TRIGGER AS $$
+        DECLARE
+            _ultima DATE;
+            _vencida BOOLEAN := FALSE;
+            _limpio_old JSONB;
+            _limpio_new JSONB;
+        BEGIN
+            IF TG_OP = 'UPDATE' AND NEW.status <> OLD.status AND NOT (
+                (OLD.status = 'draft' AND NEW.status = 'reviewed')
+                OR (OLD.status = 'reviewed' AND NEW.status = 'signed')
+                OR (OLD.status = 'signed' AND NEW.status = 'submitted')
+            ) THEN
+                RAISE EXCEPTION 'Transicion de estado invalida: % -> %', OLD.status, NEW.status;
+            END IF;
+
+            IF OLD.status IN ('signed', 'submitted') THEN
+                SELECT max(service_date) INTO _ultima
+                FROM clinical_records
+                WHERE client_id = OLD.client_id
+                  AND patient_document_hash = OLD.patient_document_hash;
+                _vencida := _ultima + INTERVAL '{RETENTION_YEARS} years' <= CURRENT_DATE;
+
+                IF NOT _vencida THEN
+                    IF TG_OP = 'DELETE' THEN
+                        RAISE EXCEPTION
+                            'La historia clinica firmada no se puede borrar antes de % anos desde la ultima atencion',
+                            {RETENTION_YEARS};
+                    END IF;
+                    _limpio_old := to_jsonb(OLD) - 'status' - 'updated_at';
+                    _limpio_new := to_jsonb(NEW) - 'status' - 'updated_at';
+                    IF _limpio_old IS DISTINCT FROM _limpio_new THEN
+                        RAISE EXCEPTION
+                            'La historia clinica firmada no se puede modificar (retencion de % anos)',
+                            {RETENTION_YEARS};
+                    END IF;
+                END IF;
+            END IF;
+
+            IF TG_OP = 'DELETE' THEN
+                RETURN OLD;
+            END IF;
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+    """)
+    op.execute("""
+        CREATE TRIGGER clinical_records_protect_trigger
+            BEFORE UPDATE OR DELETE ON clinical_records
+            FOR EACH ROW EXECUTE FUNCTION clinical_records_protect_function();
+    """)
     op.execute("""
         CREATE TRIGGER audit_clinical_records
             AFTER INSERT OR UPDATE OR DELETE ON clinical_records
@@ -304,6 +361,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP TRIGGER IF EXISTS audit_patient_consents ON patient_consents")
     op.execute("DROP TRIGGER IF EXISTS audit_clinical_records ON clinical_records")
+    op.execute("DROP TRIGGER IF EXISTS clinical_records_protect_trigger ON clinical_records")
+    op.execute("DROP FUNCTION IF EXISTS clinical_records_protect_function()")
     op.execute("DROP FUNCTION IF EXISTS clinical_audit_trigger_function()")
 
     _deshabilitar_rls("patient_consents")
