@@ -59,7 +59,7 @@ _REDACTAR_LLAMADAS = text(
         '[]'::jsonb
     )
     WHERE client_id = :client_id
-      AND conversation_id = :conversation_id
+      AND (conversation_id = :conversation_id OR call_sid = :call_sid)
       AND jsonb_array_length(transcript) > 0
     """
 )
@@ -117,14 +117,20 @@ async def conversacion_es_clinica(
 
 
 async def proteger_llamadas_de_la_conversacion(
-    session: AsyncSession, client_id: UUID, conversation_id: UUID
+    session: AsyncSession, client_id: UUID, conversation_id: UUID, call_sid: str | None = None
 ) -> None:
     """Redacta la transcripcion de las llamadas ya guardadas de la conversacion.
+
+    Se busca por conversacion **y por `CallSid`**: en una llamada corta la
+    transcripcion se guarda antes de que `voice_tasks` ligue la llamada a la
+    conversacion (`conversation_id` sigue en NULL), y filtrando solo por
+    conversacion esa fila quedaba sin redactar.
 
     Args:
         session: Sesion con el contexto de tenant aplicado.
         client_id: Tenant dueno.
         conversation_id: Conversacion clinica.
+        call_sid: `CallSid` de la llamada en curso, si el canal es voz.
     """
     await session.execute(
         _REDACTAR_LLAMADAS,
@@ -132,5 +138,7 @@ async def proteger_llamadas_de_la_conversacion(
             "client_id": str(client_id),
             "conversation_id": str(conversation_id),
             "marcador": CONTENIDO_CLINICO_PROTEGIDO,
+            # Sin CallSid no debe coincidir con ninguna fila (`= NULL` nunca es cierto).
+            "call_sid": call_sid,
         },
     )

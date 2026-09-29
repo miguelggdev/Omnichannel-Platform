@@ -144,6 +144,30 @@ _PURGAR_CHECKPOINTS = (
 )
 
 
+async def _conversacion_clinica(client_id: str, conversation_id: str) -> bool:
+    """Si la conversacion ya fue marcada como clinica (`metadata.clinical`).
+
+    Best-effort: si la consulta falla se registra y se responde `False`, para no
+    esconder con un error de base la excepcion original del grafo.
+
+    Args:
+        client_id: Tenant propietario.
+        conversation_id: Conversacion en curso.
+
+    Returns:
+        `True` si la marca esta puesta.
+    """
+    from app.core.database import tenant_session
+    from app.services.clinical_privacy import conversacion_es_clinica
+
+    try:
+        async with tenant_session(UUID(client_id)) as session:
+            return await conversacion_es_clinica(session, UUID(client_id), UUID(conversation_id))
+    except Exception:
+        logger.exception("No se pudo comprobar si %s es una conversacion clinica", conversation_id)
+        return False
+
+
 async def _purgar_checkpoints(client_id: str, conversation_id: str) -> None:
     """Borra los checkpoints de la conversacion tras un turno clinico.
 
@@ -198,8 +222,18 @@ async def _invoke_graph(
     # por delante para que dos tenants no puedan colisionar en el mismo hilo.
     config = {"configurable": {"thread_id": f"{client_id}:{conversation_id}"}}
 
-    resultado: dict[str, Any] = await compiled.ainvoke(estado, config=config)
-    if resultado.get("intent") == "clinical":
+    try:
+        resultado: dict[str, Any] = await compiled.ainvoke(estado, config=config)
+    except Exception:
+        # Si el turno revienta despues de que LangGraph hizo checkpoint, el
+        # dictado ya esta en esas tablas. El intent no llega (no hay estado
+        # final), pero el nodo clinico marca la conversacion en su `finally`.
+        if await _conversacion_clinica(client_id, conversation_id):
+            await _purgar_checkpoints(client_id, conversation_id)
+        raise
+    if resultado.get("intent") == "clinical" or await _conversacion_clinica(
+        client_id, conversation_id
+    ):
         await _purgar_checkpoints(client_id, conversation_id)
     logger.info(
         "Grafo completado para %s: intent=%s handoff=%s",
