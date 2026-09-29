@@ -11,6 +11,7 @@ from app.models.audit_log import AuditLog
 from app.models.base import Base, TenantBaseModel
 from app.models.campaign import Campaign
 from app.models.client import Client
+from app.models.clinical_catalog import Cie10Catalog, CupsCatalog
 from app.models.clinical_record import ClinicalRecord, PatientConsent
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
@@ -42,12 +43,14 @@ __all__ = [
     "AuditLog",
     "Base",
     "Campaign",
+    "Cie10Catalog",
     "Client",
     "ClinicalRecord",
     "Contact",
     "ContactIdentifier",
     "ContactTag",
     "Conversation",
+    "CupsCatalog",
     "Document",
     "DocumentChunk",
     "InstantiationStatus",

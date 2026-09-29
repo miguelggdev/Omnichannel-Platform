@@ -51,10 +51,9 @@ from app.services.clinical import (
     validar_registro_rips,
 )
 from app.services.clinical_catalog import (
-    CIE10_COMMON,
-    CUPS_COMMON,
-    buscar_cie10,
-    buscar_cups,
+    CodigoCatalogo,
+    TipoCatalogo,
+    buscar_en_catalogo,
     normalizar_codigo,
 )
 
@@ -74,6 +73,9 @@ CATEGORIAS_ENTIDADES: tuple[str, ...] = (
 
 MAX_ENTIDADES_POR_CATEGORIA = 30
 MAX_LARGO_DICTADO = 8000
+
+#: Candidatos que se traen antes de filtrar por categoria o grupo.
+MAX_BUSQUEDA = 2000
 
 SIN_PROFESIONAL = (
     "No se identifico al profesional que dicta en esta conversacion, asi que no puedo "
@@ -222,14 +224,32 @@ async def extract_medical_entities(text: str, config: RunnableConfig) -> dict[st
     return {"success": True, "entities": _limpiar_entidades(crudo)}
 
 
+async def _buscar(
+    config: RunnableConfig, tipo: TipoCatalogo, consulta: str, limite: int
+) -> list[CodigoCatalogo]:
+    """Busca en el catalogo oficial (o en el de referencia si aun no se cargo).
+
+    Args:
+        config: Config con el `client_id` del tenant.
+        tipo: `cie10` o `cups`.
+        consulta: Codigo o texto libre.
+        limite: Maximo de resultados.
+
+    Returns:
+        Coincidencias del catalogo.
+    """
+    async with tenant_session(_client_id(config)) as session:
+        return await buscar_en_catalogo(session, tipo, consulta, limite)
+
+
 @tool(parse_docstring=True)
-async def code_cie10(diagnosis: str) -> dict[str, Any]:
-    """Codifica un diagnostico dictado en CIE-10 usando el catalogo local.
+async def code_cie10(diagnosis: str, config: RunnableConfig) -> dict[str, Any]:
+    """Codifica un diagnostico dictado en CIE-10 usando el catalogo.
 
     Args:
         diagnosis: Diagnostico dictado (texto libre) o un codigo CIE-10.
     """
-    coincidencias = buscar_cie10(diagnosis, limite=5)
+    coincidencias = await _buscar(config, "cie10", diagnosis, 5)
     if not coincidencias:
         return {"matches": [], "note": NO_ENCONTRADO}
     return {
@@ -243,13 +263,13 @@ async def code_cie10(diagnosis: str) -> dict[str, Any]:
 
 
 @tool(parse_docstring=True)
-async def code_cups(procedure: str) -> dict[str, Any]:
-    """Codifica un procedimiento dictado en CUPS usando el catalogo local.
+async def code_cups(procedure: str, config: RunnableConfig) -> dict[str, Any]:
+    """Codifica un procedimiento dictado en CUPS usando el catalogo.
 
     Args:
         procedure: Procedimiento dictado (texto libre) o un codigo CUPS.
     """
-    coincidencias = buscar_cups(procedure, limite=5)
+    coincidencias = await _buscar(config, "cups", procedure, 5)
     if not coincidencias:
         return {"matches": [], "note": NO_ENCONTRADO}
     return {
@@ -260,28 +280,32 @@ async def code_cups(procedure: str) -> dict[str, Any]:
 
 
 @tool(parse_docstring=True)
-async def search_cie10(query: str, category: str | None = None) -> dict[str, Any]:
+async def search_cie10(
+    query: str, config: RunnableConfig, category: str | None = None
+) -> dict[str, Any]:
     """Busca codigos CIE-10 por texto libre y, opcionalmente, por categoria.
 
     Args:
         query: Texto de busqueda o parte de un codigo.
         category: Letra, codigo de tres caracteres o rango (`J`, `J00`, `A00-B99`).
     """
-    resultados = buscar_cie10(query, limite=len(CIE10_COMMON))
+    resultados = await _buscar(config, "cie10", query, MAX_BUSQUEDA)
     if category:
         resultados = [r for r in resultados if _en_categoria_cie10(r["code"], category)]
     return {"results": resultados[:10], "total": len(resultados)}
 
 
 @tool(parse_docstring=True)
-async def search_cups(query: str, group: str | None = None) -> dict[str, Any]:
+async def search_cups(
+    query: str, config: RunnableConfig, group: str | None = None
+) -> dict[str, Any]:
     """Busca codigos CUPS por texto libre y, opcionalmente, por grupo.
 
     Args:
         query: Texto de busqueda o parte de un codigo.
         group: Grupo CUPS: los dos primeros digitos (`89` consultas, `87` radiologia).
     """
-    resultados = buscar_cups(query, limite=len(CUPS_COMMON))
+    resultados = await _buscar(config, "cups", query, MAX_BUSQUEDA)
     if group:
         resultados = [r for r in resultados if r["code"].startswith(group.strip())]
     return {"results": resultados[:10], "total": len(resultados)}

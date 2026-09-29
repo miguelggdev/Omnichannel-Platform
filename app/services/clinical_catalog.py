@@ -19,11 +19,23 @@ el repositorio. Mientras tanto:
 - Un codigo que **no** esta aqui pero tiene formato valido no se rechaza (el
   profesional puede dictar cualquiera del listado oficial); se guarda marcado
   como `catalog_verified: false` para que quien revise lo confirme.
+- **Con los catalogos oficiales cargados manda la base.** Las tablas
+  `cie10_catalog` y `cups_catalog` (migracion 017, cargadas por
+  `scripts/load_clinical_catalogs.py`) reemplazan al subconjunto: se busca ahi,
+  todo codigo queda verificado y uno que no exista se rechaza. Mientras esten
+  vacias rige lo de arriba.
 """
 
 import re
 import unicodedata
-from typing import TypedDict
+from collections.abc import Iterable
+from typing import Literal, TypedDict
+
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.clinical_catalog import Cie10Catalog, CupsCatalog
 
 #: Formato de un codigo CIE-10: letra, dos digitos y hasta dos de subcategoria.
 CIE10_PATTERN = re.compile(r"^[A-Z][0-9]{2}(\.[0-9]{1,2})?$")
@@ -167,3 +179,165 @@ def buscar_cups(consulta: str, limite: int = 10) -> list[CodigoCatalogo]:
         Coincidencias del catalogo; vacio si no hay ninguna.
     """
     return _buscar(CUPS_COMMON, consulta, limite)
+
+
+TipoCatalogo = Literal["cie10", "cups"]
+
+_MODELOS: dict[str, type[Cie10Catalog] | type[CupsCatalog]] = {
+    "cie10": Cie10Catalog,
+    "cups": CupsCatalog,
+}
+_PATRONES = {"cie10": CIE10_PATTERN, "cups": CUPS_PATTERN}
+_MEMORIA = {"cie10": CIE10_COMMON, "cups": CUPS_COMMON}
+_LOTE = 1000
+
+
+async def catalogo_cargado(session: AsyncSession, tipo: TipoCatalogo) -> bool:
+    """Si el catalogo oficial ya se cargo en la base.
+
+    Args:
+        session: Sesion de base de datos (las tablas no tienen RLS).
+        tipo: `cie10` o `cups`.
+
+    Returns:
+        `True` si la tabla tiene al menos una fila.
+    """
+    modelo = _MODELOS[tipo]
+    return (await session.execute(select(modelo.code).limit(1))).scalar_one_or_none() is not None
+
+
+def _escapar_like(palabra: str) -> str:
+    """Escapa `%`, `_` y `\\` para usar una palabra dentro de un `LIKE`.
+
+    Args:
+        palabra: Palabra de la consulta.
+
+    Returns:
+        La palabra, con los comodines neutralizados.
+    """
+    return palabra.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+async def buscar_en_catalogo(
+    session: AsyncSession, tipo: TipoCatalogo, consulta: str, limite: int = 10
+) -> list[CodigoCatalogo]:
+    """Busca un codigo o texto en el catalogo oficial o, si no esta cargado, en el de referencia.
+
+    Args:
+        session: Sesion de base de datos.
+        tipo: `cie10` o `cups`.
+        consulta: Codigo o texto libre.
+        limite: Maximo de resultados.
+
+    Returns:
+        Coincidencias; vacio si no hay ninguna.
+    """
+    if not await catalogo_cargado(session, tipo):
+        return (buscar_cie10 if tipo == "cie10" else buscar_cups)(consulta, limite)
+
+    modelo = _MODELOS[tipo]
+    codigo = normalizar_codigo(consulta)
+    exacta = (
+        await session.execute(select(modelo.code, modelo.description).where(modelo.code == codigo))
+    ).first()
+    if exacta is not None:
+        return [CodigoCatalogo(code=exacta[0], description=exacta[1])]
+
+    palabras = normalizar_texto(consulta).split()
+    if not palabras:
+        return []
+    filas = (
+        await session.execute(
+            select(modelo.code, modelo.description)
+            .where(
+                *(
+                    modelo.description_norm.ilike(f"%{_escapar_like(p)}%", escape="\\")
+                    for p in palabras
+                )
+            )
+            .order_by(modelo.code)
+            .limit(limite)
+        )
+    ).all()
+    return [CodigoCatalogo(code=f[0], description=f[1]) for f in filas]
+
+
+async def verificar_codigos(
+    session: AsyncSession, tipo: TipoCatalogo, codigos: list[str]
+) -> tuple[bool, dict[str, str]]:
+    """Comprueba codigos contra el catalogo oficial.
+
+    Args:
+        session: Sesion de base de datos.
+        tipo: `cie10` o `cups`.
+        codigos: Codigos ya normalizados.
+
+    Returns:
+        `(cargado, encontrados)`: si hay catalogo oficial y, en ese caso, el
+        `codigo -> descripcion` de los que existen.
+    """
+    if not codigos or not await catalogo_cargado(session, tipo):
+        return False, {}
+    modelo = _MODELOS[tipo]
+    filas = (
+        await session.execute(
+            select(modelo.code, modelo.description).where(modelo.code.in_(codigos))
+        )
+    ).all()
+    return True, {f[0]: f[1] for f in filas}
+
+
+async def cargar_catalogo(
+    session: AsyncSession, tipo: TipoCatalogo, filas: Iterable[tuple[str, str]]
+) -> dict[str, int]:
+    """Carga (o actualiza) un catalogo oficial. Idempotente.
+
+    Args:
+        session: Sesion con permiso de escritura sobre las tablas de catalogo.
+        tipo: `cie10` o `cups`.
+        filas: `(codigo, descripcion)`.
+
+    Returns:
+        `{"loaded": n, "invalid": m}`: las filas con un codigo que no cumple el
+        formato del catalogo (o sin descripcion) se descartan y se cuentan.
+    """
+    modelo = _MODELOS[tipo]
+    patron = _PATRONES[tipo]
+    cargadas = 0
+    invalidas = 0
+    lote: list[dict[str, str]] = []
+
+    async def _volcar() -> None:
+        if not lote:
+            return
+        stmt = pg_insert(modelo).values(lote)
+        await session.execute(
+            stmt.on_conflict_do_update(
+                index_elements=["code"],
+                set_={
+                    "description": stmt.excluded.description,
+                    "description_norm": stmt.excluded.description_norm,
+                },
+            )
+        )
+        lote.clear()
+
+    vistos: set[str] = set()
+    for codigo, descripcion in filas:
+        limpio = normalizar_codigo(codigo)
+        texto = (descripcion or "").strip()
+        if not patron.match(limpio) or not texto:
+            invalidas += 1
+            continue
+        if limpio in vistos:  # ON CONFLICT no admite dos filas iguales en un mismo INSERT
+            continue
+        vistos.add(limpio)
+        lote.append(
+            {"code": limpio, "description": texto, "description_norm": normalizar_texto(texto)}
+        )
+        cargadas += 1
+        if len(lote) >= _LOTE:
+            await _volcar()
+            vistos.clear()
+    await _volcar()
+    return {"loaded": cargadas, "invalid": invalidas}
