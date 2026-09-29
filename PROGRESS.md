@@ -552,11 +552,12 @@ Las siguientes 11 features fueron diseñadas e integradas en los sprints existen
 - [x] Nodo `clinical` en el grafo (11 nodos), 8 tools, intent `clinical`, acceso solo para profesionales declarados por el tenant
 - [x] API `/api/v1/clinical/*` (configuración, consentimiento, exportación/anonimización, listado/detalle/`review`/`sign`/`submit`)
 - [x] Lo dictado fuera del historial: `messages`, `agent_action_logs` y checkpoints de LangGraph
+- [x] Transcripción de llamadas clínicas redactada (`call_records.transcript`), por los dos lados: el nodo clínico redacta lo ya guardado y `guardar_llamada` redacta lo que se guarde después
 - [x] Reconciliación con el PR #50 (ADR-072): una sola tabla `clinical_records`, un solo `EncryptedJSON`, códigos y notas cifrados
 
 ### Pendiente
 - [ ] **Mergear #50 y luego #51** (el #51 ya incluye la rama del #50; al mergear el #50 el diff del #51 queda reducido a lo de Dev B)
-- [ ] **Bloqueante para producción en una clínica:** `call_records.transcript` (Dev A) es JSONB en claro; un dictado clínico por teléfono queda ahí sin cifrar aunque `messages`, los logs y los checkpoints ya no lo guarden. Cifrarlo (`EncryptedJSON`) afecta al listado de llamadas del CRM, o redactarlo cuando el intent sea `clinical`
+- [x] ~~`call_records.transcript` en claro con dictados clínicos~~ — resuelto (decisión del usuario: **no cifrar**; se redacta el texto de los turnos de toda llamada cuya conversación fue clínica, conservando rol y hora). Ver `app/services/clinical_privacy.py` y ADR-072
 - [ ] El agente no llena `clinical_records.call_record_id` cuando el dictado llegó por voz (ligar el `CallSid` de la conversación con `call_records`)
 - [ ] **Cargar el dataset oficial** de CIE-10 y CUPS (Resolución 5171 de 2017) con `scripts/load_clinical_catalogs.py` en cada entorno; no está en el repo. Hasta entonces rige el subconjunto de referencia (36 CIE-10, 2 CUPS)
 - [ ] **Infra:** rol de la aplicación solo con `SELECT` sobre `cie10_catalog`/`cups_catalog`; `REVOKE UPDATE, DELETE` sobre `audit_logs` (deuda de Sprint 8)

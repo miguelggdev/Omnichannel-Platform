@@ -38,11 +38,15 @@ from sqlalchemy import update
 from app.agents.nodes._agent_tools import responder_con_tools
 from app.agents.nodes._state import ConversationState
 from app.agents.nodes._tenant import get_agent_settings
-from app.agents.nodes.respond import CONTENIDO_CLINICO_PROTEGIDO
 from app.agents.tools.clinical_tools import CLINICAL_TOOLS
 from app.core.database import tenant_session
 from app.models.message import Message
 from app.services.clinical import es_profesional_clinico
+from app.services.clinical_privacy import (
+    CONTENIDO_CLINICO_PROTEGIDO,
+    marcar_conversacion_clinica,
+    proteger_llamadas_de_la_conversacion,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,13 +103,20 @@ Fecha actual: {fecha}
 
 
 async def _proteger_mensaje_entrante(state: ConversationState) -> None:
-    """Reemplaza en `messages` lo que dicto el profesional por un marcador.
+    """Saca lo dictado de `messages` y de la transcripcion de la llamada.
 
     El dictado ya se uso (esta en el estado en memoria y en la respuesta del
-    LLM); dejarlo ademas en `messages.content` lo pondria en claro en el
-    historial, en el inbox y en el export RGPD de contactos, fuera del cifrado
-    y de la retencion de la historia clinica. El registro que interesa vive
-    cifrado en `clinical_records`.
+    LLM); dejarlo ademas en claro lo pondria en el historial, en el inbox, en
+    el export RGPD de contactos y —si fue por telefono— en
+    `call_records.transcript`, fuera del cifrado y de la retencion de la
+    historia clinica. El registro que interesa vive cifrado en
+    `clinical_records`.
+
+    Hace tres cosas en una transaccion: reemplaza `messages.content` del mensaje
+    entrante por un marcador, marca la conversacion como clinica
+    (`conversations.metadata.clinical`, que consulta `voice_tasks` para redactar
+    la transcripcion que se guarde despues) y redacta la transcripcion ya
+    guardada. Ver `app/services/clinical_privacy.py`.
 
     Es un control de privacidad: si falla se registra como error, pero no
     tumba la respuesta al profesional.
@@ -114,23 +125,28 @@ async def _proteger_mensaje_entrante(state: ConversationState) -> None:
         state: Estado del grafo; usa `client_id`, `conversation_id` y
             `message.external_message_id`.
     """
-    externo = (state.get("message") or {}).get("external_message_id")
-    if not externo or not state.get("conversation_id"):
+    if not state.get("conversation_id"):
         return
+    client_id = UUID(state["client_id"])
+    conversation_id = UUID(state["conversation_id"])
+    externo = (state.get("message") or {}).get("external_message_id")
     try:
-        async with tenant_session(UUID(state["client_id"])) as session:
-            await session.execute(
-                update(Message)
-                .where(
-                    Message.client_id == UUID(state["client_id"]),
-                    Message.conversation_id == UUID(state["conversation_id"]),
-                    Message.direction == "inbound",
-                    Message.external_message_id == externo,
+        async with tenant_session(client_id) as session:
+            if externo:
+                await session.execute(
+                    update(Message)
+                    .where(
+                        Message.client_id == client_id,
+                        Message.conversation_id == conversation_id,
+                        Message.direction == "inbound",
+                        Message.external_message_id == externo,
+                    )
+                    .values(content=CONTENIDO_CLINICO_PROTEGIDO)
                 )
-                .values(content=CONTENIDO_CLINICO_PROTEGIDO)
-            )
+            await marcar_conversacion_clinica(session, client_id, conversation_id)
+            await proteger_llamadas_de_la_conversacion(session, client_id, conversation_id)
     except Exception:
-        logger.exception("No se pudo proteger el mensaje clinico entrante en la conversacion")
+        logger.exception("No se pudo proteger el contenido clinico de la conversacion")
 
 
 async def clinical_agent_node(state: ConversationState) -> dict[str, Any]:

@@ -708,3 +708,131 @@ async def test_el_mensaje_clinico_entrante_no_queda_en_claro(
     (fila,) = await _filas(tenant, "SELECT content FROM messages WHERE client_id = :cid")
     assert "Ana Perez" not in fila[0]
     assert fila[0] == "[contenido clínico protegido]"
+
+
+async def _llamada(tenant: uuid.UUID, conversacion: uuid.UUID, transcript: str) -> None:
+    """Deja una llamada guardada, ligada a la conversacion por sus mensajes."""
+    from app.tasks.voice_tasks import guardar_llamada
+
+    await guardar_llamada(
+        tenant,
+        "CA-clinica-1",
+        {
+            "direction": "inbound",
+            "status": "completed",
+            "started_at": "2026-09-29T15:00:00+00:00",
+            "transcript": [
+                {"role": "caller", "text": transcript, "timestamp": "2026-09-29T15:00:05+00:00"},
+                {"role": "agent", "text": "listo", "timestamp": "2026-09-29T15:00:09+00:00"},
+            ],
+        },
+    )
+
+
+async def _transcripcion(tenant: uuid.UUID) -> list[Any]:
+    (fila,) = await _filas(
+        tenant, "SELECT transcript::text FROM call_records WHERE client_id = :cid"
+    )
+    return fila[0]
+
+
+async def _mensaje_de_voz(tenant: uuid.UUID, conversacion: uuid.UUID) -> None:
+    await _sql(
+        tenant,
+        "INSERT INTO messages (id, client_id, conversation_id, direction, message_type, content, "
+        "external_message_id, sender_type) "
+        "VALUES (gen_random_uuid(), :cid, :conv, 'inbound', 'text', 'paciente Ana Perez', "
+        "'CA-clinica-1:0', 'contact')",
+        conv=str(conversacion),
+    )
+
+
+async def test_la_transcripcion_ya_guardada_se_redacta_al_volverse_clinica(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    """La llamada se guardo al colgar, antes de que el grafo procesara la ultima frase."""
+    from app.agents.nodes import clinical as nodo
+
+    conversacion = await _conversacion(tenant, profesional)
+    await _mensaje_de_voz(tenant, conversacion)
+    await _llamada(tenant, conversacion, "paciente Ana Perez, hipertension")
+    assert "Ana Perez" in await _transcripcion(tenant)
+
+    await nodo._proteger_mensaje_entrante(
+        {
+            "client_id": str(tenant),
+            "conversation_id": str(conversacion),
+            "message": {"external_message_id": "CA-clinica-1:0"},
+        }
+    )
+
+    transcripcion = await _transcripcion(tenant)
+    assert "Ana Perez" not in transcripcion
+    assert "hipertension" not in transcripcion
+    assert transcripcion.count("[contenido cl") == 2
+    # Rol y hora se conservan: el listado del CRM y la auditoria siguen sirviendo.
+    assert '"role": "caller"' in transcripcion
+    assert "2026-09-29T15:00:05" in transcripcion
+
+
+async def test_la_transcripcion_que_se_guarda_despues_tambien_sale_redactada(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    """Si la conversacion ya es clinica cuando la llamada cuelga, no se guarda en claro."""
+    from app.agents.nodes import clinical as nodo
+
+    conversacion = await _conversacion(tenant, profesional)
+    await _mensaje_de_voz(tenant, conversacion)
+    await nodo._proteger_mensaje_entrante(
+        {
+            "client_id": str(tenant),
+            "conversation_id": str(conversacion),
+            "message": {"external_message_id": "CA-clinica-1:0"},
+        }
+    )
+
+    await _llamada(tenant, conversacion, "paciente Ana Perez, hipertension")
+
+    transcripcion = await _transcripcion(tenant)
+    assert "Ana Perez" not in transcripcion
+    assert transcripcion.count("[contenido cl") == 2
+
+
+async def test_una_llamada_no_clinica_conserva_su_transcripcion(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    conversacion = await _conversacion(tenant, profesional)
+    await _mensaje_de_voz(tenant, conversacion)
+
+    await _llamada(tenant, conversacion, "quiero una cita el martes")
+
+    assert "quiero una cita el martes" in await _transcripcion(tenant)
+
+
+async def test_marcar_la_conversacion_no_pisa_el_resto_de_su_metadata(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    from app.core.database import tenant_session
+    from app.services.clinical_privacy import (
+        conversacion_es_clinica,
+        marcar_conversacion_clinica,
+    )
+
+    conversacion = await _conversacion(tenant, profesional)
+    await _sql(
+        tenant,
+        'UPDATE conversations SET metadata = \'{"handoff": {"reason": "x"}}\'::jsonb '
+        "WHERE id = :conv",
+        conv=str(conversacion),
+    )
+
+    async with tenant_session(tenant) as session:
+        assert await conversacion_es_clinica(session, tenant, conversacion) is False
+        await marcar_conversacion_clinica(session, tenant, conversacion)
+    async with tenant_session(tenant) as session:
+        assert await conversacion_es_clinica(session, tenant, conversacion) is True
+
+    (fila,) = await _filas(
+        tenant, "SELECT metadata::text FROM conversations WHERE id = :conv", conv=str(conversacion)
+    )
+    assert "handoff" in fila[0]

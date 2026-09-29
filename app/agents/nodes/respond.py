@@ -17,11 +17,9 @@ from uuid import UUID
 from app.agents.nodes._delivery import deliver_message
 from app.agents.nodes._state import ConversationState
 from app.agents.nodes._tenant import get_agent_settings
+from app.services.clinical_privacy import CONTENIDO_CLINICO_PROTEGIDO
 
 logger = logging.getLogger(__name__)
-
-#: Lo que queda en `messages.content` de un turno clinico (ver `clinical.py`).
-CONTENIDO_CLINICO_PROTEGIDO = "[contenido clínico protegido]"
 
 DEFAULT_GREETING = "Hola! En que puedo ayudarte hoy?"
 DEFAULT_FAREWELL = "Hasta luego! Si necesitas algo mas, no dudes en escribirme."

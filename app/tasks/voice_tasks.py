@@ -36,6 +36,7 @@ from app.core.database import run_isolated, tenant_session
 from app.models.call_record import CALL_FINAL_STATUSES, CALL_STATUSES, CallRecord
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.services.clinical_privacy import conversacion_es_clinica, redactar_transcripcion
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,14 @@ async def guardar_llamada(client_id: UUID, call_sid: str, datos: dict[str, Any])
     async with tenant_session(client_id) as session:
         vinculo = await _conversacion_de_la_llamada(session, client_id, call_sid)
         conversation_id, contact_id = vinculo if vinculo else (None, None)
+        if (
+            conversation_id is not None
+            and valores["transcript"]
+            and await conversacion_es_clinica(session, client_id, conversation_id)
+        ):
+            # Un dictado clinico por telefono no queda en claro en la
+            # transcripcion (ADR-072); el rol y la hora de cada turno se conservan.
+            valores["transcript"] = redactar_transcripcion(valores["transcript"])
 
         insercion = insert(CallRecord).values(
             client_id=client_id,

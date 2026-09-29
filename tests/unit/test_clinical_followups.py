@@ -392,14 +392,56 @@ class TestPrivacidadDelContenidoClinico:
         assert "messages.direction" in sql
         assert "messages.client_id" in sql
 
-    async def test_sin_id_externo_no_toca_nada(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_sin_id_externo_solo_protege_la_conversacion(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sesion = parchear_tenant_session(monkeypatch, nodo, FakeSession())
 
         await nodo._proteger_mensaje_entrante(
             estado(client_id=str(CLIENT_ID), conversation_id=str(uuid.uuid4()), message={})
         )
 
-        assert sesion.executed == []
+        sql = [str(s).lower() for s in sesion.executed]
+        assert not any(t.startswith("update messages") for t in sql)
+        assert any("update conversations" in t for t in sql)
+        assert any("update call_records" in t for t in sql)
+
+    async def test_marca_la_conversacion_y_redacta_las_llamadas_ya_guardadas(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sesion = parchear_tenant_session(monkeypatch, nodo, FakeSession())
+
+        await nodo._proteger_mensaje_entrante(
+            estado(
+                client_id=str(CLIENT_ID),
+                conversation_id=str(uuid.uuid4()),
+                message={"external_message_id": "CA1:0"},
+            )
+        )
+
+        sql = [str(s).lower() for s in sesion.executed]
+        assert sql[0].startswith("update messages")
+        assert "'{\"clinical\": true}'" in sql[1] or '"clinical": true' in sql[1]
+        assert "jsonb_set" in sql[2]
+
+    def test_redactar_transcripcion_conserva_rol_y_hora(self) -> None:
+        from app.services.clinical_privacy import (
+            CONTENIDO_CLINICO_PROTEGIDO,
+            redactar_transcripcion,
+        )
+
+        turnos = [
+            {"role": "caller", "text": "paciente Ana Perez", "timestamp": "t1"},
+            {"role": "agent", "text": "registrado", "timestamp": "t2"},
+        ]
+
+        redactado = redactar_transcripcion(turnos)
+
+        assert redactado == [
+            {"role": "caller", "text": CONTENIDO_CLINICO_PROTEGIDO, "timestamp": "t1"},
+            {"role": "agent", "text": CONTENIDO_CLINICO_PROTEGIDO, "timestamp": "t2"},
+        ]
+        assert turnos[0]["text"] == "paciente Ana Perez", "no muta la entrada"
 
     async def test_un_fallo_al_proteger_no_tumba_la_respuesta(
         self, monkeypatch: pytest.MonkeyPatch
