@@ -445,7 +445,12 @@ class TestMiddlewareDeObservabilidad:
         Returns:
             App con dos rutas: una con parámetro y otra que revienta.
         """
-        app = FastAPI()
+        # FastAPI >= 0.142 trae su propia telemetria: con un TracerProvider
+        # global instalado (otro test de este proceso lo instala y OpenTelemetry
+        # no permite quitarlo) abre un span por request aunque nadie haya
+        # instrumentado esta app, y el request sale con `X-Trace-ID`. Estos
+        # tests miden la instrumentacion del proyecto, no la incorporada.
+        app = FastAPI(telemetry={"tracing": False})
         app.add_middleware(ObservabilityMiddleware)
 
         @app.get("/eco/{identificador}")

@@ -556,6 +556,7 @@ Las siguientes 11 features fueron diseñadas e integradas en los sprints existen
 - [ ] **Validación legal (asesor del tenant, antes de producción):** plazo de retención de 20 años y su interacción con la supresión (Ley 1581 art. 15, Decreto 1377 art. 10); autorización del titular y contrato de transmisión por el envío del dictado a OpenAI (transferencia internacional, art. 26)
 - [ ] **Decisión de producto:** rol `medical` dedicado (valor nuevo en el enum `user_role` + política restrictiva); hoy los endpoints clínicos son solo `admin`/`super_admin`
 - [ ] **Decisión de producto:** el JSONB de `diagnosis_codes`/`procedure_codes` va en claro (por diseño: es lo que se conserva anónimo); revisar si el asesor legal exige otra cosa
+- [ ] **Deriva de dependencias (no es del Sprint 13):** FastAPI >= 0.142 trae telemetría propia y, con un `TracerProvider` global instalado, abre un span por request además del que crea `FastAPIInstrumentor` (spans duplicados en producción). Hoy solo se neutralizó en `test_observability.py`; falta decidir si `create_app()` debe pasar `telemetry={"tracing": False}` o dejar de usar `FastAPIInstrumentor`. Además `requirements.txt` sigue sin techo de versiones (mismo origen que BUG-042)
 - [ ] Tras el merge: `PUT /api/v1/clinical/settings` para declarar los profesionales de cada tenant y habilitar `clinical` en `enabled_agents`; en cada despliegue, `alembic upgrade head` (016 y 017)
 
 ---
