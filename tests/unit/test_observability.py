@@ -6,6 +6,7 @@ middleware que las une, sin necesidad de base de datos ni de un collector OTLP.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import weakref
@@ -698,3 +699,48 @@ def _receptores(señal: Any) -> list[Any]:
     for _, receptor in señal.receivers:
         resueltos.append(receptor() if isinstance(receptor, weakref.ReferenceType) else receptor)
     return resueltos
+
+
+class TestTelemetriaPropiaDeFastAPI:
+    """FastAPI >= 0.142 traza por su cuenta; `FastAPIInstrumentor` seria un segundo span."""
+
+    def test_se_apaga_la_traza_propia_si_la_version_la_trae(self) -> None:
+        from app.main import _opciones_de_telemetria
+
+        class _Nueva:
+            def __init__(self, *, telemetry: Any = None) -> None: ...
+
+        assert _opciones_de_telemetria(_Nueva) == {"telemetry": {"tracing": False}}  # type: ignore[arg-type]
+
+    def test_en_una_version_anterior_no_se_pasa_un_argumento_que_no_existe(self) -> None:
+        from app.main import _opciones_de_telemetria
+
+        class _Vieja:
+            def __init__(self, *, title: str = "") -> None: ...
+
+        assert _opciones_de_telemetria(_Vieja) == {}  # type: ignore[arg-type]
+
+    def test_la_version_instalada_acepta_lo_que_se_le_pasa(self) -> None:
+        from app.main import _opciones_de_telemetria
+
+        FastAPI(**_opciones_de_telemetria())
+
+    def test_create_app_pasa_la_opcion(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import app.main as principal
+
+        recibidos: dict[str, Any] = {}
+        real = principal.FastAPI
+
+        class _Espia(real):  # type: ignore[valid-type, misc]
+            def __init__(self, **kwargs: Any) -> None:
+                recibidos.update(kwargs)
+                super().__init__(**kwargs)
+
+        monkeypatch.setattr(principal, "FastAPI", _Espia)
+
+        principal.create_app()
+
+        if "telemetry" in inspect.signature(real.__init__).parameters:
+            assert recibidos["telemetry"] == {"tracing": False}
+        else:
+            assert "telemetry" not in recibidos

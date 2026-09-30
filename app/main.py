@@ -4,10 +4,11 @@ Punto de entrada de la aplicación. Patrón factory para crear instancias
 aisladas (producción y testing).
 """
 
+import inspect
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI
@@ -114,6 +115,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Aplicación cerrada")
 
 
+def _opciones_de_telemetria(clase: type[FastAPI] = FastAPI) -> dict[str, Any]:
+    """Apaga la traza propia de FastAPI si la version instalada la trae.
+
+    Desde FastAPI 0.142 el framework abre por su cuenta un span por request
+    cuando hay un `TracerProvider` global. `setup_telemetry()` ya instrumenta la
+    app con `FastAPIInstrumentor` (con las rutas excluidas de `_EXCLUDED_URLS`), asi
+    que las dos cosas a la vez duplican cada span del servidor. Se deja una sola
+    fuente: la nuestra. En versiones anteriores el argumento no existe y no se pasa.
+
+    Args:
+        clase: Clase de la aplicacion; parametro para poder probar una version vieja.
+
+    Returns:
+        `{"telemetry": {"tracing": False}}` si `clase` lo admite; si no, `{}`.
+    """
+    if "telemetry" in inspect.signature(clase.__init__).parameters:
+        return {"telemetry": {"tracing": False}}
+    return {}
+
+
 def create_app() -> FastAPI:
     """Crea y configura la instancia de FastAPI.
 
@@ -131,6 +152,7 @@ def create_app() -> FastAPI:
         redoc_url="/api/redoc",
         openapi_url="/api/openapi.json",
         lifespan=lifespan,
+        **_opciones_de_telemetria(),
     )
 
     # ── Middleware stack ──

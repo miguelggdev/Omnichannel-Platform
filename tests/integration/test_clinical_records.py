@@ -983,3 +983,87 @@ async def test_una_llamada_corta_guardada_antes_de_ligarse_a_la_conversacion_tam
     transcripcion = await _transcripcion(tenant)
     assert "Ana Perez" not in transcripcion
     assert "[contenido cl" in transcripcion
+
+
+async def _dictar_por_voz(
+    tenant: uuid.UUID, profesional: uuid.UUID, conversacion: uuid.UUID, call_sid: str
+) -> dict[str, Any]:
+    """Crea un registro desde una llamada autenticada como el profesional."""
+    from app.agents.tools import clinical_tools as ct
+    from app.services.voice.pin_auth import marcar_llamada_autenticada
+
+    await marcar_llamada_autenticada(tenant, call_sid, profesional)
+    config = {
+        "configurable": {
+            "client_id": str(tenant),
+            "contact_id": str(uuid.uuid4()),  # el contacto del caller ID, no el profesional
+            "conversation_id": str(conversacion),
+            "channel": "voice",
+            "external_message_id": f"{call_sid}:1",
+        }
+    }
+    return await ct.create_rips_record.ainvoke(_rips(), config=config)
+
+
+async def _llamada_del_registro(tenant: uuid.UUID) -> tuple[Any, Any]:
+    """`(call_record_id del registro, id de la fila de call_records)`."""
+    (fila,) = await _filas(
+        tenant,
+        "SELECT r.call_record_id, (SELECT id FROM call_records c WHERE c.client_id = :cid) "
+        "FROM clinical_records r WHERE r.client_id = :cid",
+    )
+    return fila[0], fila[1]
+
+
+async def test_el_registro_dictado_por_voz_queda_ligado_a_su_llamada(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    from app.services.dedup import get_redis
+
+    await _consentir(tenant, profesional)
+    conversacion = await _conversacion(tenant, profesional)
+    call_sid = f"CA-link-{uuid.uuid4().hex[:8]}"
+    await _sql(
+        tenant,
+        "INSERT INTO call_records (client_id, call_sid, direction, status, started_at, transcript) "
+        "VALUES (:cid, :sid, 'inbound', 'in-progress', now(), "
+        "pgp_sym_encrypt('[]', :clave))",
+        sid=call_sid,
+        clave=__import__("app.core.config", fromlist=["get_settings"])
+        .get_settings()
+        .ENCRYPTION_KEY,
+    )
+    try:
+        resultado = await _dictar_por_voz(tenant, profesional, conversacion, call_sid)
+        assert resultado["success"] is True, resultado
+    finally:
+        await get_redis().delete(f"voice:auth:{str(tenant).lower()}:{call_sid}")
+
+    vinculo, llamada = await _llamada_del_registro(tenant)
+    assert vinculo is not None
+    assert vinculo == llamada
+
+
+async def test_si_la_fila_de_la_llamada_llega_despues_el_borrador_se_liga_al_colgar(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    from app.services.dedup import get_redis
+
+    await _consentir(tenant, profesional)
+    conversacion = await _conversacion(tenant, profesional)
+    await _mensaje_de_voz(tenant, conversacion)  # `CA-clinica-1:0`
+    try:
+        resultado = await _dictar_por_voz(tenant, profesional, conversacion, "CA-clinica-1")
+        assert resultado["success"] is True, resultado
+    finally:
+        await get_redis().delete(f"voice:auth:{str(tenant).lower()}:CA-clinica-1")
+    (fila,) = await _filas(
+        tenant, "SELECT call_record_id FROM clinical_records WHERE client_id = :cid"
+    )
+    assert fila[0] is None, "la llamada aun no tiene fila: no hay a quien ligar"
+
+    await _llamada(tenant, conversacion, "el resto de la llamada")
+
+    vinculo, llamada = await _llamada_del_registro(tenant)
+    assert vinculo is not None
+    assert vinculo == llamada

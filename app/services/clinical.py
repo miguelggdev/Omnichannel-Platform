@@ -44,6 +44,7 @@ from app.core.habeas_data import (
     normalizar_documento,
 )
 from app.models.agent_config import AgentConfig
+from app.models.call_record import CallRecord
 from app.models.clinical_record import (
     RECORD_DRAFT,
     RECORD_STATUSES,
@@ -389,6 +390,7 @@ async def crear_registro_rips(
     patient_name: str | None,
     specialty: str | None,
     datos: dict[str, Any],
+    call_sid: str | None = None,
 ) -> dict[str, Any]:
     """Crea un registro RIPS en borrador si el titular autorizo el tratamiento.
 
@@ -403,6 +405,10 @@ async def crear_registro_rips(
         patient_name: Nombre del paciente, opcional.
         specialty: Especialidad, opcional.
         datos: Salida de `validar_registro_rips()`.
+        call_sid: `CallSid` de la llamada en la que se dicta, si fue por voz. Liga
+            el registro a su fila de `call_records`; si esa fila aun no existe
+            (se crea con los eventos de Twilio) el vinculo lo completa
+            `voice_tasks.guardar_llamada` al colgar.
 
     Returns:
         `{"success": True, ...resumen}`; con `"duplicate": True` si ya existia
@@ -454,11 +460,22 @@ async def crear_registro_rips(
         if existente is not None:
             return {"success": True, "duplicate": True, **resumen_registro(existente, numero)}
 
+    llamada_id = None
+    if call_sid:
+        llamada_id = (
+            await session.execute(
+                select(CallRecord.id).where(
+                    CallRecord.client_id == client_id, CallRecord.call_sid == call_sid
+                )
+            )
+        ).scalar_one_or_none()
+
     ahora = datetime.now(timezone.utc)
     registro = ClinicalRecord(
         client_id=client_id,
         dictated_by_contact_id=dictated_by_contact_id,
         conversation_id=conversation_id,
+        call_record_id=llamada_id,
         patient_document_type=tipo,
         patient_document_number=numero,
         patient_document_hash=hash_documento,

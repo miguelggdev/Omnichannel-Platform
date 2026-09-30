@@ -5,7 +5,7 @@ use sin importarlas de otro modulo de tests, que ruff marca como redefinicion.
 """
 
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from typing import Any
 
 import pytest
@@ -104,3 +104,18 @@ def ia_encolada(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     encoladas: list[dict[str, Any]] = []
     monkeypatch.setattr(process_ai_response, "delay", lambda **kw: encoladas.append(kw))
     return encoladas
+
+
+@pytest.fixture(autouse=True)
+def redis_de_este_test() -> Iterator[None]:
+    """Un cliente Redis nuevo por test.
+
+    `dedup.get_redis()` cachea el cliente a nivel de modulo, y cada test asincrono
+    corre en su propio event loop: el cliente del primer test, atado a un loop ya
+    cerrado, hace fallar con `Event loop is closed` al segundo test que toque Redis.
+    """
+    from app.services import dedup
+
+    dedup._redis_client = None
+    yield
+    dedup._redis_client = None

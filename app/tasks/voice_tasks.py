@@ -29,7 +29,7 @@ from typing import Any
 from uuid import UUID
 
 from celery import shared_task
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.database import run_isolated, tenant_session
@@ -135,6 +135,45 @@ async def _conversacion_de_la_llamada(
     return (fila[0], fila[1]) if fila else None
 
 
+_LIGAR_REGISTROS_CLINICOS = text(
+    """
+    UPDATE clinical_records
+    SET call_record_id = (
+        SELECT id FROM call_records WHERE client_id = :client_id AND call_sid = :call_sid
+    )
+    WHERE client_id = :client_id
+      AND conversation_id = :conversation_id
+      AND call_record_id IS NULL
+      AND status = 'draft'
+    """
+)
+
+
+async def _ligar_registros_clinicos(
+    session: Any, client_id: UUID, call_sid: str, conversation_id: UUID
+) -> None:
+    """Liga a la llamada los borradores clinicos dictados en su conversacion.
+
+    El agente liga el registro con la llamada al crearlo, pero la fila de
+    `call_records` se crea con los eventos de Twilio y puede llegar despues. Solo
+    toca borradores: un registro revisado o firmado ya no se modifica.
+
+    Args:
+        session: Sesion con el contexto de tenant aplicado.
+        client_id: Tenant.
+        call_sid: `CallSid` de la llamada.
+        conversation_id: Conversacion en la que quedo la llamada.
+    """
+    await session.execute(
+        _LIGAR_REGISTROS_CLINICOS,
+        {
+            "client_id": str(client_id),
+            "call_sid": call_sid,
+            "conversation_id": str(conversation_id),
+        },
+    )
+
+
 async def guardar_llamada(client_id: UUID, call_sid: str, datos: dict[str, Any]) -> None:
     """Crea o completa la fila de una llamada.
 
@@ -218,6 +257,8 @@ async def guardar_llamada(client_id: UUID, call_sid: str, datos: dict[str, Any])
                 set_=actualizacion,
             )
         )
+        if conversation_id is not None:
+            await _ligar_registros_clinicos(session, client_id, call_sid, conversation_id)
 
 
 @shared_task(

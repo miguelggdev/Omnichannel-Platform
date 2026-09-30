@@ -59,6 +59,7 @@ from app.services.clinical_catalog import (
     buscar_en_catalogo,
     normalizar_codigo,
 )
+from app.services.voice.pin_auth import call_sid_de_mensaje
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,21 @@ def _client_id(config: RunnableConfig) -> UUID:
         UUID del tenant dueno de la conversacion.
     """
     return UUID(config["configurable"]["client_id"])
+
+
+def _call_sid(config: RunnableConfig) -> str | None:
+    """`CallSid` de la llamada en curso, si la conversacion es por voz.
+
+    Args:
+        config: Config que inyecta el nodo.
+
+    Returns:
+        El `CallSid` (sale de `CallSid:indice`), o `None` en cualquier otro canal.
+    """
+    configurable = config.get("configurable", {})
+    if configurable.get("channel") != "voice":
+        return None
+    return call_sid_de_mensaje(configurable.get("external_message_id"))
 
 
 def _uuid_opcional(config: RunnableConfig, clave: str) -> UUID | None:
@@ -466,6 +482,7 @@ async def create_rips_record(
                 patient_name=patient_name,
                 specialty=specialty,
                 datos=datos,
+                call_sid=_call_sid(config),
             )
     except (ClinicalValidationError, HabeasDataError) as exc:
         return _fallo(str(exc))
