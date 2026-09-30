@@ -13,10 +13,28 @@ Un registro firmado no se modifica ni se borra durante 20 anos desde la ultima
 atencion del paciente (Resolucion 839 de 2017); lo garantiza el trigger de la
 migracion 017, no solo esta API.
 
-Solo `super_admin` y `admin`: son datos de salud. El spec propone un rol
-`medical` con una politica RLS propia, pero el enum `user_role` no lo tiene y
-nada fija `app.current_user_role` (ver la migracion 016); un rol clinico
-dedicado queda como decision de producto pendiente (ADR-072).
+Control de acceso (criterio 14 del spec, ADR-073)
+-------------------------------------------------
+Dos grupos de roles, porque no son el mismo tipo de acto:
+
+- **`super_admin`, `admin`** — actos del responsable del tratamiento: decidir
+  quien puede dictar (`/settings`) y atender los derechos del titular
+  (`/patients/export`, `/patients/anonymize`, `/consents/revoke`).
+- **`super_admin`, `admin`, `medical`** — actos clinicos: leer la historia
+  (`/records`), firmarla (`review`/`sign`/`submit`) y dejar constancia de la
+  autorizacion que el paciente otorgo en la consulta (`/consents`).
+
+El rol `medical` lo agrega la migracion 020 al enum `user_role`. Antes, firmar
+un registro clinico exigia ser administrador del tenant, que es la decision de
+producto que ADR-072 dejo abierta. `supervisor` y `agent` siguen fuera de todo
+el router: un dato de salud es categoria especial (Ley 1581, art. 5) y no forma
+parte de la atencion al cliente.
+
+Sigue sin crearse la politica RLS `clinical_records_medical_access` del spec:
+las politicas permisivas de PostgreSQL se combinan con OR con la de aislamiento
+por tenant, asi que no restringiria nada, y nada fija `app.current_user_role`
+(ADR-071, ADR-072). El control es de aplicacion, y estos endpoints son el unico
+camino.
 
 Los endpoints de consulta son POST, con el documento en el cuerpo: un GET lo
 dejaria en la URL, y por tanto en los logs de acceso (ver `schemas/clinical.py`).
@@ -64,7 +82,17 @@ router = APIRouter()
 #: No hay un codigo de error estandar para un conflicto de estado.
 CONFLICT = "CONFLICT"
 
+#: Actos del responsable del tratamiento: decidir quien puede dictar, y atender
+#: los derechos del titular sobre sus datos (exportacion, supresion, revocacion
+#: de la autorizacion). No son actos clinicos, asi que un `medical` no los hace.
 _ROLES = ("super_admin", "admin")
+
+#: Actos clinicos: leer la historia, firmarla y dejar constancia de la
+#: autorizacion que el paciente otorgo en la consulta. El rol `medical`
+#: (migracion 020) existe justamente para esto: hasta ahora firmar un registro
+#: clinico exigia ser administrador del tenant, que es la decision de producto
+#: que ADR-072 dejo abierta y el criterio 14 del spec pedia cerrar.
+_ROLES_CLINICOS = ("super_admin", "admin", "medical")
 
 #: Mezcla el parche dentro de `config.clinical` sin tocar el resto de `config`.
 _ACTUALIZAR_CLINICA = text(
@@ -214,7 +242,7 @@ async def update_clinical_settings(
 @router.post("/consents")
 async def register_consent(
     data: ConsentCreate,
-    user: dict[str, Any] = Depends(require_role(*_ROLES)),
+    user: dict[str, Any] = Depends(require_role(*_ROLES_CLINICOS)),
 ) -> dict[str, Any]:
     """Registra la autorizacion de un paciente para tratar sus datos de salud.
 
@@ -350,7 +378,7 @@ async def list_records(
     status: str | None = Query(default=None, max_length=20),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    user: dict[str, Any] = Depends(require_role(*_ROLES)),
+    user: dict[str, Any] = Depends(require_role(*_ROLES_CLINICOS)),
 ) -> list[dict[str, Any]]:
     """Lista los registros clinicos del tenant para su revision.
 
@@ -386,7 +414,7 @@ async def list_records(
 @router.get("/records/{record_id}")
 async def get_record(
     record_id: UUID,
-    user: dict[str, Any] = Depends(require_role(*_ROLES)),
+    user: dict[str, Any] = Depends(require_role(*_ROLES_CLINICOS)),
 ) -> dict[str, Any]:
     """Devuelve el detalle de un registro clinico para revisarlo.
 
@@ -459,7 +487,7 @@ async def _avanzar(record_id: UUID, destino: str, user: dict[str, Any]) -> dict[
 
 @router.post("/records/{record_id}/review")
 async def review_record(
-    record_id: UUID, user: dict[str, Any] = Depends(require_role(*_ROLES))
+    record_id: UUID, user: dict[str, Any] = Depends(require_role(*_ROLES_CLINICOS))
 ) -> dict[str, Any]:
     """Marca un borrador como revisado; el usuario queda como revisor.
 
@@ -475,7 +503,7 @@ async def review_record(
 
 @router.post("/records/{record_id}/sign")
 async def sign_record(
-    record_id: UUID, user: dict[str, Any] = Depends(require_role(*_ROLES))
+    record_id: UUID, user: dict[str, Any] = Depends(require_role(*_ROLES_CLINICOS))
 ) -> dict[str, Any]:
     """Firma un registro revisado. Desde aqui no se modifica ni se borra durante 20 anos.
 
@@ -491,7 +519,7 @@ async def sign_record(
 
 @router.post("/records/{record_id}/submit")
 async def submit_record(
-    record_id: UUID, user: dict[str, Any] = Depends(require_role(*_ROLES))
+    record_id: UUID, user: dict[str, Any] = Depends(require_role(*_ROLES_CLINICOS))
 ) -> dict[str, Any]:
     """Marca un registro firmado como enviado (RIPS presentado).
 

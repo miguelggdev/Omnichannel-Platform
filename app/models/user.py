@@ -27,7 +27,7 @@ class User(TenantBaseModel):
         password_hash: Hash bcrypt del password.
         first_name: Nombre del usuario.
         last_name: Apellido del usuario.
-        role: Rol del usuario (super_admin, admin, supervisor, agent).
+        role: Rol del usuario (super_admin, admin, supervisor, agent, medical).
         is_active: Si el usuario está activo.
         last_login_at: Último login exitoso.
     """
@@ -47,6 +47,9 @@ class User(TenantBaseModel):
             "admin",
             "supervisor",
             "agent",
+            # Sprint 13: acceso a datos clinicos sin los permisos de un admin
+            # del tenant (migracion 020, ADR-073).
+            "medical",
             name="user_role",
             create_type=False,
         ),
