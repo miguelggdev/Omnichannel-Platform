@@ -109,7 +109,7 @@ async def _proteger_mensaje_entrante(state: ConversationState) -> None:
     El dictado ya se uso (esta en el estado en memoria y en la respuesta del
     LLM); dejarlo ademas en claro lo pondria en el historial, en el inbox, en
     el export RGPD de contactos y —si fue por telefono— en
-    `call_records.transcript`, fuera del cifrado y de la retencion de la
+    `call_records.transcript`, legible desde el CRM y fuera de la retencion de la
     historia clinica. El registro que interesa vive cifrado en
     `clinical_records`.
 

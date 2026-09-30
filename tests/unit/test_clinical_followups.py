@@ -404,7 +404,7 @@ class TestPrivacidadDelContenidoClinico:
         sql = [str(s).lower() for s in sesion.executed]
         assert not any(t.startswith("update messages") for t in sql)
         assert any("update conversations" in t for t in sql)
-        assert any("update call_records" in t for t in sql)
+        assert any("from call_records" in t for t in sql)
 
     async def test_marca_la_conversacion_y_redacta_las_llamadas_ya_guardadas(
         self, monkeypatch: pytest.MonkeyPatch
@@ -422,7 +422,7 @@ class TestPrivacidadDelContenidoClinico:
         sql = [str(s).lower() for s in sesion.executed]
         assert sql[0].startswith("update messages")
         assert "'{\"clinical\": true}'" in sql[1] or '"clinical": true' in sql[1]
-        assert "jsonb_set" in sql[2]
+        assert "from call_records" in sql[2]
 
     def test_redactar_transcripcion_conserva_rol_y_hora(self) -> None:
         from app.services.clinical_privacy import (

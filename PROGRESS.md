@@ -557,7 +557,7 @@ Las siguientes 11 features fueron diseñadas e integradas en los sprints existen
 
 ### Pendiente
 - [ ] **Mergear #50 y luego #51** (el #51 ya incluye la rama del #50; al mergear el #50 el diff del #51 queda reducido a lo de Dev B)
-- [x] ~~`call_records.transcript` en claro con dictados clínicos~~ — resuelto (decisión del usuario: **no cifrar**; se redacta el texto de los turnos de toda llamada cuya conversación fue clínica, conservando rol y hora). Ver `app/services/clinical_privacy.py` y ADR-072
+- [x] ~~`call_records.transcript` en claro con dictados clínicos~~ — resuelto: se redacta el texto de los turnos de toda llamada cuya conversación fue clínica (rol y hora se conservan) **y**, por decisión posterior del usuario, la columna va cifrada con `EncryptedJSON` (migración 019). Ver `app/services/clinical_privacy.py` y ADR-072 addendum 3
 - [ ] El agente no llena `clinical_records.call_record_id` cuando el dictado llegó por voz (ligar el `CallSid` de la conversación con `call_records`)
 - [ ] **Cargar el dataset oficial** de CIE-10 y CUPS (Resolución 5171 de 2017) con `scripts/load_clinical_catalogs.py` en cada entorno; no está en el repo. Hasta entonces rige el subconjunto de referencia (36 CIE-10, 2 CUPS)
 - [ ] **Infra:** rol de la aplicación solo con `SELECT` sobre `cie10_catalog`/`cups_catalog`; `REVOKE UPDATE, DELETE` sobre `audit_logs` (deuda de Sprint 8)

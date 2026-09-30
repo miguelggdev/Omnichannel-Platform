@@ -5,11 +5,11 @@ que interesa vive cifrado en `clinical_records`; este modulo evita que el mismo
 texto quede ademas en claro en otras tablas:
 
 - `messages.content` y los logs los protege el nodo clinico y `respond`;
-- **`call_records.transcript`** (canal de voz, Dev A) es JSONB en claro. Cifrarlo
-  se descarto (decision del usuario: rompe el listado de llamadas del CRM); en
-  su lugar se **redacta el texto de los turnos** de toda llamada cuya conversacion
-  fue clinica y se conservan el rol y la hora de cada turno, que bastan para el
-  listado y para auditar la llamada.
+- **`call_records.transcript`** (canal de voz, Dev A) va **cifrada** (`EncryptedJSON`,
+  migracion 019), pero el CRM la descifra para cualquier usuario del tenant; por
+  eso ademas se **redacta el texto de los turnos** de toda llamada cuya
+  conversacion fue clinica, y se conservan el rol y la hora de cada turno, que
+  bastan para el listado y para auditar la llamada.
 
 El intent solo se conoce dentro del grafo, y la transcripcion la guarda la
 sesion de la llamada al colgar (`voice_tasks.guardar_llamada`), a veces *antes*
@@ -26,8 +26,10 @@ perder detalle de lo no clinico que dejar un dictado en claro.
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.call_record import CallRecord
 
 #: Lo que queda en `messages.content` y en `call_records.transcript` de un turno clinico.
 CONTENIDO_CLINICO_PROTEGIDO = "[contenido clínico protegido]"
@@ -45,22 +47,6 @@ _ES_CLINICA = text(
     SELECT COALESCE((metadata ->> 'clinical')::boolean, false)
     FROM conversations
     WHERE id = :conversation_id AND client_id = :client_id
-    """
-)
-
-_REDACTAR_LLAMADAS = text(
-    """
-    UPDATE call_records
-    SET transcript = COALESCE(
-        (
-            SELECT jsonb_agg(jsonb_set(turno, '{text}', to_jsonb(CAST(:marcador AS text))))
-            FROM jsonb_array_elements(transcript) AS turno
-        ),
-        '[]'::jsonb
-    )
-    WHERE client_id = :client_id
-      AND (conversation_id = :conversation_id OR call_sid = :call_sid)
-      AND jsonb_array_length(transcript) > 0
     """
 )
 
@@ -132,13 +118,16 @@ async def proteger_llamadas_de_la_conversacion(
         conversation_id: Conversacion clinica.
         call_sid: `CallSid` de la llamada en curso, si el canal es voz.
     """
-    await session.execute(
-        _REDACTAR_LLAMADAS,
-        {
-            "client_id": str(client_id),
-            "conversation_id": str(conversation_id),
-            "marcador": CONTENIDO_CLINICO_PROTEGIDO,
-            # Sin CallSid no debe coincidir con ninguna fila (`= NULL` nunca es cierto).
-            "call_sid": call_sid,
-        },
+    # Sin CallSid no debe coincidir con ninguna fila (`= NULL` nunca es cierto).
+    ligada = CallRecord.conversation_id == conversation_id
+    filtro = or_(ligada, CallRecord.call_sid == call_sid) if call_sid else ligada
+    # La transcripcion va cifrada: no se puede redactar con `jsonb_set` en SQL.
+    # Se lee (descifrada), se redacta en Python y se reescribe (cifrada).
+    resultado = await session.execute(
+        select(CallRecord).where(CallRecord.client_id == client_id, filtro)
     )
+    llamadas = resultado.scalars().all()
+    for llamada in llamadas:
+        if llamada.transcript:
+            llamada.transcript = redactar_transcripcion(llamada.transcript)
+    await session.flush()
