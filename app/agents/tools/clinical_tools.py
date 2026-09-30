@@ -44,9 +44,11 @@ from app.core.config import get_settings
 from app.core.database import tenant_session
 from app.core.habeas_data import HabeasDataCompliance, HabeasDataError, normalizar_documento
 from app.middleware.token_budget import TokenBudgetGuard
+from app.services.channel_identity import identidad_verificada
 from app.services.clinical import (
     ClinicalValidationError,
     crear_registro_rips,
+    es_profesional_clinico,
     obtener_historial,
     validar_registro_rips,
 )
@@ -81,6 +83,45 @@ SIN_PROFESIONAL = (
     "No se identifico al profesional que dicta en esta conversacion, asi que no puedo "
     "registrar ni consultar datos clinicos."
 )
+
+NO_AUTORIZADO = (
+    "No estas autorizado para usar el modulo clinico desde este canal. Un administrador "
+    "debe declararte como profesional, y solo se acepta un canal que identifique de verdad "
+    "al contacto (no llamadas ni email)."
+)
+
+
+async def _profesional(config: RunnableConfig) -> UUID | dict[str, Any]:
+    """Comprueba, dentro de la tool, que quien escribe es un profesional autorizado.
+
+    Defensa en profundidad del chequeo de `clinical_agent_node()`: las tools que
+    tocan datos de un paciente no dependen solo de que el nodo las haya
+    filtrado (igual que `marketing_tools._no_autorizado`). Exige el contacto de
+    la conversacion, un canal que lo identifique de verdad y que el tenant lo
+    haya declarado profesional.
+
+    Args:
+        config: Config que inyecta el nodo, con `client_id`, `contact_id` y `channel`.
+
+    Returns:
+        El UUID del profesional; si no puede operar, la respuesta de error de la
+        tool (`_fallo(...)`).
+    """
+    contacto = _uuid_opcional(config, "contact_id")
+    if contacto is None:
+        return _fallo(SIN_PROFESIONAL)
+    client_id = _client_id(config)
+    if identidad_verificada(config.get("configurable", {}).get("channel")):
+        async with tenant_session(client_id) as session:
+            if await es_profesional_clinico(session, client_id, contacto):
+                return contacto
+    logger.warning(
+        "Contacto %s del tenant %s intento usar una tool clinica sin estar autorizado",
+        contacto,
+        client_id,
+    )
+    return _fallo(NO_AUTORIZADO)
+
 
 NO_ENCONTRADO = (
     "No hay coincidencias en el catalogo local. No propongas un codigo: pidele al "
@@ -188,6 +229,10 @@ async def extract_medical_entities(text: str, config: RunnableConfig) -> dict[st
         return _fallo("El dictado esta vacio")
     if len(texto) > MAX_LARGO_DICTADO:
         return _fallo(f"El dictado supera {MAX_LARGO_DICTADO} caracteres; dividelo en partes")
+
+    autorizado = await _profesional(config)
+    if isinstance(autorizado, dict):
+        return autorizado
 
     client_id = _client_id(config)
     modelo = get_settings().OPENAI_FALLBACK_MODEL
@@ -325,9 +370,9 @@ async def register_patient_consent(
         document_number: Numero de documento del paciente.
         consent_type: Como se otorgo: verbal, digital o written.
     """
-    profesional = _uuid_opcional(config, "contact_id")
-    if profesional is None:
-        return _fallo(SIN_PROFESIONAL)
+    profesional = await _profesional(config)
+    if isinstance(profesional, dict):
+        return profesional
     client_id = _client_id(config)
     try:
         normalizar_documento(document_type, document_number)
@@ -378,9 +423,9 @@ async def create_rips_record(
         specialty: Especialidad medica.
         notes: Notas SOAP con las claves subjective, objective, assessment y plan.
     """
-    profesional = _uuid_opcional(config, "contact_id")
-    if profesional is None:
-        return _fallo(SIN_PROFESIONAL)
+    profesional = await _profesional(config)
+    if isinstance(profesional, dict):
+        return profesional
     client_id = _client_id(config)
 
     try:
@@ -447,8 +492,9 @@ async def get_patient_history(
         document_number: Numero de documento del paciente.
         limit: Maximo de registros a devolver (hasta 20).
     """
-    if _uuid_opcional(config, "contact_id") is None:
-        return _fallo(SIN_PROFESIONAL)
+    autorizado = await _profesional(config)
+    if isinstance(autorizado, dict):
+        return autorizado
     client_id = _client_id(config)
     try:
         normalizar_documento(document_type, document_number)

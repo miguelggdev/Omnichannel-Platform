@@ -6,6 +6,7 @@ transaccion que inserta, que el trigger de auditoria no copia contenido clinico
 a `audit_logs`, y que la anonimizacion respeta la historia clinica firmada.
 """
 
+import json
 import os
 import uuid
 from collections.abc import AsyncGenerator
@@ -62,6 +63,7 @@ async def tenant() -> AsyncGenerator[uuid.UUID, None]:
                 "audit_logs",
                 "conversations",
                 "users",
+                "agent_configs",
                 "contacts",
             ):
                 await conexion.execute(
@@ -89,11 +91,33 @@ async def profesional(tenant: uuid.UUID) -> uuid.UUID:
             ),
             {"id": str(contacto), "cid": str(tenant)},
         )
+        # El tenant lo declara profesional: sin esto las tools no lo dejan operar.
+        await session.execute(
+            text(
+                "INSERT INTO agent_configs (client_id, name, config) "
+                "VALUES (:cid, 'clinico', CAST(:config AS jsonb))"
+            ),
+            {
+                "cid": str(tenant),
+                "config": json.dumps(
+                    {
+                        "enabled_agents": ["rag", "clinical"],
+                        "clinical": {"professional_contact_ids": [str(contacto)]},
+                    }
+                ),
+            },
+        )
     return contacto
 
 
 def _config(client_id: uuid.UUID, contacto: uuid.UUID) -> dict[str, Any]:
-    return {"configurable": {"client_id": str(client_id), "contact_id": str(contacto)}}
+    return {
+        "configurable": {
+            "client_id": str(client_id),
+            "contact_id": str(contacto),
+            "channel": "whatsapp",
+        }
+    }
 
 
 def _rips(**over: Any) -> dict[str, Any]:
@@ -616,10 +640,12 @@ async def test_una_atencion_reciente_extiende_la_retencion_de_las_antiguas(
     tenant: uuid.UUID, profesional: uuid.UUID
 ) -> None:
     """El plazo corre desde la ULTIMA atencion del paciente, no desde cada registro."""
-    from datetime import date
+    # La fecha de "hoy" es la de Colombia, la que valida el servicio: en UTC ya
+    # es "manana" durante cinco horas cada noche y el registro se rechazaba.
+    from app.services.clinical import _hoy_colombia
 
     await _firmado(tenant, profesional, service_date="2001-03-01")
-    await _un_registro(tenant, profesional, service_date=date.today().isoformat())
+    await _un_registro(tenant, profesional, service_date=_hoy_colombia().isoformat())
 
     with pytest.raises(DBAPIError, match="no se puede borrar"):
         await _sql(
@@ -729,9 +755,14 @@ async def _llamada(tenant: uuid.UUID, conversacion: uuid.UUID, transcript: str) 
     )
 
 
-async def _transcripcion(tenant: uuid.UUID) -> list[Any]:
+async def _transcripcion(tenant: uuid.UUID) -> str:
+    """Transcripcion descifrada, como texto; la columna es `BYTEA` cifrado (migracion 019)."""
+    from app.core.config import get_settings
+
     (fila,) = await _filas(
-        tenant, "SELECT transcript::text FROM call_records WHERE client_id = :cid"
+        tenant,
+        "SELECT pgp_sym_decrypt(transcript, :clave) FROM call_records WHERE client_id = :cid",
+        clave=get_settings().ENCRYPTION_KEY,
     )
     return fila[0]
 
@@ -771,8 +802,27 @@ async def test_la_transcripcion_ya_guardada_se_redacta_al_volverse_clinica(
     assert "hipertension" not in transcripcion
     assert transcripcion.count("[contenido cl") == 2
     # Rol y hora se conservan: el listado del CRM y la auditoria siguen sirviendo.
-    assert '"role": "caller"' in transcripcion
-    assert "2026-09-29T15:00:05" in transcripcion
+    turnos = json.loads(transcripcion)
+    assert [t["role"] for t in turnos] == ["caller", "agent"]
+    assert turnos[0]["timestamp"] == "2026-09-29T15:00:05+00:00"
+
+
+async def test_la_transcripcion_de_una_llamada_no_clinica_esta_cifrada_en_disco(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    """Sin acceso a la clave, `psql` ve bytes: ni el texto ni el JSON aparecen."""
+    conversacion = await _conversacion(tenant, profesional)
+    await _mensaje_de_voz(tenant, conversacion)
+    await _llamada(tenant, conversacion, "quiero una cita el martes")
+
+    (fila,) = await _filas(
+        tenant,
+        "SELECT pg_typeof(transcript)::text, position('cita'::bytea IN transcript) "
+        "FROM call_records WHERE client_id = :cid",
+    )
+    assert fila[0] == "bytea"
+    assert fila[1] == 0
+    assert "quiero una cita el martes" in await _transcripcion(tenant)
 
 
 async def test_la_transcripcion_que_se_guarda_despues_tambien_sale_redactada(
@@ -836,3 +886,88 @@ async def test_marcar_la_conversacion_no_pisa_el_resto_de_su_metadata(
         tenant, "SELECT metadata::text FROM conversations WHERE id = :conv", conv=str(conversacion)
     )
     assert "handoff" in fila[0]
+
+
+async def test_un_canal_de_voz_no_autoriza_aunque_el_numero_este_en_la_lista(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    """El caller ID se falsifica: suplantar el numero de un profesional no da acceso."""
+    from app.agents.tools import clinical_tools as ct
+
+    llamada = {
+        "configurable": {
+            **_config(tenant, profesional)["configurable"],
+            "channel": "voice",
+        }
+    }
+
+    resultado = await ct.get_patient_history.ainvoke(
+        {"document_type": "CC", "document_number": DOCUMENTO}, config=llamada
+    )
+    creado = await ct.create_rips_record.ainvoke(_rips(), config=llamada)
+
+    assert resultado["error"] == ct.NO_AUTORIZADO
+    assert creado["error"] == ct.NO_AUTORIZADO
+    assert await _filas(tenant, "SELECT 1 FROM clinical_records WHERE client_id = :cid") == []
+
+
+async def test_un_contacto_que_no_esta_en_la_lista_no_opera_ni_por_whatsapp(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    from app.agents.tools import clinical_tools as ct
+
+    otro = uuid.uuid4()
+    await _sql(
+        tenant,
+        "INSERT INTO contacts (id, client_id, display_name) VALUES (:id, :cid, 'Cliente')",
+        id=str(otro),
+    )
+
+    resultado = await ct.create_rips_record.ainvoke(_rips(), config=_config(tenant, otro))
+
+    assert resultado["error"] == ct.NO_AUTORIZADO
+
+
+async def test_una_llamada_corta_guardada_antes_de_ligarse_a_la_conversacion_tambien_se_redacta(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    """La transcripcion se guarda al colgar, antes de que la llamada tenga conversation_id."""
+    from app.agents.nodes import clinical as nodo
+    from app.tasks.voice_tasks import guardar_llamada
+
+    conversacion = await _conversacion(tenant, profesional)
+    # Sin mensajes todavia: el guardado no puede ligar la llamada a la conversacion.
+    await guardar_llamada(
+        tenant,
+        "CA-corta-1",
+        {
+            "direction": "inbound",
+            "status": "completed",
+            "started_at": "2026-09-29T15:00:00+00:00",
+            "transcript": [
+                {
+                    "role": "caller",
+                    "text": "paciente Ana Perez",
+                    "timestamp": "2026-09-29T15:00:05+00:00",
+                }
+            ],
+        },
+    )
+    (fila,) = await _filas(
+        tenant, "SELECT conversation_id IS NULL FROM call_records WHERE client_id = :cid"
+    )
+    assert fila[0] is True
+    assert "Ana Perez" in await _transcripcion(tenant)
+
+    await nodo._proteger_mensaje_entrante(
+        {
+            "client_id": str(tenant),
+            "conversation_id": str(conversacion),
+            "channel": "voice",
+            "message": {"external_message_id": "CA-corta-1:0"},
+        }
+    )
+
+    transcripcion = await _transcripcion(tenant)
+    assert "Ana Perez" not in transcripcion
+    assert "[contenido cl" in transcripcion

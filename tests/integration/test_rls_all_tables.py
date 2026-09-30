@@ -910,9 +910,10 @@ class TestRLSVozYClinico:
             table="call_records",
             insert_sql="""
                 INSERT INTO call_records (id, client_id, call_sid, direction, status,
-                                          phone_from, started_at)
+                                          phone_from, transcript, started_at)
                 VALUES (:id, :client_id, :sid, 'inbound', 'in-progress',
-                        pgp_sym_encrypt('+573001234567', :clave), now())
+                        pgp_sym_encrypt('+573001234567', :clave),
+                        pgp_sym_encrypt('[]', :clave), now())
             """,
             params={
                 "id": str(uuid.uuid4()),

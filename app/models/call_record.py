@@ -30,7 +30,7 @@ from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, St
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.encryption import EncryptedString
+from app.core.encryption import EncryptedJSON, EncryptedString
 from app.models.base import TenantBaseModel
 
 #: Estados de una llamada, tal como los reporta Twilio (`CallStatus`).
@@ -85,7 +85,7 @@ class CallRecord(TenantBaseModel):
         started_at: Inicio de la llamada.
         ended_at: Fin de la llamada, si ya termino.
         duration_seconds: Duracion que reporta Twilio (`CallDuration`).
-        transcript: Turnos de la llamada, `[{role, text, timestamp}]`.
+        transcript: Turnos de la llamada, `[{role, text, timestamp}]`, cifrados.
         recording_url: URL de la grabacion en Twilio, si se grabo.
         recording_duration: Duracion de la grabacion en segundos.
         metadata_: Datos extra del proveedor (columna `metadata`).
@@ -118,9 +118,10 @@ class CallRecord(TenantBaseModel):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     duration_seconds: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
-    transcript: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONB, server_default="[]", nullable=False
-    )
+    # Cifrada (migracion 019): es lo que dijeron las dos partes, y en un
+    # consultorio incluye datos de salud. Sin `server_default`: un default no
+    # puede cifrarse sin la clave, y la aplicacion siempre manda la lista.
+    transcript: Mapped[list[dict[str, Any]]] = mapped_column(EncryptedJSON, nullable=False)
     recording_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     recording_duration: Mapped[int | None] = mapped_column(Integer, nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column(

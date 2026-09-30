@@ -105,6 +105,9 @@ async def responder_con_tools(
             "client_id": client_id,
             "conversation_id": conversation_id,
             "contact_id": state.get("contact_id"),
+            # Las tools que autorizan por contacto comprueban ademas que el
+            # canal lo identifique de verdad (services/channel_identity.py).
+            "channel": state.get("channel"),
         }
     }
 

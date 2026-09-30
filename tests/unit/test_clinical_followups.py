@@ -404,7 +404,7 @@ class TestPrivacidadDelContenidoClinico:
         sql = [str(s).lower() for s in sesion.executed]
         assert not any(t.startswith("update messages") for t in sql)
         assert any("update conversations" in t for t in sql)
-        assert any("update call_records" in t for t in sql)
+        assert any("from call_records" in t for t in sql)
 
     async def test_marca_la_conversacion_y_redacta_las_llamadas_ya_guardadas(
         self, monkeypatch: pytest.MonkeyPatch
@@ -422,7 +422,7 @@ class TestPrivacidadDelContenidoClinico:
         sql = [str(s).lower() for s in sesion.executed]
         assert sql[0].startswith("update messages")
         assert "'{\"clinical\": true}'" in sql[1] or '"clinical": true' in sql[1]
-        assert "jsonb_set" in sql[2]
+        assert "from call_records" in sql[2]
 
     def test_redactar_transcripcion_conserva_rol_y_hora(self) -> None:
         from app.services.clinical_privacy import (
@@ -615,3 +615,202 @@ class TestCargadorDeCatalogos:
 
         with pytest.raises(SystemExit):
             list(cargador.leer_filas(archivo))
+
+
+ARGS_GRAFO = {
+    "client_id": str(CLIENT_ID),
+    "conversation_id": str(uuid.uuid4()),
+    "contact_id": str(uuid.uuid4()),
+    "channel": "whatsapp",
+    "message_data": {"text": "dictado", "external_message_id": "wamid.1"},
+}
+
+
+class _GrafoQueFalla:
+    async def ainvoke(self, state: Any, config: Any = None) -> dict[str, Any]:
+        raise RuntimeError("openai caido tras el checkpoint")
+
+
+class _GrafoOk:
+    def __init__(self, intent: str) -> None:
+        self.intent = intent
+
+    async def ainvoke(self, state: Any, config: Any = None) -> dict[str, Any]:
+        return {"intent": self.intent}
+
+
+class TestPurgaDeCheckpoints:
+    """Si el turno revienta despues del checkpoint, el dictado ya esta en esas tablas."""
+
+    def _preparar(self, monkeypatch: pytest.MonkeyPatch, grafo: Any, es_clinica: bool) -> list[str]:
+        purgas: list[str] = []
+
+        async def _compile() -> Any:
+            return grafo
+
+        async def _purgar(client_id: str, conversation_id: str) -> None:
+            purgas.append(conversation_id)
+
+        async def _clinica(client_id: str, conversation_id: str) -> bool:
+            return es_clinica
+
+        monkeypatch.setattr(tarea, "_compile_graph", _compile)
+        monkeypatch.setattr(tarea, "_purgar_checkpoints", _purgar)
+        monkeypatch.setattr(tarea, "_conversacion_clinica", _clinica)
+        return purgas
+
+    async def test_purga_aunque_el_grafo_lance_si_la_conversacion_es_clinica(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        purgas = self._preparar(monkeypatch, _GrafoQueFalla(), es_clinica=True)
+
+        with pytest.raises(RuntimeError):
+            await tarea._invoke_graph(**ARGS_GRAFO)
+
+        assert purgas == [ARGS_GRAFO["conversation_id"]]
+
+    async def test_la_excepcion_original_no_se_esconde(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`ai_processor` reintenta o escala segun la excepcion que salga del grafo."""
+        self._preparar(monkeypatch, _GrafoQueFalla(), es_clinica=True)
+
+        with pytest.raises(RuntimeError, match="openai caido"):
+            await tarea._invoke_graph(**ARGS_GRAFO)
+
+    async def test_una_conversacion_no_clinica_que_falla_no_se_purga(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        purgas = self._preparar(monkeypatch, _GrafoQueFalla(), es_clinica=False)
+
+        with pytest.raises(RuntimeError):
+            await tarea._invoke_graph(**ARGS_GRAFO)
+
+        assert purgas == []
+
+    async def test_purga_tras_un_turno_clinico_exitoso(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        purgas = self._preparar(monkeypatch, _GrafoOk("clinical"), es_clinica=False)
+
+        await tarea._invoke_graph(**ARGS_GRAFO)
+
+        assert purgas == [ARGS_GRAFO["conversation_id"]]
+
+    async def test_un_turno_no_clinico_de_una_conversacion_clinica_tambien_se_purga(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        purgas = self._preparar(monkeypatch, _GrafoOk("greeting"), es_clinica=True)
+
+        await tarea._invoke_graph(**ARGS_GRAFO)
+
+        assert len(purgas) == 1
+
+    async def test_un_turno_normal_no_se_purga(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        purgas = self._preparar(monkeypatch, _GrafoOk("rag_query"), es_clinica=False)
+
+        await tarea._invoke_graph(**ARGS_GRAFO)
+
+        assert purgas == []
+
+    async def test_un_fallo_al_comprobar_la_marca_no_esconde_la_excepcion_del_grafo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import app.core.database as db
+
+        def _roto(cid: Any) -> Any:
+            raise RuntimeError("db caida")
+
+        monkeypatch.setattr(db, "tenant_session", _roto)
+
+        assert await tarea._conversacion_clinica(str(CLIENT_ID), str(uuid.uuid4())) is False
+
+
+class TestSentimientoNoVeLoClinico:
+    async def test_un_turno_clinico_no_se_manda_al_llm_de_sentimiento(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.agents.nodes import sentiment as sent
+
+        def _no(*_a: Any, **_k: Any) -> None:
+            raise AssertionError("el dictado no debia llegar al analisis de sentimiento")
+
+        monkeypatch.setattr(sent, "get_agent_settings", _no)
+        monkeypatch.setattr(sent, "_clasificar", _no)
+        monkeypatch.setattr(sent, "_guardar_en_mensaje", _no)
+
+        resultado = await sent.sentiment_analysis_node(
+            estado(
+                client_id=str(CLIENT_ID),
+                conversation_id=str(uuid.uuid4()),
+                intent="clinical",
+                message={"text": "paciente Ana Perez con hipertension", "external_message_id": "x"},
+            )
+        )
+
+        assert resultado == {}
+
+
+class TestLlamadaCortaSinConversacion:
+    """La transcripcion se guarda antes de que voice_tasks ligue la llamada a la conversacion."""
+
+    async def test_la_redaccion_tambien_busca_por_call_sid(self) -> None:
+        from app.services.clinical_privacy import proteger_llamadas_de_la_conversacion
+
+        sesion = FakeSession()
+
+        await proteger_llamadas_de_la_conversacion(
+            sesion,  # type: ignore[arg-type]
+            CLIENT_ID,
+            uuid.uuid4(),
+            "CA-corta",
+        )
+
+        assert "call_sid = :call_sid" in str(sesion.executed[0]).lower()
+
+    async def test_el_nodo_pasa_el_call_sid_de_un_mensaje_de_voz(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sesion = parchear_tenant_session(monkeypatch, nodo, FakeSession())
+        capturado: dict[str, Any] = {}
+
+        async def _proteger(
+            session: Any, client_id: Any, conversation_id: Any, call_sid: Any = None
+        ) -> None:
+            capturado["call_sid"] = call_sid
+
+        monkeypatch.setattr(nodo, "proteger_llamadas_de_la_conversacion", _proteger)
+
+        await nodo._proteger_mensaje_entrante(
+            estado(
+                client_id=str(CLIENT_ID),
+                conversation_id=str(uuid.uuid4()),
+                channel="voice",
+                message={"external_message_id": "CA-corta:3"},
+            )
+        )
+
+        assert capturado["call_sid"] == "CA-corta"
+        assert sesion is not None
+
+    async def test_en_otros_canales_no_hay_call_sid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        parchear_tenant_session(monkeypatch, nodo, FakeSession())
+        capturado: dict[str, Any] = {}
+
+        async def _proteger(
+            session: Any, client_id: Any, conversation_id: Any, call_sid: Any = None
+        ) -> None:
+            capturado["call_sid"] = call_sid
+
+        monkeypatch.setattr(nodo, "proteger_llamadas_de_la_conversacion", _proteger)
+
+        await nodo._proteger_mensaje_entrante(
+            estado(
+                client_id=str(CLIENT_ID),
+                conversation_id=str(uuid.uuid4()),
+                channel="whatsapp",
+                message={"external_message_id": "wamid:1"},
+            )
+        )
+
+        assert capturado["call_sid"] is None

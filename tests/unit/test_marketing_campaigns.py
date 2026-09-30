@@ -35,7 +35,14 @@ from app.tasks.celery_app import TASK_MODULES
 from app.tasks.celery_config import celery_app
 
 CLIENT_ID = str(uuid4())
-CONFIG = {"configurable": {"client_id": CLIENT_ID, "contact_id": None, "conversation_id": None}}
+CONFIG = {
+    "configurable": {
+        "client_id": CLIENT_ID,
+        "contact_id": None,
+        "conversation_id": None,
+        "channel": "whatsapp",
+    }
+}
 
 
 class _Resultado:
@@ -797,7 +804,7 @@ class TestNodosNuevos:
         monkeypatch.setattr(marketing_node_mod, "responder_con_tools", con_tools)
 
         resultado = await marketing_node_mod.marketing_node(
-            {"client_id": CLIENT_ID, "message": {"text": "crear campana"}}
+            {"client_id": CLIENT_ID, "channel": "whatsapp", "message": {"text": "crear campana"}}
         )
 
         assert resultado["response_text"] == "Campana creada."
@@ -978,3 +985,52 @@ class TestOperadoresDeMarketing:
         # Solo se leyo la configuracion: nada de contactos ni de campanas.
         assert len(sesion.ejecutadas) == 1
         assert sesion.added == []
+
+
+class TestCanalSinIdentidadVerificada:
+    """El caller ID de una llamada y el `From` de un email se falsifican (ADR-072)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("canal", ["voice", "email", "webchat", None])
+    async def test_el_nodo_no_atiende_a_un_operador_por_ese_canal(
+        self, monkeypatch, canal: str | None
+    ) -> None:
+        monkeypatch.setattr(
+            marketing_node_mod,
+            "get_agent_settings",
+            AsyncMock(return_value=SimpleNamespace(enabled_agents=("marketing",), model="gpt-4o")),
+        )
+        es_operador = AsyncMock(return_value=True)
+        monkeypatch.setattr(marketing_node_mod, "es_operador_de_marketing", es_operador)
+        con_tools = AsyncMock(return_value="no debia llamarse")
+        monkeypatch.setattr(marketing_node_mod, "responder_con_tools", con_tools)
+
+        resultado = await marketing_node_mod.marketing_node(
+            {
+                "client_id": CLIENT_ID,
+                "channel": canal,
+                "contact_id": "operador",
+                "message": {"text": "manda una promo"},
+            }
+        )
+
+        assert resultado["response_text"] == marketing_node_mod.MENSAJE_NO_AUTORIZADO
+        con_tools.assert_not_awaited()
+        es_operador.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_las_tools_tampoco_operan_por_llamada_aunque_sea_operador(
+        self, monkeypatch
+    ) -> None:
+        sesion = _SesionFalsa(
+            [_Resultado([SimpleNamespace(config={"marketing": {"operator_contact_ids": ["op"]}})])]
+        )
+        monkeypatch.setattr(mt, "tenant_session", _sesion(sesion))
+        llamada = {
+            "configurable": {**CONFIG["configurable"], "contact_id": "op", "channel": "voice"}
+        }
+
+        respuesta = await mt.segment_contacts.ainvoke({"criteria": {}}, config=llamada)
+
+        assert respuesta == mt.NO_AUTORIZADO
+        assert sesion.ejecutadas == [], "ni siquiera se consulta la configuracion"

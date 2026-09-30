@@ -49,6 +49,7 @@ from app.services.campaigns import (
     plantilla_aprobada,
     plantillas_aprobadas,
 )
+from app.services.channel_identity import identidad_verificada
 from app.services.segmentation import CriterioInvalidoError, contar_segmento, resolver_segmento
 
 logger = logging.getLogger(__name__)
@@ -98,9 +99,10 @@ async def _no_autorizado(config: RunnableConfig) -> str | None:
     """
     client_id = _client_id(config)
     contact_id = config.get("configurable", {}).get("contact_id")
-    async with tenant_session(client_id) as session:
-        if await es_operador_de_marketing(session, client_id, contact_id):
-            return None
+    if identidad_verificada(config.get("configurable", {}).get("channel")):
+        async with tenant_session(client_id) as session:
+            if await es_operador_de_marketing(session, client_id, contact_id):
+                return None
     logger.warning(
         "Contacto %s del tenant %s intento usar una tool de marketing sin ser operador",
         contact_id,

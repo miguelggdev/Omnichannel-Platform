@@ -41,6 +41,7 @@ from app.agents.nodes._tenant import get_agent_settings
 from app.agents.tools.clinical_tools import CLINICAL_TOOLS
 from app.core.database import tenant_session
 from app.models.message import Message
+from app.services.channel_identity import identidad_verificada
 from app.services.clinical import es_profesional_clinico
 from app.services.clinical_privacy import (
     CONTENIDO_CLINICO_PROTEGIDO,
@@ -108,7 +109,7 @@ async def _proteger_mensaje_entrante(state: ConversationState) -> None:
     El dictado ya se uso (esta en el estado en memoria y en la respuesta del
     LLM); dejarlo ademas en claro lo pondria en el historial, en el inbox, en
     el export RGPD de contactos y —si fue por telefono— en
-    `call_records.transcript`, fuera del cifrado y de la retencion de la
+    `call_records.transcript`, legible desde el CRM y fuera de la retencion de la
     historia clinica. El registro que interesa vive cifrado en
     `clinical_records`.
 
@@ -144,7 +145,15 @@ async def _proteger_mensaje_entrante(state: ConversationState) -> None:
                     .values(content=CONTENIDO_CLINICO_PROTEGIDO)
                 )
             await marcar_conversacion_clinica(session, client_id, conversation_id)
-            await proteger_llamadas_de_la_conversacion(session, client_id, conversation_id)
+            # Una llamada corta se guarda antes de ligarse a la conversacion:
+            # ademas de por conversacion, se busca por el CallSid del mensaje
+            # (`CallSid:indice`, ver `voice_tasks`).
+            call_sid = (
+                externo.split(":", 1)[0] if externo and state.get("channel") == "voice" else None
+            )
+            await proteger_llamadas_de_la_conversacion(
+                session, client_id, conversation_id, call_sid
+            )
     except Exception:
         logger.exception("No se pudo proteger el contenido clinico de la conversacion")
 
@@ -168,13 +177,21 @@ async def clinical_agent_node(state: ConversationState) -> dict[str, Any]:
 
     # Sin gastar una llamada al LLM: un cliente final que dice "necesito el
     # historial de un paciente" no tiene que llegar a ver las tools.
-    async with tenant_session(UUID(client_id)) as session:
-        autorizado = await es_profesional_clinico(session, UUID(client_id), state.get("contact_id"))
+    # Y solo cuenta un canal que identifique de verdad al contacto: el caller ID
+    # de una llamada o el `From` de un email se falsifican.
+    autorizado = identidad_verificada(state.get("channel"))
+    if autorizado:
+        async with tenant_session(UUID(client_id)) as session:
+            autorizado = await es_profesional_clinico(
+                session, UUID(client_id), state.get("contact_id")
+            )
     if not autorizado:
         logger.warning(
-            "Contacto %s del tenant %s pidio el agente clinico sin ser profesional",
+            "Contacto %s del tenant %s pidio el agente clinico sin ser profesional "
+            "o por un canal sin identidad verificada (%s)",
             state.get("contact_id"),
             client_id,
+            state.get("channel"),
         )
         return {"response_text": MENSAJE_NO_AUTORIZADO, "intent": INTENT}
 
