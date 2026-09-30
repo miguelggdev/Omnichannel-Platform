@@ -8,6 +8,10 @@ cabecera: `codigo`/`code` y `descripcion`/`description`/`nombre`. Acepta coma o
 punto y coma y UTF-8 (con o sin BOM). El dataset oficial no se versiona en el
 repositorio: CIE-10 de la OMS/MinSalud y CUPS de la Resolucion 5171 de 2017.
 
+Los codigos CIE-10 pueden venir con o sin punto: los datasets oficiales y los RIPS
+los traen sin el (`E119`) y se guardan como `E11.9`, igual que como los dicta el
+profesional. Los CUPS son seis digitos.
+
 Es idempotente: recargar actualiza las descripciones existentes y agrega los
 codigos nuevos; nunca borra. Las filas cuyo codigo no cumple el formato se
 descartan y se cuentan en el resumen.

@@ -56,6 +56,7 @@ from app.services.clinical_catalog import (
     CIE10_PATTERN,
     CUPS_COMMON,
     CUPS_PATTERN,
+    normalizar_cie10,
     normalizar_codigo,
     normalizar_texto,
     verificar_codigos,
@@ -140,7 +141,7 @@ def _validar_diagnosticos(diagnosticos: list[dict[str, Any]]) -> list[dict[str, 
     normalizados: list[dict[str, Any]] = []
     vistos: set[str] = set()
     for item in diagnosticos or []:
-        codigo = normalizar_codigo(str(item.get("code") or ""))
+        codigo = normalizar_cie10(str(item.get("code") or ""))
         if not CIE10_PATTERN.match(codigo):
             raise ClinicalValidationError(
                 f"Codigo CIE-10 invalido: '{codigo}'. Formato esperado: J06.9, I10, A09"

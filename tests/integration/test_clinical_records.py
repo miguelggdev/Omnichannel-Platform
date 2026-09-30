@@ -675,10 +675,12 @@ async def test_catalogo_oficial_cargado_verifica_y_rechaza(
                 [
                     ("I10", "Hipertensión esencial (primaria)"),
                     ("S72.00", "Fractura del cuello del fémur"),
+                    # Los datasets oficiales y los RIPS traen el codigo sin punto.
+                    ("E119", "Diabetes mellitus tipo 2, sin mención de complicación"),
                     ("mal", "x"),
                 ],
             )
-        assert resumen == {"loaded": 2, "invalid": 1}
+        assert resumen == {"loaded": 3, "invalid": 1}
 
         await _consentir(tenant, profesional)
         # Un codigo oficial: verificado y con la descripcion del catalogo.
@@ -687,6 +689,15 @@ async def test_catalogo_oficial_cargado_verifica_y_rechaza(
         )
         assert ok["success"] is True, ok
         assert "unverified_codes" not in ok
+        # El mismo codigo dictado sin punto es el del catalogo (guardado como E11.9).
+        sin_punto = await _crear(
+            tenant,
+            profesional,
+            service_date="2025-01-17",
+            diagnosis_codes=[{"code": "e119", "type": "principal"}],
+        )
+        assert sin_punto["success"] is True, sin_punto
+        assert "unverified_codes" not in sin_punto
         # Uno con formato valido pero fuera del catalogo oficial: se rechaza.
         malo = await _crear(
             tenant,
@@ -701,6 +712,7 @@ async def test_catalogo_oficial_cargado_verifica_y_rechaza(
             assert (await buscar_en_catalogo(session, "cie10", "hipertension esencial"))[0][
                 "code"
             ] == "I10"
+            assert (await buscar_en_catalogo(session, "cie10", "E119"))[0]["code"] == "E11.9"
             assert await buscar_en_catalogo(session, "cie10", "50%") == []
     finally:
         async with admin.begin() as conexion:

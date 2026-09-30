@@ -28,7 +28,7 @@ el repositorio. Mientras tanto:
 
 import re
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Literal, TypedDict
 
 from sqlalchemy import select
@@ -42,6 +42,9 @@ CIE10_PATTERN = re.compile(r"^[A-Z][0-9]{2}(\.[0-9]{1,2})?$")
 
 #: Formato de un codigo CUPS: seis digitos.
 CUPS_PATTERN = re.compile(r"^[0-9]{6}$")
+
+#: Un CIE-10 sin punto: letra, dos digitos y hasta dos mas (`E119`, `I10`).
+_CIE10_SIN_PUNTO = re.compile(r"^[A-Z][0-9]{2,4}$")
 
 CIE10_COMMON: dict[str, str] = {
     "A08.4": "Infeccion intestinal viral, sin otra especificacion",
@@ -129,19 +132,47 @@ def normalizar_codigo(codigo: str) -> str:
     return "".join(codigo.split()).upper()
 
 
-def _buscar(catalogo: dict[str, str], consulta: str, limite: int) -> list[CodigoCatalogo]:
+def normalizar_cie10(codigo: str) -> str:
+    """Normaliza un codigo CIE-10 a su forma canonica, con punto (`E11.9`).
+
+    Los datasets oficiales y los RIPS escriben el codigo **sin punto** (`E119`,
+    `J069`); en el chat se dicta con el (`J06.9`). Las dos formas son el mismo
+    codigo y se guardan y se comparan como `E11.9`. Un codigo de tres
+    caracteres (`I10`) no lleva punto.
+
+    Args:
+        codigo: Codigo tal como llego (`" e119 "`, `"J06.9"`).
+
+    Returns:
+        El codigo canonico. Si no tiene forma de CIE-10 se devuelve limpio pero
+        sin tocar, para que falle la validacion de formato en vez de "arreglarse".
+    """
+    limpio = normalizar_codigo(codigo)
+    sin_punto = limpio.replace(".", "")
+    if _CIE10_SIN_PUNTO.match(sin_punto):
+        return f"{sin_punto[:3]}.{sin_punto[3:]}" if len(sin_punto) > 3 else sin_punto
+    return limpio
+
+
+def _buscar(
+    catalogo: dict[str, str],
+    consulta: str,
+    limite: int,
+    normalizador: Callable[[str], str] = normalizar_codigo,
+) -> list[CodigoCatalogo]:
     """Busca en un catalogo por codigo exacto o por las palabras de la consulta.
 
     Args:
         catalogo: `codigo -> descripcion`.
         consulta: Codigo o texto libre.
         limite: Maximo de resultados.
+        normalizador: Como se lleva un codigo a su forma canonica en este catalogo.
 
     Returns:
         Coincidencias: primero el codigo exacto y luego las descripciones que
         contienen **todas** las palabras de la consulta.
     """
-    codigo = normalizar_codigo(consulta)
+    codigo = normalizador(consulta)
     if codigo in catalogo:
         return [CodigoCatalogo(code=codigo, description=catalogo[codigo])]
 
@@ -165,7 +196,7 @@ def buscar_cie10(consulta: str, limite: int = 10) -> list[CodigoCatalogo]:
     Returns:
         Coincidencias del catalogo; vacio si no hay ninguna.
     """
-    return _buscar(CIE10_COMMON, consulta, limite)
+    return _buscar(CIE10_COMMON, consulta, limite, normalizar_cie10)
 
 
 def buscar_cups(consulta: str, limite: int = 10) -> list[CodigoCatalogo]:
@@ -188,6 +219,10 @@ _MODELOS: dict[str, type[Cie10Catalog] | type[CupsCatalog]] = {
     "cups": CupsCatalog,
 }
 _PATRONES = {"cie10": CIE10_PATTERN, "cups": CUPS_PATTERN}
+_NORMALIZADORES: dict[str, Callable[[str], str]] = {
+    "cie10": normalizar_cie10,
+    "cups": normalizar_codigo,
+}
 _MEMORIA = {"cie10": CIE10_COMMON, "cups": CUPS_COMMON}
 _LOTE = 1000
 
@@ -236,7 +271,7 @@ async def buscar_en_catalogo(
         return (buscar_cie10 if tipo == "cie10" else buscar_cups)(consulta, limite)
 
     modelo = _MODELOS[tipo]
-    codigo = normalizar_codigo(consulta)
+    codigo = _NORMALIZADORES[tipo](consulta)
     exacta = (
         await session.execute(select(modelo.code, modelo.description).where(modelo.code == codigo))
     ).first()
@@ -303,6 +338,7 @@ async def cargar_catalogo(
     """
     modelo = _MODELOS[tipo]
     patron = _PATRONES[tipo]
+    normalizador = _NORMALIZADORES[tipo]
     cargadas = 0
     invalidas = 0
     lote: list[dict[str, str]] = []
@@ -324,7 +360,7 @@ async def cargar_catalogo(
 
     vistos: set[str] = set()
     for codigo, descripcion in filas:
-        limpio = normalizar_codigo(codigo)
+        limpio = normalizador(codigo)
         texto = (descripcion or "").strip()
         if not patron.match(limpio) or not texto:
             invalidas += 1

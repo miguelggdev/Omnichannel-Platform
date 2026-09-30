@@ -140,6 +140,57 @@ class TestCatalogoOficial:
         assert resumen == {"loaded": 1, "invalid": 2}
         assert len(sesion.executed) == 1
 
+    @pytest.mark.parametrize(
+        ("crudo", "canonico"),
+        [
+            ("E119", "E11.9"),
+            (" e119 ", "E11.9"),
+            ("E11.9", "E11.9"),
+            ("J069", "J06.9"),
+            ("S7200", "S72.00"),
+            ("S72.00", "S72.00"),
+            ("I10", "I10"),
+            ("j00", "J00"),
+        ],
+    )
+    def test_el_cie10_sin_punto_de_los_datasets_oficiales_es_el_mismo_codigo(
+        self, crudo: str, canonico: str
+    ) -> None:
+        assert cat.normalizar_cie10(crudo) == canonico
+
+    @pytest.mark.parametrize("crudo", ["XX", "12345", "E1", "E11.999", "890201", ""])
+    def test_lo_que_no_parece_cie10_no_se_arregla(self, crudo: str) -> None:
+        assert not cat.CIE10_PATTERN.match(cat.normalizar_cie10(crudo))
+
+    async def test_cargar_cie10_acepta_los_codigos_sin_punto_y_no_los_repite(self) -> None:
+        sesion = FakeSession()
+
+        resumen = await cat.cargar_catalogo(
+            sesion,  # type: ignore[arg-type]
+            "cie10",
+            [("E119", "Diabetes"), ("E11.9", "Repetida"), ("J069", "Infeccion"), ("I10", "HTA")],
+        )
+
+        assert resumen == {"loaded": 3, "invalid": 0}
+
+    async def test_cargar_cups_no_toca_el_formato_de_los_codigos(self) -> None:
+        sesion = FakeSession()
+
+        resumen = await cat.cargar_catalogo(sesion, "cups", [("890201", "Consulta")])  # type: ignore[arg-type]
+
+        assert resumen == {"loaded": 1, "invalid": 0}
+
+    def test_buscar_en_el_catalogo_de_referencia_acepta_el_codigo_sin_punto(self) -> None:
+        [resultado] = cat.buscar_cie10("e119")
+
+        assert resultado["code"] == "E11.9"
+
+    def test_un_diagnostico_sin_punto_se_normaliza_al_validar_los_rips(self) -> None:
+        normalizados = svc._validar_diagnosticos([{"code": "e119", "type": "principal"}])
+
+        assert normalizados[0]["code"] == "E11.9"
+        assert normalizados[0]["catalog_verified"] is True
+
     async def test_cargar_es_un_upsert(self) -> None:
         sesion = FakeSession()
 
