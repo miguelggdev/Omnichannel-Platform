@@ -15,11 +15,29 @@ Uso:
 
 import asyncio
 import os
+import sys
 import uuid
 from collections.abc import AsyncGenerator, Generator
 
 import pytest
 import pytest_asyncio
+
+# ─── Event loop en Windows ──────────────────────────────────────────────────
+
+# `psycopg` (v3, async) no funciona sobre el `ProactorEventLoop`, que es el
+# default de asyncio en Windows desde Python 3.8: el pool no consigue abrir
+# ninguna conexion y `tests/integration/test_graph_flow.py` —el unico test que
+# usa el checkpointer de LangGraph, que va por psycopg y no por asyncpg— muere
+# con `psycopg_pool.PoolTimeout` tras 30 s, con este aviso en el log:
+#
+#     Psycopg cannot use the 'ProactorEventLoop' to run in async mode.
+#     Please use a compatible event loop, for instance by setting
+#     'asyncio.set_event_loop_policy(WindowsSelectorEventLoopPolicy())'
+#
+# El resto de la suite no lo nota porque va por `asyncpg`, que si soporta
+# Proactor. Guardado por plataforma: en Linux (el CI) no cambia nada.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # ─── Opciones de CLI ────────────────────────────────────────────────────────
 
