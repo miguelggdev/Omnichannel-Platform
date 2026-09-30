@@ -41,7 +41,7 @@ from app.agents.nodes._tenant import get_agent_settings
 from app.agents.tools.clinical_tools import CLINICAL_TOOLS
 from app.core.database import tenant_session
 from app.models.message import Message
-from app.services.channel_identity import identidad_verificada
+from app.services.channel_identity import contacto_autenticado
 from app.services.clinical import es_profesional_clinico
 from app.services.clinical_privacy import (
     CONTENIDO_CLINICO_PROTEGIDO,
@@ -177,14 +177,19 @@ async def clinical_agent_node(state: ConversationState) -> dict[str, Any]:
 
     # Sin gastar una llamada al LLM: un cliente final que dice "necesito el
     # historial de un paciente" no tiene que llegar a ver las tools.
-    # Y solo cuenta un canal que identifique de verdad al contacto: el caller ID
-    # de una llamada o el `From` de un email se falsifican.
-    autorizado = identidad_verificada(state.get("channel"))
-    if autorizado:
+    # Y solo cuenta una identidad demostrada: un canal que identifique de verdad
+    # al contacto, o una llamada autenticada por PIN (el caller ID y el `From`
+    # de un email se falsifican).
+    autenticado = await contacto_autenticado(
+        channel=state.get("channel"),
+        client_id=client_id,
+        contact_id=state.get("contact_id"),
+        external_message_id=(state.get("message") or {}).get("external_message_id"),
+    )
+    autorizado = False
+    if autenticado is not None:
         async with tenant_session(UUID(client_id)) as session:
-            autorizado = await es_profesional_clinico(
-                session, UUID(client_id), state.get("contact_id")
-            )
+            autorizado = await es_profesional_clinico(session, UUID(client_id), autenticado)
     if not autorizado:
         logger.warning(
             "Contacto %s del tenant %s pidio el agente clinico sin ser profesional "

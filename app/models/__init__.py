@@ -34,6 +34,7 @@ from app.models.tenant_webhook import TenantWebhook
 from app.models.token_budget import TokenBudget
 from app.models.token_usage_log import TokenUsageLog
 from app.models.user import User
+from app.models.voice_pin import VoicePin
 from app.models.webhook_dedup import WebhookDedup
 
 __all__ = [
@@ -73,5 +74,6 @@ __all__ = [
     "TokenBudget",
     "TokenUsageLog",
     "User",
+    "VoicePin",
     "WebhookDedup",
 ]

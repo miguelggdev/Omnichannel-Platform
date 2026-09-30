@@ -775,6 +775,35 @@ class TestWebSocket:
         [registro] = entorno_ws.registros
         assert [t["role"] for t in registro["transcript"]] == ["agent", "caller"]
 
+    def test_las_teclas_dtmf_llegan_a_la_sesion_y_autentican_la_llamada(
+        self, cliente_ws: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        profesional = uuid.uuid4()
+        verificar = AsyncMock(return_value=profesional)
+        marcar = AsyncMock()
+        monkeypatch.setattr(cm, "verificar_pin", verificar)
+        monkeypatch.setattr(cm, "marcar_llamada_autenticada", marcar)
+
+        with _conectar(cliente_ws) as ws:
+            ws.send_json({"event": "connected"})
+            ws.send_json(_start(_token()))
+            for tecla in "482913#":
+                ws.send_json(
+                    {
+                        "event": "dtmf",
+                        "streamSid": "MZ1",
+                        "dtmf": {"track": "inbound_track", "digit": tecla},
+                    }
+                )
+            # Eventos mal formados: se ignoran sin tumbar la llamada.
+            ws.send_json({"event": "dtmf", "dtmf": {"digit": 5}})
+            ws.send_json({"event": "dtmf", "dtmf": "raro"})
+            ws.send_json({"event": "dtmf"})
+            cliente_ws.portal.call(asyncio.sleep, 0.2)
+
+        verificar.assert_awaited_once_with(TENANT, CLIENTE, "482913")
+        marcar.assert_awaited_once_with(TENANT, "CA1", profesional)
+
     def test_un_segundo_stream_para_la_misma_llamada_se_rechaza(
         self, cliente_ws: TestClient, entorno_ws: SimpleNamespace
     ) -> None:

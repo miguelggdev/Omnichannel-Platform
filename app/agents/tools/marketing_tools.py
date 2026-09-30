@@ -49,7 +49,7 @@ from app.services.campaigns import (
     plantilla_aprobada,
     plantillas_aprobadas,
 )
-from app.services.channel_identity import identidad_verificada
+from app.services.channel_identity import contacto_autenticado
 from app.services.segmentation import CriterioInvalidoError, contar_segmento, resolver_segmento
 
 logger = logging.getLogger(__name__)
@@ -98,10 +98,17 @@ async def _no_autorizado(config: RunnableConfig) -> str | None:
         `NO_AUTORIZADO` si no puede operar; `None` si puede.
     """
     client_id = _client_id(config)
-    contact_id = config.get("configurable", {}).get("contact_id")
-    if identidad_verificada(config.get("configurable", {}).get("channel")):
+    configurable = config.get("configurable", {})
+    contact_id = configurable.get("contact_id")
+    autenticado = await contacto_autenticado(
+        channel=configurable.get("channel"),
+        client_id=client_id,
+        contact_id=contact_id,
+        external_message_id=configurable.get("external_message_id"),
+    )
+    if autenticado is not None:
         async with tenant_session(client_id) as session:
-            if await es_operador_de_marketing(session, client_id, contact_id):
+            if await es_operador_de_marketing(session, client_id, autenticado):
                 return None
     logger.warning(
         "Contacto %s del tenant %s intento usar una tool de marketing sin ser operador",

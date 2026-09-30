@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 #: Numero E.164: `+`, codigo de pais y hasta 15 digitos en total.
 E164 = r"^\+[1-9]\d{7,14}$"
@@ -18,6 +18,21 @@ class VoiceCallCreate(BaseModel):
     """
 
     to: str = Field(pattern=E164, description="Numero en E.164, con codigo de pais")
+
+
+class VoicePinSet(BaseModel):
+    """Pedido para registrar el PIN de voz de un contacto autorizado.
+
+    Attributes:
+        contact_id: Profesional u operador de marketing al que autentica el PIN.
+        phone: Numero desde el que llamara, en E.164.
+        pin: PIN de 6 a 8 digitos. `SecretStr`: no aparece en `repr()` ni en los
+            errores de validacion, que FastAPI devuelve tal cual al cliente.
+    """
+
+    contact_id: UUID
+    phone: str = Field(pattern=E164, description="Numero en E.164, con codigo de pais")
+    pin: SecretStr = Field(min_length=1, max_length=32)
 
 
 class VoiceCallAccepted(BaseModel):

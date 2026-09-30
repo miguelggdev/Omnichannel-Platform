@@ -804,7 +804,12 @@ class TestNodosNuevos:
         monkeypatch.setattr(marketing_node_mod, "responder_con_tools", con_tools)
 
         resultado = await marketing_node_mod.marketing_node(
-            {"client_id": CLIENT_ID, "channel": "whatsapp", "message": {"text": "crear campana"}}
+            {
+                "client_id": CLIENT_ID,
+                "channel": "whatsapp",
+                "contact_id": str(uuid4()),
+                "message": {"text": "crear campana"},
+            }
         )
 
         assert resultado["response_text"] == "Campana creada."

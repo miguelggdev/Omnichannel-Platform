@@ -8,6 +8,7 @@ frames de texto JSON:
 - `start`: `streamSid`, `callSid` y los `customParameters` del TwiML; aca llega
   el token que autentica el stream.
 - `media`: 20 ms de audio mu-law 8 kHz del cliente, en base64.
+- `dtmf`: una tecla del cliente; se juntan hasta `#` como PIN (ADR-073).
 - `mark`: Twilio termino de reproducir el audio que mandamos hasta esa marca.
 - `stop`: la llamada termino.
 
@@ -124,6 +125,10 @@ async def _atender(websocket: WebSocket, sesion: CallSession, duracion_maxima: f
             # Solo el audio del cliente; `outbound` seria el nuestro de vuelta.
             if media.get("track", "inbound") == "inbound" and media.get("payload"):
                 await sesion.on_media(str(media["payload"]))
+        elif tipo == "dtmf":
+            digito = (evento.get("dtmf") or {}).get("digit")
+            if isinstance(digito, str) and len(digito) == 1:
+                await sesion.on_dtmf(digito)
         elif tipo == "mark":
             sesion.on_mark(str((evento.get("mark") or {}).get("name", "")))
         elif tipo == "stop":

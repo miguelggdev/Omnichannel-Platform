@@ -31,6 +31,7 @@ from app.api.v1.tags import contact_tags_router
 from app.api.v1.tags import router as tags_router
 from app.api.v1.templates import router as templates_router
 from app.api.v1.voice import router as voice_router
+from app.api.v1.voice_pins import router as voice_pins_router
 from app.api.v1.voice_ws import router as voice_ws_router
 from app.api.v1.webchat import router as webchat_router
 from app.api.v1.webhooks import router as webhooks_router
@@ -167,6 +168,7 @@ def create_app() -> FastAPI:
     # JWT en el middleware); `/stream` es el WebSocket de audio, con token propio.
     app.include_router(voice_router, prefix="/api/v1/voice", tags=["voice"])
     app.include_router(voice_ws_router, prefix="/api/v1/voice", tags=["voice"])
+    app.include_router(voice_pins_router, prefix="/api/v1/voice", tags=["voice"])
     app.include_router(documents_router, prefix="/api/v1/documents", tags=["documents"])
     app.include_router(contacts_router, prefix="/api/v1/contacts", tags=["contacts"])
     # Notas y etiquetas de un contacto cuelgan del propio contacto:

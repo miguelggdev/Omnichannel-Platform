@@ -31,6 +31,7 @@ El agente solo crea *borradores*: revisar y firmar es del profesional por la
 API/UI, nunca del LLM.
 """
 
+import contextlib
 import json
 import logging
 from typing import Any
@@ -44,7 +45,7 @@ from app.core.config import get_settings
 from app.core.database import tenant_session
 from app.core.habeas_data import HabeasDataCompliance, HabeasDataError, normalizar_documento
 from app.middleware.token_budget import TokenBudgetGuard
-from app.services.channel_identity import identidad_verificada
+from app.services.channel_identity import contacto_autenticado
 from app.services.clinical import (
     ClinicalValidationError,
     crear_registro_rips,
@@ -101,20 +102,31 @@ async def _profesional(config: RunnableConfig) -> UUID | dict[str, Any]:
     haya declarado profesional.
 
     Args:
-        config: Config que inyecta el nodo, con `client_id`, `contact_id` y `channel`.
+        config: Config que inyecta el nodo, con `client_id`, `contact_id`, `channel`
+            y `external_message_id`.
 
     Returns:
         El UUID del profesional; si no puede operar, la respuesta de error de la
         tool (`_fallo(...)`).
     """
     contacto = _uuid_opcional(config, "contact_id")
-    if contacto is None:
-        return _fallo(SIN_PROFESIONAL)
     client_id = _client_id(config)
-    if identidad_verificada(config.get("configurable", {}).get("channel")):
+    configurable = config.get("configurable", {})
+    # En voz el profesional es el contacto con el que se autentico la llamada
+    # por PIN, que puede no ser el del caller ID.
+    profesional = await contacto_autenticado(
+        channel=configurable.get("channel"),
+        client_id=client_id,
+        contact_id=contacto,
+        external_message_id=configurable.get("external_message_id"),
+    )
+    if profesional is None and contacto is None:
+        return _fallo(SIN_PROFESIONAL)
+    if profesional is not None:
         async with tenant_session(client_id) as session:
-            if await es_profesional_clinico(session, client_id, contacto):
-                return contacto
+            if await es_profesional_clinico(session, client_id, profesional):
+                with contextlib.suppress(ValueError):
+                    return UUID(profesional)
     logger.warning(
         "Contacto %s del tenant %s intento usar una tool clinica sin estar autorizado",
         contacto,

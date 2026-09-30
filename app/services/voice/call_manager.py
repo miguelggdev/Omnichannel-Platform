@@ -38,6 +38,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from functools import partial
 from typing import Any
+from uuid import UUID
 
 from starlette.concurrency import run_in_threadpool
 
@@ -46,6 +47,11 @@ from app.services.dedup import get_redis, mark_if_new, release_mark
 from app.services.messaging.voice_provider import TwilioVoiceProvider, canal_de_salida
 from app.services.voice.audio import frames, mulaw_to_pcm16
 from app.services.voice.interruption_handler import InterruptionHandler
+from app.services.voice.pin_auth import (
+    PIN_MAX_DIGITOS,
+    marcar_llamada_autenticada,
+    verificar_pin,
+)
 from app.services.voice.stream_token import StreamClaims
 from app.services.voice.stt_streaming import (
     STTSession,
@@ -108,9 +114,20 @@ RESPUESTA_SIN_VOZ = (
     "Te la hago llegar por escrito."
 )
 
+#: Intentos de PIN por llamada. El bloqueo por numero (`pin_auth`) es el que frena
+#: a quien vuelve a llamar; este corta la insistencia dentro de una misma llamada.
+MAX_INTENTOS_PIN_POR_LLAMADA = 3
+
+PIN_ACEPTADO = "Identidad verificada."
+PIN_RECHAZADO = "El PIN no es correcto."
+PIN_SIN_INTENTOS = "Demasiados intentos. Cuelgue y vuelva a llamar."
+PIN_NO_DISPONIBLE = "No pude verificar el PIN en este momento. Intente de nuevo."
+
 Enviar = Callable[[dict[str, Any]], Awaitable[None]]
 Sintetizar = Callable[[str, str], Awaitable[bytes]]
 Encolar = Callable[..., Any]
+VerificarPin = Callable[[UUID, str, str], Awaitable[UUID | None]]
+MarcarAutenticada = Callable[[UUID, str, UUID], Awaitable[None]]
 
 
 def _ahora() -> str:
@@ -162,6 +179,8 @@ class CallSession:
         transcriber: Callable[[bytes], Awaitable[str | None]] | None = None,
         enqueue_message: Encolar | None = None,
         enqueue_record: Encolar | None = None,
+        verify_pin: VerificarPin | None = None,
+        mark_authenticated: MarcarAutenticada | None = None,
     ) -> None:
         """Prepara la sesion; `start()` la pone en marcha.
 
@@ -175,6 +194,8 @@ class CallSession:
                 `process_incoming_message`.
             enqueue_record: Encola un evento de `call_records`; por defecto en
                 `save_call_record`.
+            verify_pin: Comprueba un PIN tecleado; por defecto `pin_auth.verificar_pin`.
+            mark_authenticated: Deja la llamada autenticada; por defecto en Redis.
         """
         settings = get_settings()
         self.claims = claims
@@ -184,6 +205,13 @@ class CallSession:
         self._synthesize = synthesize or synthesize_mulaw
         self._enqueue_message = enqueue_message or _encolar_mensaje
         self._enqueue_record = enqueue_record or _encolar_registro
+        self._verificar_pin = verify_pin or verificar_pin
+        self._marcar_autenticada = mark_authenticated or marcar_llamada_autenticada
+        self._pin_digitos = ""
+        self._pin_desbordado = False
+        self._pin_intentos = 0
+        self._avisos: set[asyncio.Task[None]] = set()
+        self.autenticada_como: UUID | None = None
         self._transcriber = transcriber or partial(
             transcribir_con_whisper, client_id=claims.client_id
         )
@@ -230,13 +258,10 @@ class CallSession:
         Args:
             reason: Motivo, para los logs (`stop`, `disconnected`, `timeout`...).
         """
-        for tarea in (self._escucha, self._hablando):
-            if tarea is not None:
-                tarea.cancel()
-        await asyncio.gather(
-            *(t for t in (self._escucha, self._hablando) if t is not None),
-            return_exceptions=True,
-        )
+        tareas = [t for t in (self._escucha, self._hablando, *self._avisos) if t is not None]
+        for tarea in tareas:
+            tarea.cancel()
+        await asyncio.gather(*tareas, return_exceptions=True)
         if self._stt is not None:
             # Lo que el cliente dijo justo antes de colgar tambien se encola:
             # queda en la conversacion aunque ya no haya a quien responder.
@@ -278,6 +303,74 @@ class CallSession:
             await self.interrumpir()
         if self._stt is not None:
             self._stt.feed(pcm)
+
+    async def on_dtmf(self, digito: str) -> None:
+        """Procesa una tecla del cliente: junta el PIN y lo verifica en `#`.
+
+        `*` borra lo tecleado y `#` lo envia. El PIN no se registra en ningun
+        log ni en la transcripcion, y se descarta apenas se verifica.
+
+        Args:
+            digito: Tecla pulsada (`0`-`9`, `*`, `#`).
+        """
+        if self.autenticada_como is not None:
+            return
+        if digito == "*":
+            self._pin_digitos = ""
+            self._pin_desbordado = False
+            return
+        if digito != "#":
+            if digito.isdigit() and not self._pin_desbordado:
+                self._pin_digitos += digito
+                if len(self._pin_digitos) > PIN_MAX_DIGITOS:
+                    # Demasiadas teclas para ser un PIN: se descarta todo lo
+                    # tecleado hasta el proximo `#` o `*`, sin intentar verificar
+                    # un resto que no es lo que el llamante quiso teclear.
+                    self._pin_digitos = ""
+                    self._pin_desbordado = True
+            return
+
+        pin, self._pin_digitos = self._pin_digitos, ""
+        if self._pin_desbordado:
+            self._pin_desbordado = False
+            return
+        if not pin:
+            return
+        if self._pin_intentos >= MAX_INTENTOS_PIN_POR_LLAMADA:
+            self._avisar(PIN_SIN_INTENTOS)
+            return
+        self._pin_intentos += 1
+        try:
+            contacto = await self._verificar_pin(
+                UUID(self.claims.client_id), self.claims.contact_phone, pin
+            )
+            if contacto is not None:
+                await self._marcar_autenticada(
+                    UUID(self.claims.client_id), self.claims.call_sid, contacto
+                )
+        except Exception:
+            self._pin_intentos -= 1
+            logger.exception("Voz: no se pudo verificar el PIN en %s", self.claims.call_sid)
+            self._avisar(PIN_NO_DISPONIBLE)
+            return
+        if contacto is None:
+            logger.warning("Voz: PIN incorrecto en la llamada %s", self.claims.call_sid)
+            self._avisar(PIN_RECHAZADO)
+            return
+        self.autenticada_como = contacto
+        logger.info("Voz: llamada %s autenticada por PIN", self.claims.call_sid)
+        self._avisar(PIN_ACEPTADO)
+
+    def _avisar(self, texto: str) -> None:
+        """Dice un aviso de la propia plataforma (no del agente) sin bloquear el stream.
+
+        Args:
+            texto: Lo que se le dice al llamante.
+        """
+        self._anotar("agent", texto)
+        tarea = asyncio.create_task(self._decir(texto, f"aviso-{len(self.transcript)}"))
+        self._avisos.add(tarea)
+        tarea.add_done_callback(self._avisos.discard)
 
     def on_mark(self, name: str) -> None:
         """Twilio termino de reproducir el audio hasta esta marca.

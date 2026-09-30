@@ -106,8 +106,10 @@ async def responder_con_tools(
             "conversation_id": conversation_id,
             "contact_id": state.get("contact_id"),
             # Las tools que autorizan por contacto comprueban ademas que el
-            # canal lo identifique de verdad (services/channel_identity.py).
+            # canal lo identifique de verdad (services/channel_identity.py); en
+            # voz, ademas, que la llamada se haya autenticado por PIN.
             "channel": state.get("channel"),
+            "external_message_id": (state.get("message") or {}).get("external_message_id"),
         }
     }
 
