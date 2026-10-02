@@ -501,7 +501,7 @@
 - **`ALTER TYPE ... ADD VALUE` no se puede revertir:** PostgreSQL no admite quitar un valor de un enum. El `downgrade()` comprueba que no quede ningún usuario con el rol —bajarla con usuarios asignados los dejaría con un rol que la aplicación no reconoce, y sin acceso a nada— y deja el valor en el tipo. Recrear el enum sin él exigiría reescribir la columna de `users` y todo lo que dependa de ella, bastante más riesgoso que dejar un valor sin usar.
 - **Tests:** 22 casos nuevos en `tests/unit/test_clinical_api.py` (un médico llega a los cinco actos clínicos; recibe 403 en los cinco administrativos; `agent` y `supervisor` siguen fuera; un `admin` no perdió ningún permiso; y el enum del modelo conoce el valor, sin el cual el INSERT fallaría en la base).
 - **Verificado:** migración 020 sube, baja y vuelve a subir contra PostgreSQL 16 real, `alembic check` sin diferencias; `ruff`, `ruff format` y `mypy` limpios.
-- **Pendiente anotado:** alta de usuarios con el rol nuevo. `POST /api/v1/admin/users` no existe todavía, así que hoy un `medical` se crea desde la base o con el seed; no es propio de este cambio.
+- **Alta de usuarios:** `POST /api/v1/admin/users` (solo `admin`/`super_admin`). El tenant sale del token, el rol admite `admin|supervisor|agent|medical` (nunca `super_admin`: un admin no puede escalar privilegios), el hash bcrypt va en un hilo y un email repetido da 409 — `users.email` es único en toda la plataforma y RLS oculta los de otros tenants, así que la única comprobación fiable es la restricción de la base.
 
 ### ADR-072: Sprint 13 (Dev B) — agente clínico (RIPS, CIE-10, CUPS) y Habeas Data
 - **Fecha:** 2026-09-29

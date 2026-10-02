@@ -27,6 +27,7 @@ de la fila de auditoria (quien, cuando, que tabla) se conserva: lo que RGPD
 exige borrar es el dato personal, no la prueba de que hubo una operacion.
 """
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -35,11 +36,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import bindparam, case, func, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import tenant_session
 from app.core.dependencies import require_role
-from app.core.exceptions import NOT_FOUND, VALIDATION_ERROR, AppException
+from app.core.exceptions import DUPLICATE, NOT_FOUND, VALIDATION_ERROR, AppException
+from app.core.security import hash_password
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.contact_tag import ContactTag
@@ -48,7 +51,9 @@ from app.models.internal_note import InternalNote
 from app.models.message import Message
 from app.models.satisfaction_survey import SatisfactionSurvey
 from app.models.tag import Tag
+from app.models.user import User
 from app.schemas.csat import CsatSummaryResponse
+from app.schemas.user import UserCreate, UserResponse
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +61,7 @@ router = APIRouter()
 
 _GDPR_ROLES = ("super_admin", "admin")
 _CSAT_ROLES = ("super_admin", "admin", "supervisor")
+_USER_ADMIN_ROLES = ("super_admin", "admin")
 
 # Texto con el que se reemplazan los datos personales.
 ANONIMIZADO = "[ELIMINADO]"
@@ -685,3 +691,62 @@ async def csat_summary(
             for semana, promedio, cantidad in tendencia
         ],
     )
+
+
+@router.post("/users", response_model=UserResponse, status_code=201)
+async def create_user(
+    data: UserCreate,
+    user: dict[str, Any] = Depends(require_role(*_USER_ADMIN_ROLES)),
+) -> UserResponse:
+    """Da de alta un usuario en el tenant del administrador que llama.
+
+    Es el unico camino para crear un usuario `medical` (ADR-073) sin tocar la
+    base. El tenant sale del token, nunca del cuerpo, y `UserCreate` no admite
+    `super_admin`, asi que un admin no puede crear usuarios de otro tenant ni
+    escalar privilegios.
+
+    Args:
+        data: Email, password inicial, nombre y rol.
+        user: Usuario autenticado; solo admin o super_admin.
+
+    Returns:
+        El usuario creado, sin `password_hash`.
+
+    Raises:
+        AppException: 409 si el email ya esta registrado. `users.email` es unico
+            en toda la plataforma y RLS oculta los de otros tenants, asi que la
+            unica comprobacion fiable es la restriccion de la base.
+    """
+    client_id: UUID = user["client_id"]
+    # bcrypt es CPU: fuera del event loop (CLAUDE.md, regla 4).
+    password_hash = await asyncio.to_thread(hash_password, data.password)
+
+    try:
+        async with tenant_session(client_id) as session:
+            nuevo = User(
+                client_id=client_id,
+                email=str(data.email),
+                password_hash=password_hash,
+                first_name=data.first_name,
+                last_name=data.last_name,
+                role=data.role,
+            )
+            session.add(nuevo)
+            await session.flush()
+            await session.refresh(nuevo)
+            respuesta = UserResponse.model_validate(nuevo)
+    except IntegrityError as exc:
+        raise AppException(
+            status_code=409,
+            error_code=DUPLICATE,
+            message="Ya existe un usuario con ese email",
+        ) from exc
+
+    logger.info(
+        "Usuario %s creado con rol %s por %s (client_id=%s)",
+        respuesta.id,
+        respuesta.role,
+        user.get("user_id"),
+        client_id,
+    )
+    return respuesta
