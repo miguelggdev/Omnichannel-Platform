@@ -210,3 +210,103 @@ class TestDerechosDelTitular:
 
         assert response.status_code == 200
         assert response.json()["revoked"] is False
+
+
+class TestRolMedical:
+    """El rol `medical` (migracion 020, ADR-073) separa el acto clinico del administrativo.
+
+    Antes de este rol, firmar un registro clinico exigia ser administrador del
+    tenant: la decision de producto que ADR-072 dejo abierta y el criterio 14
+    del spec pedia cerrar.
+    """
+
+    #: Actos clinicos: leer la historia, firmarla y dejar constancia de la
+    #: autorizacion que el paciente otorgo en la consulta.
+    CLINICOS: tuple[tuple[str, str], ...] = (
+        ("get", "/records"),
+        ("post", "/consents"),
+        ("post", f"/records/{uuid.uuid4()}/review"),
+        ("post", f"/records/{uuid.uuid4()}/sign"),
+        ("post", f"/records/{uuid.uuid4()}/submit"),
+    )
+
+    #: Actos del responsable del tratamiento, no del profesional.
+    ADMINISTRATIVOS: tuple[tuple[str, str], ...] = (
+        ("get", "/settings"),
+        ("put", "/settings"),
+        ("post", "/consents/revoke"),
+        ("post", "/patients/export"),
+        ("post", "/patients/anonymize"),
+    )
+
+    @staticmethod
+    def _kwargs(metodo: str) -> dict[str, Any]:
+        """Cuerpo minimo que aceptan los schemas de cada verbo."""
+        if metodo == "get":
+            return {}
+        return {"json": {**PACIENTE, "consent_type": "verbal"}}
+
+    @pytest.mark.parametrize(("metodo", "ruta"), CLINICOS)
+    async def test_un_medico_llega_a_los_actos_clinicos(
+        self,
+        authenticated_client_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        metodo: str,
+        ruta: str,
+    ) -> None:
+        """No se comprueba el resultado, solo que el RBAC no lo corta con 403."""
+        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[None] * 6))
+        cliente = authenticated_client_factory(role="medical")
+
+        response = await getattr(cliente, metodo)(f"{BASE}{ruta}", **self._kwargs(metodo))
+
+        assert response.status_code != 403, response.text
+
+    @pytest.mark.parametrize(("metodo", "ruta"), ADMINISTRATIVOS)
+    async def test_un_medico_no_administra_ni_ejerce_los_derechos_del_titular(
+        self, authenticated_client_factory: Any, metodo: str, ruta: str
+    ) -> None:
+        """Decidir quien dicta, exportar y suprimir son actos del responsable.
+
+        Un profesional no decide quien mas puede dictar en el tenant, ni borra
+        la historia clinica de un paciente.
+        """
+        cliente = authenticated_client_factory(role="medical")
+
+        response = await getattr(cliente, metodo)(f"{BASE}{ruta}", **self._kwargs(metodo))
+
+        assert response.status_code == 403
+
+    @pytest.mark.parametrize("rol", ["agent", "supervisor"])
+    @pytest.mark.parametrize(("metodo", "ruta"), CLINICOS)
+    async def test_atencion_al_cliente_sigue_fuera_de_todo(
+        self, authenticated_client_factory: Any, rol: str, metodo: str, ruta: str
+    ) -> None:
+        """Un dato de salud es categoria especial (Ley 1581, art. 5)."""
+        cliente = authenticated_client_factory(role=rol)
+
+        response = await getattr(cliente, metodo)(f"{BASE}{ruta}", **self._kwargs(metodo))
+
+        assert response.status_code == 403
+
+    @pytest.mark.parametrize(("metodo", "ruta"), CLINICOS + ADMINISTRATIVOS)
+    async def test_un_admin_sigue_llegando_a_todo(
+        self,
+        authenticated_client_factory: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        metodo: str,
+        ruta: str,
+    ) -> None:
+        """El rol nuevo no le quita permisos a nadie."""
+        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[None] * 6))
+        cliente = authenticated_client_factory(role="admin")
+
+        response = await getattr(cliente, metodo)(f"{BASE}{ruta}", **self._kwargs(metodo))
+
+        assert response.status_code != 403, response.text
+
+    def test_el_enum_de_usuario_conoce_el_rol(self) -> None:
+        """Sin el valor en el enum, crear el usuario falla en la base (migracion 020)."""
+        from app.models.user import User
+
+        assert "medical" in User.__table__.c.role.type.enums
