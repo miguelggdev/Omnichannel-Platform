@@ -1,6 +1,7 @@
 """Schemas de User — CRUD de usuarios."""
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -14,14 +15,16 @@ class UserCreate(BaseModel):
         password: Password (mínimo 8 caracteres).
         first_name: Nombre del usuario.
         last_name: Apellido del usuario.
-        role: Rol asignado.
+        role: Rol asignado. `super_admin` no se puede asignar por la API: es
+            un rol de plataforma, no del tenant, y permitirlo seria una
+            escalada de privilegios para cualquier admin.
     """
 
     email: EmailStr
-    password: str = Field(min_length=8)
-    first_name: str = Field(max_length=100)
-    last_name: str = Field(max_length=100)
-    role: str = "agent"
+    password: str = Field(min_length=8, max_length=72)
+    first_name: str = Field(min_length=1, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    role: Literal["admin", "supervisor", "agent", "medical"] = "agent"
 
 
 class UserUpdate(BaseModel):
