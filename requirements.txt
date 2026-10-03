@@ -5,7 +5,7 @@
 # =============================================================================
 
 # ─── Framework Web ───────────────────────────────────────────────────────────
-fastapi>=0.110.0
+fastapi>=0.142.0  # `FastAPI(telemetry=...)`: ver app/core/telemetry.py::instrument_fastapi
 uvicorn[standard]>=0.27.0
 python-multipart>=0.0.9
 
