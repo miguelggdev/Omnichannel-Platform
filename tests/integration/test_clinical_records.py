@@ -10,6 +10,7 @@ import json
 import os
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -58,6 +59,7 @@ async def tenant() -> AsyncGenerator[uuid.UUID, None]:
             await conexion.execute(text("SET session_replication_role = replica"))
             for tabla in (
                 "messages",
+                "call_records",
                 "clinical_records",
                 "patient_consents",
                 "audit_logs",
@@ -971,3 +973,185 @@ async def test_una_llamada_corta_guardada_antes_de_ligarse_a_la_conversacion_tam
     transcripcion = await _transcripcion(tenant)
     assert "Ana Perez" not in transcripcion
     assert "[contenido cl" in transcripcion
+
+
+# ─── Registro clinico <-> llamada (call_record_id) ──────────────────────────
+#
+# Estos tests prueban el enlace de datos. Hoy la voz no autoriza al agente
+# clinico (ADR-072), asi que el registro se crea con un canal verificado sobre
+# una conversacion que tiene una llamada: lo que importa aqui es el enlace, no
+# quien autoriza.
+
+
+async def _crear_en(
+    tenant: uuid.UUID, profesional: uuid.UUID, conversacion: uuid.UUID
+) -> dict[str, Any]:
+    from app.agents.tools import clinical_tools as ct
+
+    config = _config(tenant, profesional)
+    config["configurable"]["conversation_id"] = str(conversacion)
+    return await ct.create_rips_record.ainvoke(_rips(), config=config)
+
+
+async def _llamada_de(
+    tenant: uuid.UUID,
+    call_sid: str,
+    *,
+    empezo_hace: timedelta,
+    termino_hace: timedelta | None = None,
+) -> None:
+    """Guarda una llamada con sus tiempos relativos a ahora."""
+    from app.tasks.voice_tasks import guardar_llamada
+
+    ahora = datetime.now(timezone.utc)
+    await guardar_llamada(
+        tenant,
+        call_sid,
+        {
+            "direction": "inbound",
+            "status": "completed" if termino_hace is not None else "in-progress",
+            "started_at": (ahora - empezo_hace).isoformat(),
+            "ended_at": (ahora - termino_hace).isoformat() if termino_hace is not None else None,
+        },
+    )
+
+
+async def _mensaje_de_llamada(tenant: uuid.UUID, conversacion: uuid.UUID, call_sid: str) -> None:
+    await _sql(
+        tenant,
+        "INSERT INTO messages (id, client_id, conversation_id, direction, message_type, content, "
+        "external_message_id, sender_type) "
+        "VALUES (gen_random_uuid(), :cid, :conv, 'inbound', 'text', 'hola', :ext, 'contact')",
+        conv=str(conversacion),
+        ext=f"{call_sid}:0",
+    )
+
+
+async def _llamada_del_registro(tenant: uuid.UUID, record_id: str) -> uuid.UUID | None:
+    (fila,) = await _filas(
+        tenant,
+        "SELECT call_record_id FROM clinical_records WHERE client_id = :cid AND id = :id",
+        id=record_id,
+    )
+    return fila[0]
+
+
+async def _id_de_llamada(tenant: uuid.UUID, call_sid: str) -> uuid.UUID:
+    (fila,) = await _filas(
+        tenant,
+        "SELECT id FROM call_records WHERE client_id = :cid AND call_sid = :sid",
+        sid=call_sid,
+    )
+    return fila[0]
+
+
+async def test_un_dictado_durante_la_llamada_queda_ligado_a_ella(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    conversacion = await _conversacion(tenant, profesional)
+    await _mensaje_de_llamada(tenant, conversacion, "CA-en-curso")
+    await _llamada_de(tenant, "CA-en-curso", empezo_hace=timedelta(minutes=2))
+    await _consentir(tenant, profesional)
+
+    resultado = await _crear_en(tenant, profesional, conversacion)
+
+    assert resultado["success"] is True, resultado
+    assert await _llamada_del_registro(tenant, str(resultado["record_id"])) == (
+        await _id_de_llamada(tenant, "CA-en-curso")
+    )
+
+
+async def test_un_registro_sin_llamada_queda_sin_enlace(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    """WhatsApp, Telegram...: la conversacion no tiene ninguna llamada."""
+    conversacion = await _conversacion(tenant, profesional)
+    await _consentir(tenant, profesional)
+
+    resultado = await _crear_en(tenant, profesional, conversacion)
+
+    assert await _llamada_del_registro(tenant, str(resultado["record_id"])) is None
+
+
+async def test_el_registro_creado_antes_de_que_la_llamada_conozca_su_conversacion_se_liga(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    """El `conversation_id` de la llamada solo aparece cuando ya hay mensajes."""
+    conversacion = await _conversacion(tenant, profesional)
+    await _consentir(tenant, profesional)
+    resultado = await _crear_en(tenant, profesional, conversacion)
+    record_id = str(resultado["record_id"])
+    assert await _llamada_del_registro(tenant, record_id) is None
+
+    await _mensaje_de_llamada(tenant, conversacion, "CA-tarde")
+    await _llamada_de(
+        tenant, "CA-tarde", empezo_hace=timedelta(minutes=5), termino_hace=timedelta(seconds=1)
+    )
+
+    assert await _llamada_del_registro(tenant, record_id) == await _id_de_llamada(
+        tenant, "CA-tarde"
+    )
+
+
+async def test_una_llamada_anterior_ya_cerrada_no_se_atribuye_un_dictado_nuevo(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    """Una conversacion de voz acumula llamadas: la de ayer no dicto el registro de hoy."""
+    conversacion = await _conversacion(tenant, profesional)
+    await _mensaje_de_llamada(tenant, conversacion, "CA-ayer")
+    await _llamada_de(
+        tenant, "CA-ayer", empezo_hace=timedelta(hours=3), termino_hace=timedelta(hours=2)
+    )
+    await _consentir(tenant, profesional)
+
+    resultado = await _crear_en(tenant, profesional, conversacion)
+
+    assert await _llamada_del_registro(tenant, str(resultado["record_id"])) is None
+
+
+async def test_el_guardado_tardio_de_una_llamada_vieja_no_se_lleva_un_registro_posterior(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    """Un status callback atrasado de la llamada de ayer no reclama el registro de hoy."""
+    conversacion = await _conversacion(tenant, profesional)
+    await _consentir(tenant, profesional)
+    resultado = await _crear_en(tenant, profesional, conversacion)
+    await _mensaje_de_llamada(tenant, conversacion, "CA-vieja")
+
+    await _llamada_de(
+        tenant, "CA-vieja", empezo_hace=timedelta(hours=3), termino_hace=timedelta(hours=2)
+    )
+
+    assert await _llamada_del_registro(tenant, str(resultado["record_id"])) is None
+
+
+async def test_un_registro_firmado_no_aborta_el_guardado_de_la_llamada(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    """El trigger de retencion rechaza cambiar un registro firmado.
+
+    Si el enlace lo intentara, el error abortaria la transaccion que guarda la
+    llamada y se perderian su transcripcion y su estado.
+    """
+    from app.core.database import tenant_session
+    from app.services import clinical as svc
+
+    conversacion = await _conversacion(tenant, profesional)
+    await _consentir(tenant, profesional)
+    resultado = await _crear_en(tenant, profesional, conversacion)
+    record_id = uuid.UUID(str(resultado["record_id"]))
+    usuario = await _usuario(tenant)
+    for destino in ("reviewed", "signed"):
+        async with tenant_session(tenant) as session:
+            await svc.avanzar_registro(
+                session, client_id=tenant, record_id=record_id, destino=destino, user_id=usuario
+            )
+
+    await _mensaje_de_llamada(tenant, conversacion, "CA-firmado")
+    await _llamada_de(
+        tenant, "CA-firmado", empezo_hace=timedelta(minutes=5), termino_hace=timedelta(seconds=1)
+    )
+
+    # La llamada se guardo, y el registro firmado quedo intacto.
+    assert await _id_de_llamada(tenant, "CA-firmado") is not None
+    assert await _llamada_del_registro(tenant, str(record_id)) is None

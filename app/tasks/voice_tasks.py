@@ -36,6 +36,7 @@ from app.core.database import run_isolated, tenant_session
 from app.models.call_record import CALL_FINAL_STATUSES, CALL_STATUSES, CallRecord
 from app.models.conversation import Conversation
 from app.models.message import Message
+from app.services.clinical import vincular_registros_con_llamada
 from app.services.clinical_privacy import conversacion_es_clinica, redactar_transcripcion
 
 logger = logging.getLogger(__name__)
@@ -212,12 +213,25 @@ async def guardar_llamada(client_id: UUID, call_sid: str, datos: dict[str, Any])
             "recording_duration": _si_llego("recording_duration"),
             "updated_at": func.now(),
         }
-        await session.execute(
-            insercion.on_conflict_do_update(
-                index_elements=[actual.client_id, actual.call_sid],
-                set_=actualizacion,
+        guardada = (
+            await session.execute(
+                insercion.on_conflict_do_update(
+                    index_elements=[actual.client_id, actual.call_sid],
+                    set_=actualizacion,
+                ).returning(actual.id, actual.conversation_id, actual.started_at, actual.ended_at)
             )
-        )
+        ).one()
+        if guardada.conversation_id is not None:
+            # El registro clinico dictado durante la llamada pudo crearse antes
+            # de que la llamada supiera su conversacion: se liga ahora.
+            await vincular_registros_con_llamada(
+                session,
+                client_id=client_id,
+                call_record_id=guardada.id,
+                conversation_id=guardada.conversation_id,
+                started_at=guardada.started_at,
+                ended_at=guardada.ended_at,
+            )
 
 
 @shared_task(
