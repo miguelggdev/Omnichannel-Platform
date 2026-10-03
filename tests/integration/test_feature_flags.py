@@ -26,16 +26,6 @@ def _url_admin() -> str:
     )
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def _redis_por_test() -> AsyncGenerator[None, None]:
-    """Un cliente Redis por test: el global queda atado al event loop que lo creo."""
-    from app.services.dedup import close_redis
-
-    await close_redis()
-    yield
-    await close_redis()
-
-
 async def _crear_tenant(config: dict[str, Any]) -> uuid.UUID:
     from app.core.database import engine, tenant_session
 

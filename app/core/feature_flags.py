@@ -17,8 +17,9 @@ todas porque el spec describe un esquema que el proyecto no tiene:
   (`is_enabled_percentage`) necesita un `entity_id` (p. ej. el contacto) que
   `get_agent_settings()` no recibe; un agente a medias entre el router y su
   nodo seria incoherente. Los porcentajes (0-100) son para el resto de flags.
-- **Solo las flags de agente se aplican hoy.** `enable_voice`, `enable_sentiment`,
-  `enable_csat`, `enable_outgoing_webhooks`, `enable_reranking` y `enable_sandbox`
+- **Solo las flags de agente y `enable_sandbox` se aplican hoy** (esta ultima la
+  exige `app/api/v1/sandbox.py`, Sprint 14c). `enable_voice`, `enable_sentiment`,
+  `enable_csat`, `enable_outgoing_webhooks` y `enable_reranking`
   se pueden guardar y consultar, pero ninguna feature las lee todavia: cada una
   ya tiene su propio mecanismo y engancharlas es un cambio de comportamiento que
   el spec no pide. La API lo dice (`enforced`).
@@ -55,18 +56,20 @@ AGENT_FLAGS: dict[str, str] = {
     "enable_clinical": "clinical",
 }
 
+#: Flags que no son de agente pero si se aplican: `enable_sandbox` la exige la API del sandbox.
+GATE_FLAGS: tuple[str, ...] = ("enable_sandbox",)
+
 #: Flags declaradas que ninguna feature lee todavia (ver el docstring del modulo).
 UNENFORCED_FLAGS: tuple[str, ...] = (
     "enable_voice",
     "enable_sentiment",
-    "enable_sandbox",
     "enable_csat",
     "enable_outgoing_webhooks",
     "enable_reranking",
 )
 
 #: Todas las flags que acepta la API, en el orden en que se listan.
-KNOWN_FLAGS: tuple[str, ...] = (*AGENT_FLAGS, *UNENFORCED_FLAGS)
+KNOWN_FLAGS: tuple[str, ...] = (*AGENT_FLAGS, *GATE_FLAGS, *UNENFORCED_FLAGS)
 
 CACHE_TTL = 300
 _CONFIG_KEY = "feature_flags"

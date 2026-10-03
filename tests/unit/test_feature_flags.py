@@ -382,6 +382,7 @@ class TestApi:
         }
         assert flags["enable_marketing"]["value"] is None
         assert flags["enable_voice"]["enforced"] is False
+        assert flags["enable_sandbox"]["enforced"] is True  # la exige la API del sandbox
 
     async def test_cambia_una_flag_e_invalida_el_cache(
         self,
