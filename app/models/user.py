@@ -5,10 +5,11 @@ Password hasheado con bcrypt (ver app.core.security).
 """
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID as _UUID
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import TenantBaseModel
@@ -30,6 +31,7 @@ class User(TenantBaseModel):
         role: Rol del usuario (super_admin, admin, supervisor, agent, medical).
         is_active: Si el usuario está activo.
         last_login_at: Último login exitoso.
+        settings: Preferencias del usuario (JSONB): `ui_language` y `theme`.
     """
 
     __tablename__ = "users"
@@ -57,6 +59,8 @@ class User(TenantBaseModel):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true")
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Preferencias de interfaz (Sprint 14b, migracion 021): `ui_language` y `theme`.
+    settings: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}", nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

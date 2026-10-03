@@ -27,6 +27,7 @@ from app.api.v1.documents import router as documents_router
 from app.api.v1.feature_flags import router as feature_flags_router
 from app.api.v1.marketing_settings import router as marketing_settings_router
 from app.api.v1.notes import router as notes_router
+from app.api.v1.preferences import router as preferences_router
 from app.api.v1.quick_replies import router as quick_replies_router
 from app.api.v1.tags import contact_tags_router
 from app.api.v1.tags import router as tags_router
@@ -187,6 +188,7 @@ def create_app() -> FastAPI:
     app.include_router(quick_replies_router, prefix="/api/v1/quick-replies", tags=["quick-replies"])
     app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
     app.include_router(templates_router, prefix="/api/v1/admin/templates", tags=["templates"])
+    app.include_router(preferences_router, prefix="/api/v1/settings/preferences", tags=["settings"])
     app.include_router(
         feature_flags_router, prefix="/api/v1/admin/feature-flags", tags=["feature-flags"]
     )
