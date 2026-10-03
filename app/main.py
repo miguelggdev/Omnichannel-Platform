@@ -24,6 +24,7 @@ from app.api.v1.contacts import router as contacts_router
 from app.api.v1.conversations import router as conversations_router
 from app.api.v1.csat import router as csat_router
 from app.api.v1.documents import router as documents_router
+from app.api.v1.feature_flags import router as feature_flags_router
 from app.api.v1.marketing_settings import router as marketing_settings_router
 from app.api.v1.notes import router as notes_router
 from app.api.v1.quick_replies import router as quick_replies_router
@@ -186,6 +187,9 @@ def create_app() -> FastAPI:
     app.include_router(quick_replies_router, prefix="/api/v1/quick-replies", tags=["quick-replies"])
     app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
     app.include_router(templates_router, prefix="/api/v1/admin/templates", tags=["templates"])
+    app.include_router(
+        feature_flags_router, prefix="/api/v1/admin/feature-flags", tags=["feature-flags"]
+    )
     app.include_router(campaigns_router, prefix="/api/v1/campaigns", tags=["campaigns"])
     app.include_router(marketing_settings_router, prefix="/api/v1/marketing", tags=["marketing"])
     app.include_router(clinical_router, prefix="/api/v1/clinical", tags=["clinical"])

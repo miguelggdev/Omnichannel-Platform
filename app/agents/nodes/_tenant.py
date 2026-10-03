@@ -34,6 +34,7 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.database import tenant_session
+from app.core.feature_flags import agentes_habilitados, flags_del_tenant
 from app.models.agent_config import AgentConfig
 from app.models.contact_identifier import ContactIdentifier
 from app.services.rag import DEFAULT_THRESHOLD, DEFAULT_TOP_K, FEW_SHOT_THRESHOLD
@@ -205,7 +206,11 @@ async def get_agent_settings(client_id: UUID) -> AgentSettings:
             rag_top_k=_as_int(extra.get("rag_top_k"), DEFAULT_TOP_K),
             rag_rerank=rag_rerank,
             rag_initial_top_k=rag_initial_top_k,
-            enabled_agents=_as_agents(extra.get("enabled_agents")),
+            # `enabled_agents` restringido por las flags `enable_<agente>` (ADR-076):
+            # lo leen el router y los nodos, asi que ven lo mismo.
+            enabled_agents=agentes_habilitados(
+                _as_agents(extra.get("enabled_agents")), flags_del_tenant(extra)
+            ),
         )
 
 
