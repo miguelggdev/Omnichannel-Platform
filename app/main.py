@@ -43,7 +43,7 @@ from app.core.exceptions import (
     unhandled_exception_handler,
 )
 from app.core.logging import setup_logging
-from app.core.telemetry import setup_telemetry, shutdown_telemetry
+from app.core.telemetry import instrument_fastapi, setup_telemetry, shutdown_telemetry
 from app.middleware.audit import AuditContextMiddleware
 from app.middleware.observability import ObservabilityMiddleware
 from app.middleware.tenant_context import TenantContextMiddleware
@@ -81,11 +81,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── Startup ──
     logger.info("Iniciando aplicación — env=%s", get_settings().APP_ENV)
 
-    # Tracing: se instrumenta aqui y no en create_app() porque `lifespan` corre
-    # una sola vez por proceso, mientras que create_app() lo llama tambien cada
-    # test que arma su propia app — instrumentar 40 veces el mismo engine deja
-    # 40 listeners sobre la misma conexion.
-    setup_telemetry(app=app, engine=engine)
+    # Tracing: el provider y el engine se instrumentan aqui y no en create_app()
+    # porque `lifespan` corre una sola vez por proceso, mientras que create_app()
+    # lo llama tambien cada test que arma su propia app — instrumentar 40 veces
+    # el mismo engine deja 40 listeners sobre la misma conexion. FastAPI, en
+    # cambio, se instrumenta en create_app(): aqui el stack ya esta construido.
+    setup_telemetry(engine=engine)
 
     # Verificar DB
     await init_db()
@@ -130,7 +131,12 @@ def create_app() -> FastAPI:
         redoc_url="/api/redoc",
         openapi_url="/api/openapi.json",
         lifespan=lifespan,
+        # FastAPI >= 0.142 trae telemetria propia; la instrumentacion del proyecto
+        # es `instrument_fastapi()` (una traza por request, sin /health ni
+        # /metrics). Con las dos activas habria spans duplicados.
+        telemetry={"tracing": False},
     )
+    instrument_fastapi(app)
 
     # ── Middleware stack ──
     # Orden importa: último registrado = primero ejecutado

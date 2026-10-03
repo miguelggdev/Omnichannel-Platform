@@ -207,6 +207,34 @@ def _instrumentadores_opcionales() -> list[tuple[str, Any]]:
     return disponibles
 
 
+def instrument_fastapi(app: FastAPI, provider: TracerProvider | None = None) -> None:
+    """Instrumenta una app de FastAPI con `FastAPIInstrumentor`.
+
+    **Debe llamarse antes del primer request de la app**, es decir, desde
+    `create_app()` y no desde el `lifespan`: Starlette construye el stack de
+    middleware al recibir el primer evento ASGI (el propio arranque del
+    lifespan), y `instrument_app` sobre un stack ya construido no tiene efecto.
+    Con FastAPI >= 0.142 eso no pasa desapercibido: la telemetria nativa de
+    FastAPI toma el relevo, genera cuatro spans por request en lugar de uno y
+    ademas ignora `_EXCLUDED_URLS`, asi que `/internal/health` y
+    `/internal/metrics` terminan en las trazas. La app debe crearse con
+    `telemetry={"tracing": False}` para que solo haya una instrumentacion.
+
+    Sin `provider`, el instrumentador usa el global; el proxy de OpenTelemetry
+    lo resuelve cuando `setup_telemetry()` lo instala durante el `lifespan`.
+
+    Args:
+        app: Instancia de FastAPI a instrumentar. Si ya lo esta, no se repite.
+        provider: Provider a usar. `None` para el global del proceso.
+    """
+    if getattr(app, "_is_instrumented_by_opentelemetry", False):
+        return
+
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    FastAPIInstrumentor.instrument_app(app, tracer_provider=provider, excluded_urls=_EXCLUDED_URLS)
+
+
 def setup_telemetry(
     app: FastAPI | None = None,
     engine: AsyncEngine | None = None,
@@ -214,11 +242,14 @@ def setup_telemetry(
     """Inicializa el tracing y las instrumentaciones automáticas del proceso.
 
     Pensada para llamarse una vez por proceso: desde el `lifespan` de FastAPI
-    (con `app` y `engine`) y desde la señal `worker_process_init` de Celery
-    (sin `app`). Las instrumentaciones ya aplicadas no se repiten.
+    (con `engine`) y desde la señal `worker_process_init` de Celery (sin
+    `engine`). Las instrumentaciones ya aplicadas no se repiten. FastAPI se
+    instrumenta en `create_app()` con `instrument_fastapi()`; pasar `app` aqui
+    solo sirve si la app aun no ha recibido ningun evento ASGI.
 
     Args:
-        app: Instancia de FastAPI a instrumentar. `None` en los workers.
+        app: Instancia de FastAPI a instrumentar, aun sin arrancar. `None` en
+            el `lifespan` y en los workers.
         engine: Engine async de SQLAlchemy cuyas queries se quieren trazar.
 
     Returns:
@@ -226,13 +257,8 @@ def setup_telemetry(
     """
     provider = _ensure_provider()
 
-    if app is not None and "fastapi" not in _instrumented:
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-
-        FastAPIInstrumentor.instrument_app(
-            app, tracer_provider=provider, excluded_urls=_EXCLUDED_URLS
-        )
-        _instrumented.add("fastapi")
+    if app is not None:
+        instrument_fastapi(app, provider)
 
     if engine is not None and "sqlalchemy" not in _instrumented:
         from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor

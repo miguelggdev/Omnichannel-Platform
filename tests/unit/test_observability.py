@@ -104,6 +104,92 @@ class TestTelemetria:
         assert isinstance(provider.sampler, ParentBased)
 
 
+class TestInstrumentacionDeFastAPI:
+    """`instrument_fastapi()` y su uso en `create_app()` (FastAPI >= 0.142).
+
+    El provider global de OpenTelemetry no se puede reemplazar una vez
+    instalado, asi que estos tests le pasan un provider propio al instrumentador
+    en lugar de depender del global.
+    """
+
+    @staticmethod
+    def _app_con_spans() -> tuple[FastAPI, Any]:
+        """App sin telemetria nativa, instrumentada con un exporter en memoria.
+
+        Returns:
+            La app (con `/ping` y `/internal/health`) y el exporter con sus spans.
+        """
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        app = FastAPI(telemetry={"tracing": False})
+
+        @app.get("/ping")
+        async def ping() -> dict[str, int]:
+            """Ruta que debe trazarse."""
+            return {"ok": 1}
+
+        @app.get("/internal/health")
+        async def health() -> dict[str, int]:
+            """Ruta que `_EXCLUDED_URLS` deja fuera de las trazas."""
+            return {"ok": 1}
+
+        telemetry_module.instrument_fastapi(app, provider)
+        return app, exporter
+
+    def test_un_request_produce_un_solo_span_de_servidor(self) -> None:
+        """Con una sola instrumentacion hay un span SERVER por request, no cuatro."""
+        app, exporter = self._app_con_spans()
+
+        TestClient(app).get("/ping")
+
+        servidor = [s for s in exporter.get_finished_spans() if s.kind == trace.SpanKind.SERVER]
+        assert len(servidor) == 1
+        assert not any(
+            s.instrumentation_scope.name == "fastapi" for s in exporter.get_finished_spans()
+        )
+
+    def test_health_queda_fuera_de_las_trazas(self) -> None:
+        """Los healthchecks (cada pocos segundos) no multiplican el volumen de spans."""
+        app, exporter = self._app_con_spans()
+
+        TestClient(app).get("/internal/health")
+
+        assert exporter.get_finished_spans() == ()
+
+    def test_instrumentar_dos_veces_no_duplica_spans(self) -> None:
+        """Una segunda llamada sobre la misma app no vuelve a envolverla."""
+        app, exporter = self._app_con_spans()
+        telemetry_module.instrument_fastapi(app)
+
+        TestClient(app).get("/ping")
+
+        servidor = [s for s in exporter.get_finished_spans() if s.kind == trace.SpanKind.SERVER]
+        assert len(servidor) == 1
+
+    def test_create_app_instrumenta_y_apaga_la_telemetria_nativa(self) -> None:
+        """Si `create_app()` dejara activa la nativa, cada request saldria duplicado.
+
+        Con la nativa encendida e `instrument_app` aplicado despues de construir
+        el stack (el `lifespan`), en produccion solo salian los spans nativos y
+        `/internal/health` terminaba en las trazas. La nativa no tiene una API
+        publica de consulta: se lee su configuracion interna, y si FastAPI la
+        renombra este test fallara a proposito para que se revise.
+        """
+        from app.main import create_app
+
+        app = create_app()
+
+        assert app._is_instrumented_by_opentelemetry  # type: ignore[attr-defined]
+        assert app._telemetry["tracing"] is False  # type: ignore[attr-defined]
+
+
 class TestRedaccionDeUrls:
     """Las credenciales que viajan en la URL no llegan a los spans (ni a Jaeger)."""
 
