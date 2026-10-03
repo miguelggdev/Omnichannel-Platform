@@ -29,6 +29,7 @@ from app.agents.nodes._tenant import get_agent_settings
 from app.agents.tools.invoice_tools import INVOICE_TOOLS
 from app.core.database import tenant_session
 from app.models.contact import Contact
+from app.services.i18n import con_idioma
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +130,12 @@ async def financial_node(state: ConversationState) -> dict[str, Any]:
         return {"response_text": MENSAJE_NO_HABILITADO, "intent": INTENT}
 
     contexto = await construir_contexto(UUID(client_id), state.get("contact_id"))
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        contexto=contexto,
-        fecha=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    system_prompt = con_idioma(
+        SYSTEM_PROMPT_TEMPLATE.format(
+            contexto=contexto,
+            fecha=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        ),
+        state.get("detected_language"),
     )
 
     texto = await responder_con_tools(

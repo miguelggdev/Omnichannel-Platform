@@ -65,6 +65,7 @@ class FakeSession:
         objetos: Mapa `pk -> objeto` que resuelve `session.get()`.
         added: Objetos pasados a `add()`.
         executed: Sentencias que recibio `execute()`.
+        params: Parametros de cada `execute()`, en el mismo orden que `executed`.
         flushes: Cuantas veces se llamo a `flush()`.
     """
 
@@ -83,11 +84,13 @@ class FakeSession:
         self.objetos = dict(objetos or {})
         self.added: list[Any] = []
         self.executed: list[Any] = []
+        self.params: list[Any] = []
         self.flushes = 0
 
     async def execute(self, stmt: Any = None, params: Any = None) -> FakeResult:
         """Registra la sentencia y devuelve el siguiente resultado de la cola."""
         self.executed.append(stmt)
+        self.params.append(params)
         valor = self.resultados.pop(0) if self.resultados else None
         return FakeResult(valor)
 
@@ -316,6 +319,7 @@ def estado(**overrides: Any) -> dict[str, Any]:
         "training_mode": False,
         "approved_examples": None,
         "error": None,
+        "detected_language": None,
     }
     base.update(overrides)
     return base

@@ -96,6 +96,7 @@ def _initial_state(
         training_mode=False,
         approved_examples=None,
         error=None,
+        detected_language=None,
     )
 
 

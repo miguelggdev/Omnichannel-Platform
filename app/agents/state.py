@@ -50,6 +50,9 @@ class ConversationState(TypedDict, total=False):
         consecutive_very_negative: Mensajes `very_negative` seguidos. A
             diferencia del resto, sobrevive entre turnos: el checkpointer lo
             persiste y `ai_processor._initial_state()` no lo pisa (Sprint 10).
+        detected_language: Idioma del contacto (`es`, `en`, `pt`, `it`, `de`,
+            `fr`) que fija el nodo `language_detect` en cada turno (Sprint 14).
+            La fuente de verdad es `conversations.metadata.detected_language`.
     """
 
     client_id: str
@@ -82,3 +85,4 @@ class ConversationState(TypedDict, total=False):
     current_sentiment: str | None
     sentiment_score: float | None
     consecutive_very_negative: int
+    detected_language: str | None
