@@ -46,7 +46,14 @@ _ACTUALIZAR = text(
 
 
 def _a_respuesta(settings: dict[str, Any] | None) -> UserPreferencesResponse:
-    """Normaliza lo guardado en el JSONB, con los defaults para lo que falte o sea basura."""
+    """Normaliza lo guardado en el JSONB, con los defaults para lo que falte o sea basura.
+
+    Args:
+        settings: El JSONB `users.settings`.
+
+    Returns:
+        Las preferencias efectivas del usuario.
+    """
     ajustes = settings if isinstance(settings, dict) else {}
     tema = ajustes.get("theme")
     return UserPreferencesResponse(

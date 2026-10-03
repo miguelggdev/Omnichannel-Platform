@@ -192,7 +192,14 @@ def en_rollout(client_id: UUID | str, flag: str, entity_id: str, porcentaje: int
 
 
 def _como_porcentaje(valor: FlagValue | None) -> int:
-    """Traduce el valor de una flag a un porcentaje (`true`=100, `false`/ausente=0)."""
+    """Traduce el valor de una flag a un porcentaje (`true`=100, `false`/ausente=0).
+
+    Args:
+        valor: El valor guardado de la flag, o `None` si no esta configurada.
+
+    Returns:
+        Un entero de 0 a 100.
+    """
     if valor is None or valor is False:
         return 0
     if valor is True:
@@ -226,9 +233,25 @@ class FeatureFlags:
 
     @staticmethod
     def _clave(client_id: UUID | str) -> str:
+        """Clave de Redis donde se cachean las flags del tenant.
+
+        Args:
+            client_id: Tenant.
+
+        Returns:
+            `ff:{client_id}`.
+        """
         return f"ff:{client_id}"
 
     async def _leer_de_la_base(self, client_id: UUID) -> dict[str, FlagValue]:
+        """Lee las flags del tenant directamente de `agent_configs.config`.
+
+        Args:
+            client_id: Tenant.
+
+        Returns:
+            Las flags validas del agente activo; vacio si no hay agente o ninguna flag.
+        """
         async with tenant_session(client_id) as session:
             config = (
                 await session.execute(

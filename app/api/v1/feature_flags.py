@@ -33,7 +33,14 @@ _ROLES = ("super_admin", "admin")
 
 
 def _respuesta(guardadas: dict[str, bool | int]) -> FeatureFlagsResponse:
-    """Une las flags conocidas con lo que el tenant tiene guardado."""
+    """Une las flags conocidas con lo que el tenant tiene guardado.
+
+    Args:
+        guardadas: Las flags con valor del tenant.
+
+    Returns:
+        Una entrada por flag de `KNOWN_FLAGS`, con `enforced` segun si alguna feature la lee.
+    """
     return FeatureFlagsResponse(
         flags=[
             FeatureFlagItem(
