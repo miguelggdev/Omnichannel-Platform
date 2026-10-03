@@ -154,3 +154,22 @@ async def test_el_mensaje_de_prueba_responde_por_http(prod: Prod, admin: Any) ->
     assert cuerpo["requires_handoff"] is True
     assert cuerpo["handoff_reason"] == "budget_exceeded"
     assert cuerpo["response"]
+
+
+async def test_un_null_en_un_campo_obligatorio_da_400_y_no_un_500(prod: Prod, admin: Any) -> None:
+    await admin.post(URL)
+
+    respuesta = await admin.put(f"{URL}/agent-config", json={"name": None})
+
+    assert respuesta.status_code == 400, respuesta.text
+    assert "name" in respuesta.json()["message"]
+
+
+async def test_lo_que_devuelve_el_get_se_puede_reenviar_en_el_put(prod: Prod, admin: Any) -> None:
+    await admin.post(URL)
+    leido = (await admin.get(f"{URL}/agent-config")).json()
+
+    respuesta = await admin.put(f"{URL}/agent-config", json={"config": leido["config"]})
+
+    assert respuesta.status_code == 200, respuesta.text
+    assert "feature_flags" not in leido["config"]

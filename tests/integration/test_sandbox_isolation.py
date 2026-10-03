@@ -509,6 +509,8 @@ async def test_reiniciar_descarta_los_cambios_y_vuelve_a_copiar_produccion(
 # este test obliga a decidir si el reset debe vaciarla.
 _NO_PURGADAS = {
     "audit_logs",  # el rastro; su trigger lo reescribiria con cada borrado
+    "token_budgets",  # el consumo del mes sobrevive al reset: es el tope de gasto del sandbox
+    "token_usage_logs",
     "call_records",
     "campaigns",
     "clinical_records",
@@ -608,3 +610,70 @@ async def test_reiniciar_borra_las_conversaciones_de_prueba(
     for tabla in svc._TABLAS_DE_PRUEBA:
         filas = await _sql(sandbox_id, f"SELECT 1 FROM {tabla} WHERE client_id = :cid")  # noqa: S608
         assert filas == [], tabla
+
+
+# ─── Ajustes tras la revision de codigo ──────────────────────────────────────
+
+
+async def test_reiniciar_no_devuelve_el_presupuesto_gastado(
+    con_sandbox: tuple[Prod, uuid.UUID],
+) -> None:
+    """Si el reset lo repusiera, mensaje + reset en bucle saltaria el tope de gasto en el LLM."""
+    prod, sandbox_id = con_sandbox
+    await _sql(
+        sandbox_id, "UPDATE token_budgets SET used_tokens = total_budget + 7 WHERE client_id = :cid"
+    )
+
+    await svc.reiniciar_sandbox(prod.client_id)
+
+    (presupuesto,) = await _sql(
+        sandbox_id, "SELECT used_tokens > total_budget AS agotado FROM token_budgets"
+    )
+    assert presupuesto.agotado is True
+    respuesta = await svc.enviar_mensaje_de_prueba(prod.client_id, "hola", prod.usuario)
+    assert respuesta["handoff_reason"] == "budget_exceeded"
+
+
+async def test_los_barridos_de_celery_no_recorren_los_sandbox(
+    con_sandbox: tuple[Prod, uuid.UUID],
+) -> None:
+    """Auto-cierre, CSAT y campanas barren `list_active_client_ids()`: un sandbox no debe entrar."""
+    prod, sandbox_id = con_sandbox
+
+    filas = await _sql(prod.client_id, "SELECT * FROM public.list_active_client_ids()")
+
+    activos = {str(f[0]) for f in filas}
+    assert str(prod.client_id) in activos
+    assert str(sandbox_id) not in activos
+
+
+async def test_el_config_del_sandbox_no_trae_las_claves_del_tenant_y_se_puede_reenviar(
+    con_sandbox: tuple[Prod, uuid.UUID],
+) -> None:
+    """Lo que devuelve el GET se puede mandar en un PUT sin que este lo rechace."""
+    prod, _ = con_sandbox
+
+    leido = await svc.leer_config_sandbox(prod.client_id)
+
+    assert not [k for k in leido["config"] if k in svc.CLAVES_DEL_TENANT]
+    reenviado = await svc.actualizar_config_sandbox(prod.client_id, {"config": leido["config"]})
+    assert reenviado["config"] == leido["config"]
+
+
+async def test_un_null_en_un_campo_obligatorio_no_cambia_nada(
+    con_sandbox: tuple[Prod, uuid.UUID],
+) -> None:
+    prod, sandbox_id = con_sandbox
+
+    with pytest.raises(svc.CampoNoAnulableError):
+        await svc.actualizar_config_sandbox(prod.client_id, {"name": None, "system_prompt": "zzz"})
+
+    assert (await _agente(sandbox_id)).system_prompt == "Eres el asistente de Sol."
+
+
+async def test_un_texto_se_puede_borrar_con_null(con_sandbox: tuple[Prod, uuid.UUID]) -> None:
+    prod, sandbox_id = con_sandbox
+
+    await svc.actualizar_config_sandbox(prod.client_id, {"system_prompt": None})
+
+    assert (await _agente(sandbox_id)).system_prompt is None

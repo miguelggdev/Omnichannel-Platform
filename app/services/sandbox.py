@@ -34,12 +34,13 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import delete, func, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import tenant_session
 from app.models.agent_config import AgentConfig
+from app.models.base import Base
 from app.models.client import Client
 from app.models.conversation import Conversation
 from app.models.document import Document
@@ -76,18 +77,25 @@ _CAMPOS_RESPUESTA: tuple[str, ...] = ("shortcut", "title", "content", "category"
 #: Campos de `agent_configs` que `actualizar_config_sandbox()` deja cambiar.
 CAMPOS_EDITABLES: frozenset[str] = frozenset(_CAMPOS_AGENTE)
 
+#: De esos, los que admiten `null` (para borrar el texto); el resto son NOT NULL.
+_CAMPOS_ANULABLES: frozenset[str] = frozenset(
+    {"system_prompt", "welcome_message", "handoff_message"}
+)
+
 #: Canal de las conversaciones de prueba (`SandboxProvider`: no envia nada).
 CANAL_DE_PRUEBA = "sandbox"
 _ESTADO_CERRADO = "resolved"
 _ESTADOS_DE_UN_HUMANO = ("human_active", "waiting_human")
 
 #: Tablas que una conversacion de prueba puede llenar, hijas antes que padres. Las
-#: que se clonan (`agent_configs`, `quick_replies`, `documents`, `document_chunks`,
-#: `token_budgets`) se rehacen aparte. `audit_logs` queda: es el rastro y su propio
-#: trigger lo reescribiria con cada borrado. Un test falla si aparece una tabla nueva.
+#: que se clonan (`agent_configs`, `quick_replies`, `documents`, `document_chunks`) se
+#: rehacen aparte. **No se tocan `token_budgets` ni `token_usage_logs`**: el consumo
+#: del mes tiene que sobrevivir al reset, o `POST /reset` en bucle saltaria el tope
+#: `SANDBOX_TOKEN_BUDGET` y gastaria tokens del LLM sin limite. `audit_logs` queda:
+#: es el rastro y su propio trigger lo reescribiria con cada borrado. Un test falla
+#: si aparece una tabla nueva.
 _TABLAS_DE_PRUEBA: tuple[str, ...] = (
     "agent_action_logs",
-    "token_usage_logs",
     "pending_responses",
     "approved_responses",
     "satisfaction_surveys",
@@ -107,7 +115,6 @@ _TABLAS_CLONADAS: tuple[str, ...] = (
     "documents",
     "quick_replies",
     "agent_configs",
-    "token_budgets",
 )
 
 
@@ -135,6 +142,23 @@ class VersionInexistenteError(SandboxError):
     """No hay una instantanea de esa version (o no hay ninguna) a la que volver."""
 
 
+class CampoNoAnulableError(SandboxError):
+    """Un cambio pone a `null` un campo que la base no admite vacio.
+
+    Attributes:
+        campos: Los campos que venian en `null`.
+    """
+
+    def __init__(self, campos: list[str]) -> None:
+        """Guarda los campos que venian en `null`.
+
+        Args:
+            campos: Los campos obligatorios que venian vacios.
+        """
+        super().__init__(", ".join(campos))
+        self.campos = campos
+
+
 class ClaveDelTenantError(SandboxError):
     """El `config` intenta tocar claves propias del tenant.
 
@@ -143,6 +167,11 @@ class ClaveDelTenantError(SandboxError):
     """
 
     def __init__(self, claves: list[str]) -> None:
+        """Guarda las claves que no se pudieron aceptar.
+
+        Args:
+            claves: Las claves propias del tenant que venian en el `config`.
+        """
         super().__init__(", ".join(claves))
         self.claves = claves
 
@@ -175,7 +204,14 @@ async def _bloquear(session: AsyncSession, client_id: UUID) -> None:
 
 
 def _a_json(valor: Any) -> Any:
-    """Convierte UUID y fechas en lo que admite un JSONB."""
+    """Convierte UUID y fechas en lo que admite un JSONB.
+
+    Args:
+        valor: Un valor de una fila de configuracion.
+
+    Returns:
+        `str` para un UUID, ISO 8601 para una fecha, y el mismo valor en cualquier otro caso.
+    """
     if isinstance(valor, UUID):
         return str(valor)
     if isinstance(valor, datetime):
@@ -192,7 +228,15 @@ def _mes_actual() -> str:
 
 
 async def _leer_agentes(session: AsyncSession, client_id: UUID) -> list[dict[str, Any]]:
-    """Filas de `agent_configs` del tenant en contexto, en su orden de creacion."""
+    """Filas de `agent_configs` del tenant en contexto, en su orden de creacion.
+
+    Args:
+        session: Sesion cuyo contexto RLS ya es `client_id`.
+        client_id: Tenant en contexto.
+
+    Returns:
+        Una lista de diccionarios con `_CAMPOS_AGENTE` y `created_at`.
+    """
     filas = (
         (
             await session.execute(
@@ -211,7 +255,15 @@ async def _leer_agentes(session: AsyncSession, client_id: UUID) -> list[dict[str
 
 
 async def _leer_respuestas(session: AsyncSession, client_id: UUID) -> list[dict[str, Any]]:
-    """Filas de `quick_replies` del tenant en contexto."""
+    """Filas de `quick_replies` del tenant en contexto.
+
+    Args:
+        session: Sesion cuyo contexto RLS ya es `client_id`.
+        client_id: Tenant en contexto.
+
+    Returns:
+        Una lista de diccionarios con `_CAMPOS_RESPUESTA`, ordenada por atajo.
+    """
     filas = (
         (
             await session.execute(
@@ -226,8 +278,25 @@ async def _leer_respuestas(session: AsyncSession, client_id: UUID) -> list[dict[
     return [{campo: getattr(f, campo) for campo in _CAMPOS_RESPUESTA} for f in filas]
 
 
+def _config_visible(config: dict[str, Any] | None) -> dict[str, Any]:
+    """El `config` sin las claves propias del tenant, que no se editan en el sandbox.
+
+    Asi lo que devuelve la API se puede reenviar tal cual en un `PUT` sin que este lo
+    rechace (`feature_flags` se copia al sandbox para que se comporte como produccion,
+    pero no es editable ahi).
+    """
+    return {k: v for k, v in (config or {}).items() if k not in CLAVES_DEL_TENANT}
+
+
 def _agente_principal(agentes: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """El agente que lee `get_agent_settings()`: el primero activo por antiguedad."""
+    """El agente que lee `get_agent_settings()`: el primero activo por antiguedad.
+
+    Args:
+        agentes: Filas devueltas por `_leer_agentes()`, ya en orden de creacion.
+
+    Returns:
+        El agente principal, o `None` si no hay ninguno activo.
+    """
     return next((a for a in agentes if a["is_active"]), None)
 
 
@@ -273,7 +342,13 @@ async def _reemplazar_agentes(
 async def _reemplazar_respuestas(
     session: AsyncSession, client_id: UUID, filas: list[dict[str, Any]]
 ) -> None:
-    """Borra las respuestas rapidas del tenant en contexto y escribe `filas` en su lugar."""
+    """Borra las respuestas rapidas del tenant en contexto y escribe `filas` en su lugar.
+
+    Args:
+        session: Sesion cuyo contexto RLS ya es `client_id`.
+        client_id: Tenant en contexto.
+        filas: Respuestas rapidas a dejar, con `_CAMPOS_RESPUESTA`.
+    """
     await session.execute(delete(QuickReply).where(QuickReply.client_id == client_id))
     for fila in filas:
         session.add(QuickReply(client_id=client_id, **{c: fila[c] for c in _CAMPOS_RESPUESTA}))
@@ -281,14 +356,38 @@ async def _reemplazar_respuestas(
 
 
 def _agentes_a_json(filas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Serializa filas de agente para guardarlas en un JSONB (UUID y fechas a texto).
+
+    Args:
+        filas: Filas devueltas por `_leer_agentes()`.
+
+    Returns:
+        Las mismas filas con valores admitidos por JSON.
+    """
     return [{k: _a_json(v) for k, v in fila.items()} for fila in filas]
 
 
 def _agentes_de_json(filas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reconstruye las filas de agente de una instantanea del historial.
+
+    Args:
+        filas: Lo que guardo `_agentes_a_json()`.
+
+    Returns:
+        Las filas con `created_at` otra vez como `datetime`.
+    """
     return [{**f, "created_at": datetime.fromisoformat(f["created_at"])} for f in filas]
 
 
 def _respuestas_de_json(filas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reconstruye las respuestas rapidas de una instantanea del historial.
+
+    Args:
+        filas: Lo que guardo `_guardar_instantanea()` para `quick_replies`.
+
+    Returns:
+        Las filas con `created_by` otra vez como `UUID` (o `None`).
+    """
     return [
         {**f, "created_by": UUID(f["created_by"]) if f.get("created_by") else None} for f in filas
     ]
@@ -347,10 +446,12 @@ async def _copiar_documentos(session: AsyncSession, origen: UUID, destino: UUID)
         nuevo = Document(client_id=destino, **datos_doc)
         session.add(nuevo)
         await session.flush()
-        session.add_all(
-            DocumentChunk(client_id=destino, document_id=nuevo.id, **d) for d in datos_chunks
-        )
-        await session.flush()
+        if datos_chunks:
+            # Un solo INSERT con todos los chunks del documento, no uno por chunk.
+            await session.execute(
+                insert(DocumentChunk),
+                [{"client_id": destino, "document_id": nuevo.id, **d} for d in datos_chunks],
+            )
         session.expunge_all()
 
 
@@ -402,7 +503,15 @@ async def _copiar_produccion(
 
 
 async def _asegurar_presupuesto(session: AsyncSession, sandbox_id: UUID) -> None:
-    """Garantiza la fila de presupuesto del mes del sandbox (con tope: ver `SANDBOX_TOKEN_BUDGET`)."""
+    """Garantiza la fila de presupuesto del mes del sandbox, con tope `SANDBOX_TOKEN_BUDGET`.
+
+    Solo crea la fila si falta: nunca la reinicia, para que el consumo del mes sobreviva
+    a un reset (ver `_TABLAS_DE_PRUEBA`).
+
+    Args:
+        session: Sesion con el contexto RLS del sandbox.
+        sandbox_id: Tenant sandbox.
+    """
     existente = (
         await session.execute(
             select(TokenBudget.id).where(
@@ -427,7 +536,15 @@ async def _asegurar_presupuesto(session: AsyncSession, sandbox_id: UUID) -> None
 
 
 async def _sandbox_de(session: AsyncSession, client_id: UUID) -> TenantSandbox | None:
-    """La fila `tenant_sandboxes` del tenant (contexto de produccion)."""
+    """La fila `tenant_sandboxes` del tenant (contexto de produccion).
+
+    Args:
+        session: Sesion con el contexto RLS de `client_id`.
+        client_id: Tenant de produccion.
+
+    Returns:
+        La fila, o `None` si el tenant no tiene sandbox.
+    """
     return (
         await session.execute(select(TenantSandbox).where(TenantSandbox.client_id == client_id))
     ).scalar_one_or_none()
@@ -499,7 +616,18 @@ async def obtener_estado(client_id: UUID) -> dict[str, Any]:
 
 
 async def _requerir_sandbox(session: AsyncSession, client_id: UUID) -> UUID:
-    """El `client_id` del sandbox del tenant, o `SandboxNoExisteError`."""
+    """El `client_id` del sandbox del tenant, o `SandboxNoExisteError`.
+
+    Args:
+        session: Sesion con el contexto RLS de `client_id`.
+        client_id: Tenant de produccion.
+
+    Returns:
+        El `client_id` del tenant sandbox.
+
+    Raises:
+        SandboxNoExisteError: Si el tenant no tiene sandbox.
+    """
     sandbox = await _sandbox_de(session, client_id)
     if sandbox is None:
         raise SandboxNoExisteError(str(client_id))
@@ -529,11 +657,11 @@ async def reiniciar_sandbox(client_id: UUID) -> None:
             .scalars()
             .all()
         ]
-        for tabla in (*_TABLAS_DE_PRUEBA, *_TABLAS_CLONADAS):
-            await session.execute(
-                text(f"DELETE FROM {tabla} WHERE client_id = :cid"),  # noqa: S608
-                {"cid": str(sandbox_id)},
-            )
+        for nombre in (*_TABLAS_DE_PRUEBA, *_TABLAS_CLONADAS):
+            # La tabla sale de los metadatos de SQLAlchemy, no de un texto SQL armado
+            # a mano: no hay nada que inyectar, y un nombre que no existe falla con claridad.
+            tabla = Base.metadata.tables[nombre]
+            await session.execute(delete(tabla).where(tabla.c.client_id == sandbox_id))
         await _copiar_produccion(session, client_id, sandbox_id, None)
         await _en_tenant(session, client_id)
         await session.execute(
@@ -548,13 +676,25 @@ async def reiniciar_sandbox(client_id: UUID) -> None:
 async def _purgar_checkpoints(sandbox_id: UUID, conversaciones: list[str]) -> None:
     """Borra los checkpoints de LangGraph de las conversaciones de prueba descartadas.
 
-    Esas tablas no llevan `client_id` ni RLS, asi que el borrado del tenant no las alcanza.
-    Es limpieza: si falla se registra y el reset ya hecho se mantiene.
-    """
-    from app.tasks.ai_processor import _purgar_checkpoints as purgar
+    Esas tablas no llevan `client_id` ni RLS, asi que el borrado del tenant no las
+    alcanza. Todas las conversaciones van en una sola transaccion. Es limpieza: si
+    falla se registra y el reset ya hecho se mantiene.
 
-    for conversacion in conversaciones:
-        await purgar(str(sandbox_id), conversacion)
+    Args:
+        sandbox_id: Tenant sandbox.
+        conversaciones: Conversaciones de prueba que se descartaron.
+    """
+    if not conversaciones:
+        return
+    from app.tasks.ai_processor import _PURGAR_CHECKPOINTS
+
+    try:
+        async with tenant_session(sandbox_id) as session:
+            for conversacion in conversaciones:
+                for sentencia in _PURGAR_CHECKPOINTS:
+                    await session.execute(sentencia, {"thread": f"{sandbox_id}:{conversacion}"})
+    except Exception:
+        logger.exception("No se pudieron purgar los checkpoints del sandbox %s", sandbox_id)
 
 
 # ─── Configuracion del sandbox ───────────────────────────────────────────────
@@ -579,7 +719,9 @@ async def leer_config_sandbox(client_id: UUID) -> dict[str, Any]:
         agente = _agente_principal(await _leer_agentes(session, sandbox_id))
     if agente is None:
         raise SinConfiguracionError("El sandbox no tiene un agente activo")
-    return {k: v for k, v in agente.items() if k != "created_at"}
+    visible = {k: v for k, v in agente.items() if k != "created_at"}
+    visible["config"] = _config_visible(visible["config"])
+    return visible
 
 
 async def actualizar_config_sandbox(client_id: UUID, cambios: dict[str, Any]) -> dict[str, Any]:
@@ -596,7 +738,16 @@ async def actualizar_config_sandbox(client_id: UUID, cambios: dict[str, Any]) ->
         SandboxNoExisteError: Si el tenant no tiene sandbox.
         SinConfiguracionError: Si el sandbox no tiene ningun agente activo.
         ClaveDelTenantError: Si `config` trae claves propias del tenant.
+        CampoNoAnulableError: Si algun campo obligatorio viene en `null`.
     """
+    nulos = sorted(
+        c
+        for c, valor in cambios.items()
+        if c in CAMPOS_EDITABLES and c != "config" and valor is None and c not in _CAMPOS_ANULABLES
+    )
+    if nulos:
+        raise CampoNoAnulableError(nulos)
+
     nuevo_config = cambios.get("config")
     if nuevo_config is not None:
         prohibidas = sorted(k for k in nuevo_config if k in CLAVES_DEL_TENANT)
@@ -623,14 +774,24 @@ async def actualizar_config_sandbox(client_id: UUID, cambios: dict[str, Any]) ->
                 valor = {**(agente.config or {}), **(valor or {})}
             setattr(agente, campo, valor)
         await session.flush()
-        return {c: getattr(agente, c) for c in _CAMPOS_AGENTE}
+        actualizado = {c: getattr(agente, c) for c in _CAMPOS_AGENTE}
+        actualizado["config"] = _config_visible(actualizado["config"])
+        return actualizado
 
 
 # ─── Publicacion y rollback ──────────────────────────────────────────────────
 
 
 async def _siguiente_version(session: AsyncSession, client_id: UUID) -> int:
-    """Numero de la proxima version del historial del tenant (bajo el candado del sandbox)."""
+    """Numero de la proxima version del historial del tenant (bajo el candado del sandbox).
+
+    Args:
+        session: Sesion con el contexto RLS de `client_id`.
+        client_id: Tenant de produccion.
+
+    Returns:
+        La version mas alta guardada mas uno (1 si no hay historial).
+    """
     maximo = (
         await session.execute(
             select(func.max(ConfigHistory.version)).where(ConfigHistory.client_id == client_id)
@@ -647,7 +808,19 @@ async def _guardar_instantanea(
     agentes: list[dict[str, Any]],
     respuestas: list[dict[str, Any]],
 ) -> int:
-    """Guarda la configuracion actual del tenant en `config_history` y devuelve su version."""
+    """Guarda la configuracion actual del tenant en `config_history` y devuelve su version.
+
+    Args:
+        session: Sesion con el contexto RLS de `client_id`.
+        client_id: Tenant de produccion.
+        reason: `publish` o `rollback`.
+        created_by: Usuario que publica o revierte.
+        agentes: Filas de `agent_configs` tal como estan.
+        respuestas: Filas de `quick_replies` tal como estan.
+
+    Returns:
+        El numero de version de la instantanea.
+    """
     version = await _siguiente_version(session, client_id)
     session.add(
         ConfigHistory(

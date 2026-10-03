@@ -274,6 +274,14 @@ class TestErrores:
             (
                 "put",
                 "/agent-config",
+                {"name": None},
+                "actualizar_config_sandbox",
+                servicio.CampoNoAnulableError(["name"]),
+                400,
+            ),
+            (
+                "put",
+                "/agent-config",
                 {"system_prompt": "x"},
                 "actualizar_config_sandbox",
                 servicio.SinConfiguracionError("sin agente"),

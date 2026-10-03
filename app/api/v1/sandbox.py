@@ -11,8 +11,11 @@
     POST /api/v1/sandbox/rollback       vuelve a una version
 
 Solo `admin` y `super_admin`, y solo si el tenant tiene la flag `enable_sandbox`
-(un tenant que no la pidio no debe poder gastar tokens del LLM en pruebas). El
-tenant sale del token; el sandbox se resuelve desde `tenant_sandboxes`.
+(por defecto apagada). **La flag no es un control del operador:** la escribe el `admin`
+del propio tenant (`/api/v1/admin/feature-flags`, como pide el spec), asi que un admin
+puede encenderla. Lo que acota el gasto de verdad es el presupuesto de tokens del
+sandbox (`SANDBOX_TOKEN_BUDGET`), que ni siquiera un reset repone. El tenant sale del
+token; el sandbox se resuelve desde `tenant_sandboxes`.
 """
 
 import logging
@@ -76,6 +79,11 @@ async def sandbox_habilitado(
 
 
 def _sin_sandbox() -> AppException:
+    """El error 404 de un tenant que todavia no creo su sandbox.
+
+    Returns:
+        La excepcion lista para lanzar.
+    """
     return AppException(
         status_code=404,
         error_code=NOT_FOUND,
@@ -84,6 +92,14 @@ def _sin_sandbox() -> AppException:
 
 
 def _estado(datos: dict[str, Any]) -> SandboxStatus:
+    """Convierte el estado del servicio en la respuesta de la API.
+
+    Args:
+        datos: Lo que devuelve `servicio.obtener_estado()`.
+
+    Returns:
+        El estado del sandbox.
+    """
     return SandboxStatus(**datos)
 
 
@@ -206,6 +222,12 @@ async def update_sandbox_agent_config(
                 f"{', '.join(exc.claves)}"
             ),
         ) from exc
+    except servicio.CampoNoAnulableError as exc:
+        raise AppException(
+            status_code=400,
+            error_code=VALIDATION_ERROR,
+            message=f"Estos campos no admiten null: {', '.join(exc.campos)}",
+        ) from exc
     except servicio.SinConfiguracionError as exc:
         raise _sin_agente(exc) from exc
 
@@ -316,9 +338,24 @@ async def rollback_sandbox(
 
 
 def _usuario(user: dict[str, Any]) -> UUID:
-    """El id del usuario del token (siempre viene: lo exige el middleware de tenant)."""
+    """El id del usuario del token (siempre viene: lo exige el middleware de tenant).
+
+    Args:
+        user: Usuario autenticado, tal como lo entrega `require_role()`.
+
+    Returns:
+        El `user_id` como UUID.
+    """
     return UUID(str(user["user_id"]))
 
 
 def _sin_agente(exc: Exception) -> AppException:
+    """El error 400 de un sandbox sin agente activo.
+
+    Args:
+        exc: La `SinConfiguracionError` que lo origino; su mensaje llega al cliente.
+
+    Returns:
+        La excepcion lista para lanzar.
+    """
     return AppException(status_code=400, error_code=VALIDATION_ERROR, message=str(exc))

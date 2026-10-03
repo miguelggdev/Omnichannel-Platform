@@ -20,7 +20,15 @@ HISTORY_REASONS: tuple[str, ...] = ("publish", "rollback")
 
 
 def _en(valores: tuple[str, ...], columna: str) -> str:
-    """`columna IN ('a', 'b')`, derivado de las tuplas para que no se separen."""
+    """`columna IN ('a', 'b')`, derivado de las tuplas para que no se separen.
+
+    Args:
+        valores: Los valores permitidos.
+        columna: Nombre de la columna.
+
+    Returns:
+        El texto del CHECK.
+    """
     return f"{columna} IN ({', '.join(repr(v) for v in valores)})"
 
 

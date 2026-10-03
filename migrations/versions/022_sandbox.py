@@ -54,11 +54,19 @@ def _habilitar_rls(tabla: str) -> None:
 
 
 def _lista(valores: Sequence[str]) -> str:
-    """`'a', 'b'` para un `IN (...)` de un CHECK."""
+    """`'a', 'b'` para un `IN (...)` de un CHECK.
+
+    Args:
+        valores: Los valores permitidos.
+
+    Returns:
+        Los valores entre comillas simples, separados por coma.
+    """
     return ", ".join(f"'{v}'" for v in valores)
 
 
 def upgrade() -> None:
+    """Agrega `clients.is_sandbox` y crea `tenant_sandboxes` y `config_history` con RLS."""
     op.add_column(
         "clients",
         sa.Column("is_sandbox", sa.Boolean(), server_default=sa.text("false"), nullable=False),
