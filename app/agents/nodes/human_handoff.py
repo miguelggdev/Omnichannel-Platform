@@ -36,7 +36,7 @@ from app.agents.nodes._tenant import get_agent_settings
 from app.core.database import tenant_session
 from app.core.metrics import record_handoff
 from app.models.conversation import Conversation
-from app.services.i18n import SYSTEM_MESSAGES, get_system_message
+from app.services.i18n import SYSTEM_MESSAGES, get_system_message, normalizar_idioma
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +128,7 @@ async def human_handoff_node(state: ConversationState) -> dict[str, Any]:
     reason = state.get("handoff_reason") or DEFAULT_HANDOFF_REASON
 
     registro = _handoff_metadata(state, reason)
+    idioma = state.get("detected_language")
 
     async with tenant_session(client_id) as session:
         conversation = (
@@ -144,9 +145,14 @@ async def human_handoff_node(state: ConversationState) -> dict[str, Any]:
             # Reasignar el dict entero: SQLAlchemy no detecta mutaciones in-place
             # de un JSONB sin MutableDict.
             conversation.metadata_ = {**(conversation.metadata_ or {}), "handoff": registro}
+            # Con el presupuesto agotado el grafo llega aqui sin pasar por
+            # `language_detect`, pero el idioma de la conversacion ya esta guardado.
+            idioma = idioma or normalizar_idioma(
+                (conversation.metadata_ or {}).get("detected_language")
+            )
 
     settings = await get_agent_settings(client_id)
-    texto = _handoff_text(reason, settings.handoff_message, state.get("detected_language"))
+    texto = _handoff_text(reason, settings.handoff_message, idioma)
 
     await deliver_message(
         client_id=client_id,
