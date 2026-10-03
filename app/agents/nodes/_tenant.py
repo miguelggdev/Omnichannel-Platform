@@ -59,6 +59,7 @@ CHANNEL_PROVIDERS: dict[str, str] = {
     "telegram": "telegram",
     "email": "email",
     "webchat": "webchat",
+    "sandbox": "sandbox",
     "voice": "twilio",
 }
 
@@ -275,6 +276,9 @@ def get_channel_config(channel: str) -> tuple[str, dict[str, Any]]:
         # Sin credenciales: el tenant forma parte del nombre del canal de Redis
         # por el que se entrega (`DEFAULT_CLIENT_ID`, ADR-030).
         config = {"client_id": settings.DEFAULT_CLIENT_ID}
+    elif provider_name == "sandbox":
+        # Las conversaciones de prueba del sandbox (ADR-078): no hay nada que enviar.
+        config = {}
     elif provider_name == "twilio":
         # `client_id` arma el canal de Redis de la llamada; el resto hace falta
         # para las llamadas salientes.

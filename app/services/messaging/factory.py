@@ -11,6 +11,7 @@ from typing import Any, cast
 from app.services.messaging.base import MessagingProvider
 from app.services.messaging.email_provider import EmailProvider
 from app.services.messaging.meta import MetaProvider
+from app.services.messaging.sandbox import SandboxProvider
 from app.services.messaging.telegram import TelegramProvider
 from app.services.messaging.voice_provider import TwilioVoiceProvider
 from app.services.messaging.webchat import WebchatProvider
@@ -23,6 +24,7 @@ _PROVIDERS: dict[str, type[MessagingProvider]] = {
     "email": EmailProvider,  # Sprint 9
     "webchat": WebchatProvider,  # Sprint 9 (WebSocket; no recibe webhooks HTTP)
     "twilio": TwilioVoiceProvider,  # Sprint 13 (voz; webhooks propios en /api/v1/voice)
+    "sandbox": SandboxProvider,  # Sprint 14c (pruebas del sandbox; no envia nada)
 }
 
 
