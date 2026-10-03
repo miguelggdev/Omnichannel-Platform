@@ -1155,3 +1155,45 @@ async def test_un_registro_firmado_no_aborta_el_guardado_de_la_llamada(
     # La llamada se guardo, y el registro firmado quedo intacto.
     assert await _id_de_llamada(tenant, "CA-firmado") is not None
     assert await _llamada_del_registro(tenant, str(record_id)) is None
+
+
+async def test_una_llamada_sin_cierre_de_hace_horas_no_explica_un_dictado_nuevo(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    """Si se perdio el webhook de cierre, la llamada no queda "abierta" para siempre."""
+    conversacion = await _conversacion(tenant, profesional)
+    await _mensaje_de_llamada(tenant, conversacion, "CA-sin-cierre")
+    await _llamada_de(tenant, "CA-sin-cierre", empezo_hace=timedelta(hours=10))
+    await _consentir(tenant, profesional)
+
+    resultado = await _crear_en(tenant, profesional, conversacion)
+
+    assert await _llamada_del_registro(tenant, str(resultado["record_id"])) is None
+
+
+async def test_el_guardado_tardio_de_una_llamada_no_reclama_lo_dictado_en_la_siguiente(
+    tenant: uuid.UUID, profesional: uuid.UUID
+) -> None:
+    """La ventana posterior de A no puede invadir a B, la llamada siguiente de la conversacion."""
+    conversacion = await _conversacion(tenant, profesional)
+    await _mensaje_de_llamada(tenant, conversacion, "CA-a")
+    await _mensaje_de_llamada(tenant, conversacion, "CA-b")
+    await _llamada_de(
+        tenant, "CA-a", empezo_hace=timedelta(minutes=30), termino_hace=timedelta(minutes=10)
+    )
+    await _llamada_de(tenant, "CA-b", empezo_hace=timedelta(minutes=5))
+    await _consentir(tenant, profesional)
+    resultado = await _crear_en(tenant, profesional, conversacion)
+    record_id = str(resultado["record_id"])
+    assert await _llamada_del_registro(tenant, record_id) == await _id_de_llamada(tenant, "CA-b")
+    await _sql(tenant, "UPDATE clinical_records SET call_record_id = NULL WHERE client_id = :cid")
+
+    # Callback de estado tardio de la llamada A.
+    await _llamada_de(
+        tenant, "CA-a", empezo_hace=timedelta(minutes=30), termino_hace=timedelta(minutes=10)
+    )
+
+    assert await _llamada_del_registro(tenant, record_id) is None
+    # Y cuando se vuelve a guardar B, es B quien lo reclama.
+    await _llamada_de(tenant, "CA-b", empezo_hace=timedelta(minutes=5))
+    assert await _llamada_del_registro(tenant, record_id) == await _id_de_llamada(tenant, "CA-b")

@@ -90,6 +90,10 @@ _CAUSA_EXTERNA_PATTERN = re.compile(r"^(0[1-9]|1[0-5])$")
 #: despues de que Twilio cierre la llamada.
 VENTANA_POSTERIOR_A_LA_LLAMADA = timedelta(minutes=15)
 
+#: Una llamada sin `ended_at` (se perdio el webhook de cierre) no se considera abierta
+#: para siempre: pasado este tiempo desde su inicio ya no explica ningun registro.
+DURACION_MAXIMA_DE_UNA_LLAMADA = timedelta(hours=4)
+
 MAX_LARGO_NOTA = 4000
 _CAMPOS_SOAP = ("subjective", "objective", "assessment", "plan")
 
@@ -415,6 +419,7 @@ async def llamada_en_curso(
                 CallRecord.client_id == client_id,
                 CallRecord.conversation_id == conversation_id,
                 CallRecord.started_at <= instante,
+                CallRecord.started_at >= instante - DURACION_MAXIMA_DE_UNA_LLAMADA,
                 (CallRecord.ended_at.is_(None))
                 | (CallRecord.ended_at >= instante - VENTANA_POSTERIOR_A_LA_LLAMADA),
             )
@@ -458,8 +463,21 @@ async def vincular_registros_con_llamada(
     hasta = (
         ended_at + VENTANA_POSTERIOR_A_LA_LLAMADA
         if ended_at is not None
-        else datetime.now(timezone.utc)
+        else min(datetime.now(timezone.utc), started_at + DURACION_MAXIMA_DE_UNA_LLAMADA)
     )
+    # La ventana posterior no puede invadir la llamada siguiente de la misma
+    # conversacion: un callback tardio de A no reclama lo que se dicto durante B.
+    siguiente = (
+        await session.execute(
+            select(func.min(CallRecord.started_at)).where(
+                CallRecord.client_id == client_id,
+                CallRecord.conversation_id == conversation_id,
+                CallRecord.started_at > started_at,
+            )
+        )
+    ).scalar_one_or_none()
+    if siguiente is not None:
+        hasta = min(hasta, siguiente)
     resultado = await session.execute(
         update(ClinicalRecord)
         .where(
