@@ -17,6 +17,7 @@ from app.api.internal.health import router as health_router
 from app.api.internal.metrics import router as metrics_router
 from app.api.v1.admin import router as admin_router
 from app.api.v1.agent_logs import router as agent_logs_router
+from app.api.v1.analytics import router as analytics_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.campaigns import router as campaigns_router
 from app.api.v1.clinical import router as clinical_router
@@ -188,6 +189,7 @@ def create_app() -> FastAPI:
     app.include_router(agent_logs_router, prefix="/api/v1/agent-logs", tags=["agent-logs"])
     app.include_router(quick_replies_router, prefix="/api/v1/quick-replies", tags=["quick-replies"])
     app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
+    app.include_router(analytics_router, prefix="/api/v1/analytics", tags=["analytics"])
     app.include_router(templates_router, prefix="/api/v1/admin/templates", tags=["templates"])
     app.include_router(preferences_router, prefix="/api/v1/settings/preferences", tags=["settings"])
     app.include_router(sandbox_router, prefix="/api/v1/sandbox", tags=["sandbox"])
