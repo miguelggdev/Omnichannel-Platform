@@ -7,7 +7,7 @@ inalcanzable", que las colas se midan en Redis de verdad y que `/system` mida la
 
 import time
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
 from typing import Any
 
 import pytest
@@ -41,10 +41,25 @@ def _super_admin() -> AsyncClient:
     )
 
 
+def _descartar_conexiones() -> None:
+    """Olvida el pool y los productores que Celery creo con la URL anterior del broker."""
+    celery_app._pool = None
+    for cache in ("amqp", "control"):
+        celery_app.__dict__.pop(cache, None)
+
+
 @pytest.fixture
-def broker_local(monkeypatch: pytest.MonkeyPatch) -> None:
+def broker_local(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     """El broker por defecto apunta al host `redis` de Docker; en CI es localhost."""
     monkeypatch.setattr(celery_app.conf, "broker_url", BROKER_LOCAL)
+    # Celery da prioridad a esta variable sobre `conf`: si otro test ya fijo la configuracion,
+    # el cambio de `conf` solo no basta y la suite completa fallaba contra el host `redis`.
+    monkeypatch.setenv("CELERY_BROKER_URL", BROKER_LOCAL)
+    # `inspect` usa el pool de conexiones de la app, que se crea una vez con la URL que habia
+    # entonces: si otro test ya lo uso, hay que descartarlo para que tome la de este test.
+    _descartar_conexiones()
+    yield
+    _descartar_conexiones()
 
 
 @pytest_asyncio.fixture
@@ -85,6 +100,8 @@ async def test_sin_workers_con_el_broker_vivo_es_una_lista_vacia(broker_local: N
 
 async def test_un_broker_inalcanzable_no_es_cero_workers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(celery_app.conf, "broker_url", "redis://localhost:1/0")
+    monkeypatch.setenv("CELERY_BROKER_URL", "redis://localhost:1/0")
+    _descartar_conexiones()
 
     inicio = time.perf_counter()
     async with _super_admin() as c:
