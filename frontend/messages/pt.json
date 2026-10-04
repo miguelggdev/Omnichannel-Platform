@@ -46,8 +46,10 @@
       "settings": "Definições",
       "preferences": "Preferências",
       "quick-replies": "Respostas rápidas",
-      "sandbox": "Sandbox"
-    }
+      "sandbox": "Sandbox",
+      "team": "Equipa"
+    },
+    "team": "Equipa"
   },
   "roles": {
     "super_admin": "Super administrador",
@@ -115,7 +117,6 @@
     "messages": "Mensagens",
     "earlierNotLoaded": "Há mensagens anteriores que não são apresentadas.",
     "noMessages": "Ainda não há mensagens.",
-    "readOnlyNotice": "Responder a partir do painel ainda não está disponível; a conversa é atendida no canal original.",
     "sender": {
       "contact": "Contacto",
       "bot": "Assistente",
@@ -123,7 +124,17 @@
       "system": "Sistema"
     },
     "noText": "[{type}]",
-    "attachment": "Ver anexo"
+    "attachment": "Ver anexo",
+    "reply": {
+      "placeholder": "Escreva uma resposta…",
+      "send": "Enviar mensagem",
+      "hint": "Enter envia · Shift+Enter nova linha · «/» procura respostas rápidas. Ao responder assume a conversa e o bot deixa de responder.",
+      "quickReplies": "Respostas rápidas",
+      "noQuickReplies": "Ainda não há respostas rápidas.",
+      "unresolved": "Reveja o texto: faltam dados para {vars}.",
+      "closed": "Esta conversa está fechada e já não aceita respostas.",
+      "assignedToOther": "Esta conversa está a ser atendida por outra pessoa da equipa."
+    }
   },
   "contacts": {
     "title": "Contactos",
@@ -273,5 +284,56 @@
     "goConversations": "Ver conversas",
     "goDocuments": "Base de conhecimento",
     "goPreferences": "As minhas preferências"
+  },
+  "team": {
+    "title": "Equipa",
+    "subtitle": "As pessoas que usam a plataforma na sua conta e a sua função.",
+    "search": "Pesquisar utilizadores",
+    "searchPlaceholder": "Pesquisar por nome ou e-mail…",
+    "filterRole": "Filtrar por função",
+    "filterState": "Filtrar por estado",
+    "allRoles": "Todas as funções",
+    "allStates": "Todos",
+    "active": "Ativo",
+    "inactive": "Desativado",
+    "new": "Novo utilizador",
+    "created": "Utilizador criado",
+    "you": "você",
+    "never": "Nunca",
+    "empty": "Não há utilizadores",
+    "emptySearch": "Nenhum utilizador corresponde aos filtros.",
+    "columns": {
+      "user": "Utilizador",
+      "role": "Função",
+      "state": "Estado",
+      "lastLogin": "Último acesso"
+    },
+    "fields": {
+      "first_name": "Nome",
+      "last_name": "Apelido",
+      "email": "E-mail",
+      "role": "Função",
+      "initialPassword": "Palavra-passe inicial",
+      "newPassword": "Nova palavra-passe (opcional)"
+    },
+    "newPasswordHint": "Deixe vazio para não alterar. A pessoa usá-la-á no próximo início de sessão.",
+    "selfRoleHint": "Não pode alterar a sua própria função; peça a outro administrador.",
+    "editUser": "Editar {name}",
+    "deactivateUser": "Desativar {name}",
+    "reactivateUser": "Reativar {name}",
+    "deactivateTitle": "Desativar utilizador",
+    "deactivateBody": "{name} deixará de poder iniciar ou renovar a sessão. Se já tiver a sessão aberta, continuará a funcionar alguns minutos.",
+    "reactivateTitle": "Reativar utilizador",
+    "reactivateBody": "{name} poderá voltar a iniciar sessão.",
+    "deactivate": "Desativar",
+    "reactivate": "Reativar",
+    "deactivated": "Utilizador desativado",
+    "reactivated": "Utilizador reativado",
+    "errors": {
+      "required": "Campo obrigatório",
+      "invalidEmail": "Introduza um e-mail válido",
+      "passwordMin": "Mínimo de 8 caracteres",
+      "passwordMax": "Máximo de 72 caracteres"
+    }
   }
 }

@@ -8,6 +8,7 @@ import {
   MessageSquare,
   Settings,
   Users,
+  UsersRound,
   Zap,
 } from "lucide-react";
 import { useTranslations } from "next-intl";
@@ -24,7 +25,15 @@ import { SidebarItem } from "./SidebarItem";
 interface NavItem {
   href: string;
   icon: React.ComponentType<{ className?: string }>;
-  labelKey: "dashboard" | "conversations" | "contacts" | "documents" | "quickReplies" | "preferences" | "sandbox";
+  labelKey:
+    | "dashboard"
+    | "conversations"
+    | "contacts"
+    | "documents"
+    | "quickReplies"
+    | "team"
+    | "preferences"
+    | "sandbox";
   minRole?: UserRole;
 }
 
@@ -34,6 +43,7 @@ const NAV: NavItem[] = [
   { href: "/contacts", icon: Users, labelKey: "contacts" },
   { href: "/documents", icon: BookOpen, labelKey: "documents" },
   { href: "/settings/quick-replies", icon: Zap, labelKey: "quickReplies" },
+  { href: "/settings/team", icon: UsersRound, labelKey: "team", minRole: "admin" },
   { href: "/settings/sandbox", icon: FlaskConical, labelKey: "sandbox", minRole: "admin" },
   { href: "/settings/preferences", icon: Settings, labelKey: "preferences" },
 ];

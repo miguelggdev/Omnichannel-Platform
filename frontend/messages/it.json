@@ -46,8 +46,10 @@
       "settings": "Impostazioni",
       "preferences": "Preferenze",
       "quick-replies": "Risposte rapide",
-      "sandbox": "Sandbox"
-    }
+      "sandbox": "Sandbox",
+      "team": "Team"
+    },
+    "team": "Team"
   },
   "roles": {
     "super_admin": "Super amministratore",
@@ -115,7 +117,6 @@
     "messages": "Messaggi",
     "earlierNotLoaded": "Ci sono messaggi precedenti non mostrati.",
     "noMessages": "Ancora nessun messaggio.",
-    "readOnlyNotice": "Rispondere dal pannello non è ancora disponibile; la conversazione si gestisce sul canale originale.",
     "sender": {
       "contact": "Contatto",
       "bot": "Assistente",
@@ -123,7 +124,17 @@
       "system": "Sistema"
     },
     "noText": "[{type}]",
-    "attachment": "Vedi allegato"
+    "attachment": "Vedi allegato",
+    "reply": {
+      "placeholder": "Scrivi una risposta…",
+      "send": "Invia messaggio",
+      "hint": "Invio invia · Maiusc+Invio a capo · «/» cerca risposte rapide. Rispondendo prendi la conversazione e il bot smette di rispondere.",
+      "quickReplies": "Risposte rapide",
+      "noQuickReplies": "Ancora nessuna risposta rapida.",
+      "unresolved": "Controlla il testo: mancano dati per {vars}.",
+      "closed": "Questa conversazione è chiusa e non accetta più risposte.",
+      "assignedToOther": "Questa conversazione è gestita da un'altra persona del team."
+    }
   },
   "contacts": {
     "title": "Contatti",
@@ -273,5 +284,56 @@
     "goConversations": "Vedi conversazioni",
     "goDocuments": "Base di conoscenza",
     "goPreferences": "Le mie preferenze"
+  },
+  "team": {
+    "title": "Team",
+    "subtitle": "Le persone che usano la piattaforma nel tuo account e il loro ruolo.",
+    "search": "Cerca utenti",
+    "searchPlaceholder": "Cerca per nome o email…",
+    "filterRole": "Filtra per ruolo",
+    "filterState": "Filtra per stato",
+    "allRoles": "Tutti i ruoli",
+    "allStates": "Tutti",
+    "active": "Attivo",
+    "inactive": "Disattivato",
+    "new": "Nuovo utente",
+    "created": "Utente creato",
+    "you": "tu",
+    "never": "Mai",
+    "empty": "Nessun utente",
+    "emptySearch": "Nessun utente corrisponde ai filtri.",
+    "columns": {
+      "user": "Utente",
+      "role": "Ruolo",
+      "state": "Stato",
+      "lastLogin": "Ultimo accesso"
+    },
+    "fields": {
+      "first_name": "Nome",
+      "last_name": "Cognome",
+      "email": "Email",
+      "role": "Ruolo",
+      "initialPassword": "Password iniziale",
+      "newPassword": "Nuova password (facoltativa)"
+    },
+    "newPasswordHint": "Lascia vuoto per non cambiarla. La persona la userà al prossimo accesso.",
+    "selfRoleHint": "Non puoi cambiare il tuo ruolo; chiedilo a un altro amministratore.",
+    "editUser": "Modifica {name}",
+    "deactivateUser": "Disattiva {name}",
+    "reactivateUser": "Riattiva {name}",
+    "deactivateTitle": "Disattiva utente",
+    "deactivateBody": "{name} non potrà più accedere né rinnovare la sessione. Se è già connesso, continuerà a funzionare per qualche minuto.",
+    "reactivateTitle": "Riattiva utente",
+    "reactivateBody": "{name} potrà accedere di nuovo.",
+    "deactivate": "Disattiva",
+    "reactivate": "Riattiva",
+    "deactivated": "Utente disattivato",
+    "reactivated": "Utente riattivato",
+    "errors": {
+      "required": "Campo obbligatorio",
+      "invalidEmail": "Inserisci un'email valida",
+      "passwordMin": "Almeno 8 caratteri",
+      "passwordMax": "Al massimo 72 caratteri"
+    }
   }
 }

@@ -1,9 +1,15 @@
 "use client";
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiPut } from "@/lib/api";
+import { apiGet, apiPost, apiPut } from "@/lib/api";
 import { CONVERSATIONS_POLL_MS, MESSAGES_POLL_MS } from "@/lib/constants";
-import type { Conversation, ConversationDetail, ConversationStatus, Paginated } from "@/types";
+import type {
+  Conversation,
+  ConversationDetail,
+  ConversationStatus,
+  Message,
+  Paginated,
+} from "@/types";
 
 export interface ConversationFilters {
   status?: ConversationStatus;
@@ -73,5 +79,20 @@ export function useAssignConversation(id: string) {
       void queryClient.invalidateQueries({ queryKey: ["conversation", id] });
       void queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
+  });
+}
+
+/** Una persona del equipo contesta; al hacerlo toma la conversacion (human_active). */
+export function useSendMessage(id: string) {
+  const queryClient = useQueryClient();
+  const refrescar = () => {
+    void queryClient.invalidateQueries({ queryKey: ["conversation", id] });
+    void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+  };
+  return useMutation({
+    mutationFn: (text: string) => apiPost<Message>(`/conversations/${id}/messages`, { text }),
+    onSuccess: refrescar,
+    // Aunque el envio falle, el backend ya pudo dejar la conversacion en manos de la persona.
+    onError: refrescar,
   });
 }

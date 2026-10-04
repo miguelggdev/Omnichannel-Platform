@@ -14,3 +14,10 @@ export interface QuickReplyInput {
   content: string;
   category?: string | null;
 }
+
+export interface RenderedQuickReply {
+  shortcut: string;
+  content: string;
+  /** Variables que no se pudieron resolver y quedaron como `{{nombre}}` en el texto. */
+  unresolved: string[];
+}

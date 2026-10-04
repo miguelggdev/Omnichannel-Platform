@@ -46,8 +46,10 @@
       "settings": "Settings",
       "preferences": "Preferences",
       "quick-replies": "Quick replies",
-      "sandbox": "Sandbox"
-    }
+      "sandbox": "Sandbox",
+      "team": "Team"
+    },
+    "team": "Team"
   },
   "roles": {
     "super_admin": "Super admin",
@@ -115,7 +117,6 @@
     "messages": "Messages",
     "earlierNotLoaded": "Earlier messages are not shown.",
     "noMessages": "No messages yet.",
-    "readOnlyNotice": "Replying from the panel is not available yet; the conversation is handled on its original channel.",
     "sender": {
       "contact": "Contact",
       "bot": "Assistant",
@@ -123,7 +124,17 @@
       "system": "System"
     },
     "noText": "[{type}]",
-    "attachment": "View attachment"
+    "attachment": "View attachment",
+    "reply": {
+      "placeholder": "Write a reply…",
+      "send": "Send message",
+      "hint": "Enter sends · Shift+Enter for a new line · “/” searches quick replies. Replying takes over the conversation and the bot stops answering.",
+      "quickReplies": "Quick replies",
+      "noQuickReplies": "No quick replies yet.",
+      "unresolved": "Check the text: data is missing for {vars}.",
+      "closed": "This conversation is closed and no longer accepts replies.",
+      "assignedToOther": "Another team member is handling this conversation."
+    }
   },
   "contacts": {
     "title": "Contacts",
@@ -273,5 +284,56 @@
     "goConversations": "View conversations",
     "goDocuments": "Knowledge base",
     "goPreferences": "My preferences"
+  },
+  "team": {
+    "title": "Team",
+    "subtitle": "The people who use the platform in your account, and their role.",
+    "search": "Search users",
+    "searchPlaceholder": "Search by name or email…",
+    "filterRole": "Filter by role",
+    "filterState": "Filter by state",
+    "allRoles": "All roles",
+    "allStates": "All",
+    "active": "Active",
+    "inactive": "Deactivated",
+    "new": "New user",
+    "created": "User created",
+    "you": "you",
+    "never": "Never",
+    "empty": "No users",
+    "emptySearch": "No user matches the filters.",
+    "columns": {
+      "user": "User",
+      "role": "Role",
+      "state": "Status",
+      "lastLogin": "Last sign-in"
+    },
+    "fields": {
+      "first_name": "First name",
+      "last_name": "Last name",
+      "email": "Email",
+      "role": "Role",
+      "initialPassword": "Initial password",
+      "newPassword": "New password (optional)"
+    },
+    "newPasswordHint": "Leave it empty to keep the current one. The person will use it the next time they sign in.",
+    "selfRoleHint": "You cannot change your own role; ask another administrator.",
+    "editUser": "Edit {name}",
+    "deactivateUser": "Deactivate {name}",
+    "reactivateUser": "Reactivate {name}",
+    "deactivateTitle": "Deactivate user",
+    "deactivateBody": "{name} will no longer be able to sign in or renew their session. If already signed in, access keeps working for a few minutes.",
+    "reactivateTitle": "Reactivate user",
+    "reactivateBody": "{name} will be able to sign in again.",
+    "deactivate": "Deactivate",
+    "reactivate": "Reactivate",
+    "deactivated": "User deactivated",
+    "reactivated": "User reactivated",
+    "errors": {
+      "required": "Required field",
+      "invalidEmail": "Enter a valid email",
+      "passwordMin": "At least 8 characters",
+      "passwordMax": "At most 72 characters"
+    }
   }
 }

@@ -46,8 +46,10 @@
       "settings": "Paramètres",
       "preferences": "Préférences",
       "quick-replies": "Réponses rapides",
-      "sandbox": "Sandbox"
-    }
+      "sandbox": "Sandbox",
+      "team": "Équipe"
+    },
+    "team": "Équipe"
   },
   "roles": {
     "super_admin": "Super administrateur",
@@ -115,7 +117,6 @@
     "messages": "Messages",
     "earlierNotLoaded": "Des messages plus anciens ne sont pas affichés.",
     "noMessages": "Aucun message pour l'instant.",
-    "readOnlyNotice": "Répondre depuis le panneau n'est pas encore disponible ; la conversation se traite sur son canal d'origine.",
     "sender": {
       "contact": "Contact",
       "bot": "Assistant",
@@ -123,7 +124,17 @@
       "system": "Système"
     },
     "noText": "[{type}]",
-    "attachment": "Voir la pièce jointe"
+    "attachment": "Voir la pièce jointe",
+    "reply": {
+      "placeholder": "Écrivez une réponse…",
+      "send": "Envoyer le message",
+      "hint": "Entrée envoie · Maj+Entrée saut de ligne · « / » cherche des réponses rapides. En répondant vous prenez la conversation et le bot cesse de répondre.",
+      "quickReplies": "Réponses rapides",
+      "noQuickReplies": "Aucune réponse rapide pour l'instant.",
+      "unresolved": "Vérifiez le texte : il manque des données pour {vars}.",
+      "closed": "Cette conversation est fermée et n'accepte plus de réponses.",
+      "assignedToOther": "Un autre membre de l'équipe gère cette conversation."
+    }
   },
   "contacts": {
     "title": "Contacts",
@@ -273,5 +284,56 @@
     "goConversations": "Voir les conversations",
     "goDocuments": "Base de connaissances",
     "goPreferences": "Mes préférences"
+  },
+  "team": {
+    "title": "Équipe",
+    "subtitle": "Les personnes qui utilisent la plateforme dans votre compte et leur rôle.",
+    "search": "Rechercher des utilisateurs",
+    "searchPlaceholder": "Rechercher par nom ou e-mail…",
+    "filterRole": "Filtrer par rôle",
+    "filterState": "Filtrer par statut",
+    "allRoles": "Tous les rôles",
+    "allStates": "Tous",
+    "active": "Actif",
+    "inactive": "Désactivé",
+    "new": "Nouvel utilisateur",
+    "created": "Utilisateur créé",
+    "you": "vous",
+    "never": "Jamais",
+    "empty": "Aucun utilisateur",
+    "emptySearch": "Aucun utilisateur ne correspond aux filtres.",
+    "columns": {
+      "user": "Utilisateur",
+      "role": "Rôle",
+      "state": "Statut",
+      "lastLogin": "Dernière connexion"
+    },
+    "fields": {
+      "first_name": "Prénom",
+      "last_name": "Nom",
+      "email": "E-mail",
+      "role": "Rôle",
+      "initialPassword": "Mot de passe initial",
+      "newPassword": "Nouveau mot de passe (facultatif)"
+    },
+    "newPasswordHint": "Laissez vide pour ne pas la changer. La personne l'utilisera à sa prochaine connexion.",
+    "selfRoleHint": "Vous ne pouvez pas changer votre propre rôle ; demandez à un autre administrateur.",
+    "editUser": "Modifier {name}",
+    "deactivateUser": "Désactiver {name}",
+    "reactivateUser": "Réactiver {name}",
+    "deactivateTitle": "Désactiver l'utilisateur",
+    "deactivateBody": "{name} ne pourra plus se connecter ni renouveler sa session. Si elle est déjà ouverte, elle continuera de fonctionner quelques minutes.",
+    "reactivateTitle": "Réactiver l'utilisateur",
+    "reactivateBody": "{name} pourra se reconnecter.",
+    "deactivate": "Désactiver",
+    "reactivate": "Réactiver",
+    "deactivated": "Utilisateur désactivé",
+    "reactivated": "Utilisateur réactivé",
+    "errors": {
+      "required": "Champ obligatoire",
+      "invalidEmail": "Saisissez un e-mail valide",
+      "passwordMin": "8 caractères minimum",
+      "passwordMax": "72 caractères maximum"
+    }
   }
 }
