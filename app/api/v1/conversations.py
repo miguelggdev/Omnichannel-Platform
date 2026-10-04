@@ -4,6 +4,7 @@ GET /api/v1/conversations              lista filtrable por status, canal y agent
 GET /api/v1/conversations/{id}         detalle con los mensajes paginados
 PUT /api/v1/conversations/{id}/assign  asigna la conversacion a un agente humano
 PUT /api/v1/conversations/{id}/status  cambia el estado validando la transicion
+POST /api/v1/conversations/{id}/messages  una persona del equipo contesta al contacto
 
 Las transiciones de estado no se resuelven aqui: las dicta
 `app/services/conversation_lifecycle.py`, que es el unico sitio donde vive la
@@ -12,16 +13,25 @@ maquina de estados (tambien la usa el worker de auto-cierre).
 
 import logging
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.nodes._delivery import deliver_message
+from app.agents.nodes._tenant import ChannelNotConfiguredError, ContactIdentifierNotFoundError
 from app.core.database import tenant_session
 from app.core.dependencies import require_role
 from app.core.events import EVENT_CONVERSATION_RESOLVED, EventEmitter
-from app.core.exceptions import NOT_FOUND, VALIDATION_ERROR, AppException
+from app.core.exceptions import (
+    CONFLICT,
+    DELIVERY_FAILED,
+    FORBIDDEN,
+    NOT_FOUND,
+    VALIDATION_ERROR,
+    AppException,
+)
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.user import User
@@ -30,6 +40,7 @@ from app.schemas.conversation import (
     ConversationDetailResponse,
     ConversationListResponse,
     ConversationMessageResponse,
+    ConversationMessageSend,
     ConversationResponse,
     ConversationStatusChangeRequest,
 )
@@ -331,3 +342,111 @@ async def change_conversation_status(
         "status": data.status,
         "valid_next_transitions": ConversationLifecycle.get_valid_transitions(data.status),
     }
+
+
+# Estados en los que una persona puede contestar: los demas son terminales
+# (`resolved` solo admite pasar a `archived`).
+_REPLY_STATUSES = ("new", "bot_active", "human_active", "waiting_human", "waiting_client")
+
+
+@router.post(
+    "/{conversation_id}/messages", response_model=ConversationMessageResponse, status_code=201
+)
+async def send_conversation_message(
+    conversation_id: UUID,
+    data: ConversationMessageSend,
+    user: dict[str, Any] = Depends(require_role(*_STATUS_ROLES)),
+) -> ConversationMessageResponse:
+    """Una persona del equipo contesta al contacto por el canal de la conversacion.
+
+    El envio va por el mismo `MessagingProvider` que usa el agente, asi que el
+    contacto lo recibe por su canal (WhatsApp, Telegram, email...) y el mensaje
+    queda en el historial como `sender_type="agent"`.
+
+    Al contestar la persona **toma la conversacion**: pasa a `human_active` y queda
+    asignada a quien escribe, de modo que el bot deja de responder. Se hace *antes*
+    de enviar, para que el bot no conteste a la vez que la persona; si el envio
+    falla, la conversacion queda en sus manos igualmente (era su intencion).
+    El envio va fuera de la transaccion, como el resto de llamadas de red.
+
+    Un `agent` solo puede contestar conversaciones sin asignar o asignadas a el;
+    supervisor, admin y super_admin pueden contestar cualquiera.
+
+    Args:
+        conversation_id: Conversacion a la que se contesta.
+        data: Texto del mensaje.
+        user: Usuario autenticado.
+
+    Returns:
+        El mensaje saliente tal como queda en el historial.
+
+    Raises:
+        AppException: 404 si no existe; 403 si es de otra persona y quien llama es
+            `agent`; 409 si esta resuelta o archivada; 409 si el contacto no tiene
+            identificador en el canal o el canal no esta configurado; 502 si el
+            proveedor rechaza el envio.
+    """
+    client_id: UUID = user["client_id"]
+    user_id: UUID = user["user_id"]
+
+    async with tenant_session(client_id) as session:
+        conversation = await _get_conversation_or_404(session, conversation_id, client_id)
+
+        if conversation.status not in _REPLY_STATUSES:
+            raise AppException(
+                status_code=409,
+                error_code=CONFLICT,
+                message=f"La conversacion esta {conversation.status}: ya no admite respuestas",
+            )
+        asignada = conversation.assigned_user_id
+        if user["role"] == "agent" and asignada is not None and asignada != user_id:
+            raise AppException(
+                status_code=403,
+                error_code=FORBIDDEN,
+                message="La conversacion esta asignada a otra persona del equipo",
+            )
+
+        if conversation.status != "human_active":
+            await ConversationLifecycle(session).transition(
+                conversation, "human_active", user_id=user_id
+            )
+        elif asignada is None:
+            conversation.assigned_user_id = user_id
+        contact_id = conversation.contact_id
+        channel = conversation.channel
+
+    message_id = uuid4()
+    try:
+        await deliver_message(
+            client_id,
+            conversation_id,
+            contact_id,
+            channel,
+            data.text,
+            sender_type="agent",
+            sender_id=user_id,
+            message_id=message_id,
+        )
+    except (ContactIdentifierNotFoundError, ChannelNotConfiguredError) as exc:
+        logger.warning("No se pudo contestar %s por %s: %s", conversation_id, channel, exc)
+        raise AppException(
+            status_code=409,
+            error_code=CONFLICT,
+            message="El contacto no se puede alcanzar por el canal de esta conversacion",
+        ) from exc
+    except Exception as exc:
+        # El detalle del proveedor (URLs, cuerpos de error) va al log, no al cliente.
+        logger.exception("El proveedor rechazo el envio de la conversacion %s", conversation_id)
+        raise AppException(
+            status_code=502,
+            error_code=DELIVERY_FAILED,
+            message="No se pudo enviar el mensaje. Intentalo de nuevo",
+        ) from exc
+
+    async with tenant_session(client_id) as session:
+        mensaje = (
+            await session.execute(
+                select(Message).where(Message.id == message_id, Message.client_id == client_id)
+            )
+        ).scalar_one()
+        return ConversationMessageResponse.model_validate(mensaje)

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ConversationCreate(BaseModel):
@@ -90,3 +90,24 @@ class ConversationStatusChangeRequest(BaseModel):
     """Body para cambiar el estado de una conversacion."""
 
     status: str = Field(description="Nuevo estado de la conversacion")
+
+
+class ConversationMessageSend(BaseModel):
+    """Cuerpo de `POST /api/v1/conversations/{id}/messages`.
+
+    Attributes:
+        text: Texto que una persona del equipo envia al contacto. No puede ser
+            solo espacios: el canal rechazaria un mensaje vacio y quedaria un envio
+            fallido sin explicacion.
+    """
+
+    text: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("text")
+    @classmethod
+    def _no_solo_espacios(cls, valor: str) -> str:
+        """Rechaza un texto que sea solo espacios y recorta los extremos."""
+        recortado = valor.strip()
+        if not recortado:
+            raise ValueError("El mensaje no puede estar vacio")
+        return recortado
