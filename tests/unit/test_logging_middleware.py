@@ -91,8 +91,29 @@ class TestResumenes:
         assert "Ana Perez" not in resumen
         assert CONTENIDO_OMITIDO in resumen
 
+    def test_token_budget_check_no_copia_el_texto_al_log(self) -> None:
+        """Tambien corre antes de `intent_routing`: mismo riesgo que `language_detect`."""
+        estado = {"message": {"text": "paciente Ana Perez, hipertension"}}
+
+        resumen = _build_input_summary(estado, "token_budget_check")  # type: ignore[arg-type]
+
+        assert "Ana Perez" not in resumen
+        assert CONTENIDO_OMITIDO in resumen
+
+    def test_handoff_sin_intent_no_copia_el_texto_pero_con_intent_si(self) -> None:
+        """Presupuesto agotado: el handoff llega sin clasificar el mensaje."""
+        sin_intent = {"message": {"text": "paciente Ana Perez, hipertension"}}
+        con_intent = {"message": {"text": "quiero hablar con alguien"}, "intent": "rag_query"}
+
+        resumen_sin = _build_input_summary(sin_intent, "human_handoff")  # type: ignore[arg-type]
+        resumen_con = _build_input_summary(con_intent, "human_handoff")  # type: ignore[arg-type]
+
+        assert "Ana Perez" not in resumen_sin
+        assert CONTENIDO_OMITIDO in resumen_sin
+        assert "quiero hablar con alguien" in resumen_con
+
     def test_los_demas_nodos_previos_siguen_registrando_el_texto(self) -> None:
-        """El cambio es solo para `language_detect`: no altera lo que ya se registraba."""
+        """El cambio no altera lo que ya se registraba en el resto de nodos."""
         estado = {"message": {"text": "quiero una cita"}}
 
         assert "quiero una cita" in _build_input_summary(estado, "intent_routing")  # type: ignore[arg-type]

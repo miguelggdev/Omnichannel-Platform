@@ -80,7 +80,10 @@ _INTENTS_SENSIBLES: frozenset[str] = frozenset({"clinical"})
 _NODOS_SENSIBLES: frozenset[str] = frozenset({"clinical"})
 # Nodos que corren antes de conocer el intent: no pueden saber si el mensaje es un
 # dictado clinico, asi que no copian su texto al log (el intent se registra despues).
-_NODOS_SIN_TEXTO: frozenset[str] = frozenset({"language_detect"})
+_NODOS_SIN_TEXTO: frozenset[str] = frozenset({"language_detect", "token_budget_check"})
+# Nodos que pueden correr sin intent (el presupuesto agotado salta `intent_routing` y
+# va directo al handoff): sin intent no se sabe si el texto es clinico, asi que se omite.
+_NODOS_SIN_TEXTO_SIN_INTENT: frozenset[str] = frozenset({"human_handoff"})
 CONTENIDO_OMITIDO = "[contenido clinico omitido]"
 
 Node = Callable[[ConversationState], Awaitable[dict[str, Any]]]
@@ -126,7 +129,11 @@ def _build_input_summary(
     mensaje = state.get("message") or {}
     texto = mensaje.get("text") if isinstance(mensaje, dict) else None
     if texto:
-        omitir = node_name in _NODOS_SIN_TEXTO or _es_sensible(state, result, node_name)
+        omitir = (
+            node_name in _NODOS_SIN_TEXTO
+            or (node_name in _NODOS_SIN_TEXTO_SIN_INTENT and not state.get("intent"))
+            or _es_sensible(state, result, node_name)
+        )
         partes.append(f"msg: {CONTENIDO_OMITIDO if omitir else texto[:200]}")
     if state.get("intent"):
         partes.append(f"intent: {state['intent']}")

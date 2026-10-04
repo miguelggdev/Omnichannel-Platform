@@ -379,10 +379,76 @@ class TestApi:
             "flag": "enable_clinical",
             "value": False,
             "enforced": True,
+            "editable": True,
         }
         assert flags["enable_marketing"]["value"] is None
         assert flags["enable_voice"]["enforced"] is False
         assert flags["enable_sandbox"]["enforced"] is True  # la exige la API del sandbox
+        assert flags["enable_sandbox"]["editable"] is False  # un admin la ve, no la cambia
+
+    async def test_el_super_admin_ve_enable_sandbox_como_editable(
+        self, authenticated_client_factory: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._preparar(monkeypatch, [{"feature_flags": {}}])
+        cliente = authenticated_client_factory(role="super_admin")
+
+        response = await cliente.get(URL)
+
+        flags = {f["flag"]: f for f in response.json()["flags"]}
+        assert flags["enable_sandbox"]["editable"] is True
+
+    async def test_un_admin_no_puede_cambiar_enable_sandbox(
+        self, authenticated_client_factory: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sesion, _ = self._preparar(monkeypatch, [])
+        cliente = authenticated_client_factory(role="admin")
+
+        response = await cliente.put(f"{URL}/enable_sandbox", json={"value": True})
+
+        assert response.status_code == 403
+        assert sesion.executed == []  # ni siquiera toca la base
+
+    async def test_el_super_admin_cambia_enable_sandbox_de_otro_tenant(
+        self, authenticated_client_factory: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        otro = uuid.uuid4()
+        sesion, _ = self._preparar(
+            monkeypatch,
+            [uuid.uuid4(), None, {"feature_flags": {"enable_sandbox": True}}],
+        )
+        cliente = authenticated_client_factory(role="super_admin")
+
+        response = await cliente.put(
+            f"{URL}/enable_sandbox", params={"client_id": str(otro)}, json={"value": True}
+        )
+
+        assert response.status_code == 200, response.text
+        assert any(str(otro) in str(p) for p in sesion.params)
+
+    async def test_un_admin_no_puede_operar_sobre_otro_tenant(
+        self, authenticated_client_factory: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._preparar(monkeypatch, [])
+        cliente = authenticated_client_factory(role="admin")
+
+        for metodo, kwargs in (("get", {}), ("put", {"json": {"value": True}})):
+            ruta = URL if metodo == "get" else f"{URL}/enable_clinical"
+            response = await getattr(cliente, metodo)(
+                ruta, params={"client_id": str(uuid.uuid4())}, **kwargs
+            )
+            assert response.status_code == 403, metodo
+
+    async def test_un_admin_sigue_cambiando_las_flags_de_agente(
+        self, authenticated_client_factory: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._preparar(
+            monkeypatch, [uuid.uuid4(), None, {"feature_flags": {"enable_clinical": False}}]
+        )
+        cliente = authenticated_client_factory(role="admin")
+
+        response = await cliente.put(f"{URL}/enable_clinical", json={"value": False})
+
+        assert response.status_code == 200
 
     async def test_cambia_una_flag_e_invalida_el_cache(
         self,

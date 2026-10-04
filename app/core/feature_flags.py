@@ -69,6 +69,10 @@ UNENFORCED_FLAGS: tuple[str, ...] = (
 )
 
 #: Todas las flags que acepta la API, en el orden en que se listan.
+# Flags que solo cambia un `super_admin`: activan funciones de la plataforma (y gasto de
+# tokens) que el operador concede al tenant; un `admin` del tenant no se las auto-concede.
+SUPER_ADMIN_FLAGS: tuple[str, ...] = ("enable_sandbox",)
+
 KNOWN_FLAGS: tuple[str, ...] = (*AGENT_FLAGS, *GATE_FLAGS, *UNENFORCED_FLAGS)
 
 CACHE_TTL = 300
