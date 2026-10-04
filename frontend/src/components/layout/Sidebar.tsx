@@ -2,6 +2,7 @@
 
 import {
   BookOpen,
+  Building2,
   ChevronLeft,
   FlaskConical,
   Home,
@@ -32,6 +33,7 @@ interface NavItem {
     | "documents"
     | "quickReplies"
     | "team"
+    | "businessProfile"
     | "preferences"
     | "sandbox";
   minRole?: UserRole;
@@ -43,6 +45,7 @@ const NAV: NavItem[] = [
   { href: "/contacts", icon: Users, labelKey: "contacts" },
   { href: "/documents", icon: BookOpen, labelKey: "documents" },
   { href: "/settings/quick-replies", icon: Zap, labelKey: "quickReplies" },
+  { href: "/settings/business-profile", icon: Building2, labelKey: "businessProfile", minRole: "admin" },
   { href: "/settings/team", icon: UsersRound, labelKey: "team", minRole: "admin" },
   { href: "/settings/sandbox", icon: FlaskConical, labelKey: "sandbox", minRole: "admin" },
   { href: "/settings/preferences", icon: Settings, labelKey: "preferences" },

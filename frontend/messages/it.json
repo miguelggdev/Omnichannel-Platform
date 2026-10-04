@@ -47,9 +47,11 @@
       "preferences": "Preferenze",
       "quick-replies": "Risposte rapide",
       "sandbox": "Sandbox",
-      "team": "Team"
+      "team": "Team",
+      "business-profile": "Profilo dell'attività"
     },
-    "team": "Team"
+    "team": "Team",
+    "businessProfile": "Profilo dell'attività"
   },
   "roles": {
     "super_admin": "Super amministratore",
@@ -283,7 +285,27 @@
     "quickStartHint": "Scorciatoie per le attività più comuni.",
     "goConversations": "Vedi conversazioni",
     "goDocuments": "Base di conoscenza",
-    "goPreferences": "Le mie preferenze"
+    "goPreferences": "Le mie preferenze",
+    "noData": "Nessun dato",
+    "inbound": "Ricevuti",
+    "outbound": "Inviati",
+    "newLast7Days": "{count} nuove in 7 giorni",
+    "vsPrevious7Days": "rispetto ai 7 giorni precedenti",
+    "vsPrevious24h": "rispetto alle 24 h precedenti",
+    "messages24h": "Messaggi (24 h)",
+    "responseTime": "Prima risposta (mediana)",
+    "responseTimeHint": "Del bot o di una persona, ultimi 7 giorni",
+    "averageIs": "Media: {value}",
+    "csat": "Soddisfazione (CSAT)",
+    "csatResponses": "{count} risposte in 30 giorni",
+    "tokens": "Token del mese",
+    "tokensHint": "Del budget IA",
+    "unlimited": "Illimitato",
+    "messagesOverTime": "Messaggi al giorno",
+    "messagesOverTimeHint": "Ultimi 7 giorni (UTC)",
+    "conversationsByChannel": "Conversazioni per canale",
+    "conversationsByChannelHint": "Create negli ultimi 30 giorni",
+    "noConversations": "Ancora nessuna conversazione in questo periodo."
   },
   "team": {
     "title": "Team",
@@ -334,6 +356,77 @@
       "invalidEmail": "Inserisci un'email valida",
       "passwordMin": "Almeno 8 caratteri",
       "passwordMax": "Al massimo 72 caratteri"
+    }
+  },
+  "businessProfile": {
+    "title": "Profilo dell'attività",
+    "subtitle": "I dati della tua attività, l'orario e il marchio.",
+    "usageNotice": "Oggi l'assistente usa solo i due messaggi della sezione «Assistente». Il resto viene salvato per le funzioni che lo leggeranno (fuori orario, widget, marchio del pannello) e non cambia ancora il comportamento.",
+    "sections": {
+      "business": "Attività",
+      "contact": "Contatti e sede",
+      "hours": "Orari di apertura",
+      "brand": "Marchio",
+      "social": "Social media",
+      "assistant": "Assistente"
+    },
+    "fields": {
+      "business_name": "Nome dell'attività",
+      "business_type": "Tipo di attività",
+      "description": "Descrizione",
+      "phone": "Telefono",
+      "email": "Email",
+      "website": "Sito web",
+      "address": "Indirizzo",
+      "city": "Città",
+      "country": "Paese",
+      "timezone": "Fuso orario",
+      "primary_color": "Colore principale",
+      "secondary_color": "Colore secondario",
+      "logo_url": "URL del logo",
+      "welcome_message": "Messaggio di benvenuto",
+      "handoff_message": "Messaggio al passaggio a una persona"
+    },
+    "hints": {
+      "country": "Codice di due lettere, ad es. CO",
+      "timezone": "Nome IANA, ad es. America/Bogota",
+      "logo": "Un link https a un'immagine. Il caricamento di file arriverà quando lo storage sarà configurato."
+    },
+    "hoursHint": "Ora locale dell'attività, formato 24 h.",
+    "open": "aperto",
+    "closed": "Chiuso",
+    "opensAt": "apre",
+    "closesAt": "chiude",
+    "days": {
+      "monday": "Lunedì",
+      "tuesday": "Martedì",
+      "wednesday": "Mercoledì",
+      "thursday": "Giovedì",
+      "friday": "Venerdì",
+      "saturday": "Sabato",
+      "sunday": "Domenica"
+    },
+    "social": {
+      "instagram": "Instagram (utente)",
+      "facebook": "Facebook (link)",
+      "twitter": "X / Twitter (utente)",
+      "whatsapp": "WhatsApp (numero)"
+    },
+    "assistantHint": "Cosa dice l'assistente all'apertura di una conversazione e al passaggio a una persona.",
+    "noAgent": "Il tuo account non ha ancora un assistente attivo, quindi questi messaggi non possono essere salvati.",
+    "discard": "Annulla modifiche",
+    "errors": {
+      "required": "Campo obbligatorio",
+      "tooLong": "Troppo lungo",
+      "phone": "Telefono non valido",
+      "email": "Email non valida",
+      "url": "Deve essere un link http(s)",
+      "country": "Codice paese di due lettere",
+      "timezone": "Fuso orario sconosciuto",
+      "color": "Colore esadecimale a sei cifre, come #1D4ED8",
+      "handle": "Solo lettere, numeri, punto e trattino basso",
+      "time": "Ora non valida (HH:MM)",
+      "closeAfterOpen": "La chiusura deve essere successiva all'apertura"
     }
   }
 }

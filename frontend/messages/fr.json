@@ -47,9 +47,11 @@
       "preferences": "Préférences",
       "quick-replies": "Réponses rapides",
       "sandbox": "Sandbox",
-      "team": "Équipe"
+      "team": "Équipe",
+      "business-profile": "Profil de l'entreprise"
     },
-    "team": "Équipe"
+    "team": "Équipe",
+    "businessProfile": "Profil de l'entreprise"
   },
   "roles": {
     "super_admin": "Super administrateur",
@@ -283,7 +285,27 @@
     "quickStartHint": "Raccourcis vers les tâches les plus courantes.",
     "goConversations": "Voir les conversations",
     "goDocuments": "Base de connaissances",
-    "goPreferences": "Mes préférences"
+    "goPreferences": "Mes préférences",
+    "noData": "Aucune donnée",
+    "inbound": "Reçus",
+    "outbound": "Envoyés",
+    "newLast7Days": "{count} nouvelles en 7 jours",
+    "vsPrevious7Days": "par rapport aux 7 jours précédents",
+    "vsPrevious24h": "par rapport aux 24 h précédentes",
+    "messages24h": "Messages (24 h)",
+    "responseTime": "Première réponse (médiane)",
+    "responseTimeHint": "Du bot ou d'une personne, 7 derniers jours",
+    "averageIs": "Moyenne : {value}",
+    "csat": "Satisfaction (CSAT)",
+    "csatResponses": "{count} réponses en 30 jours",
+    "tokens": "Jetons du mois",
+    "tokensHint": "Du budget IA",
+    "unlimited": "Illimité",
+    "messagesOverTime": "Messages par jour",
+    "messagesOverTimeHint": "7 derniers jours (UTC)",
+    "conversationsByChannel": "Conversations par canal",
+    "conversationsByChannelHint": "Créées au cours des 30 derniers jours",
+    "noConversations": "Aucune conversation sur cette période pour l'instant."
   },
   "team": {
     "title": "Équipe",
@@ -334,6 +356,77 @@
       "invalidEmail": "Saisissez un e-mail valide",
       "passwordMin": "8 caractères minimum",
       "passwordMax": "72 caractères maximum"
+    }
+  },
+  "businessProfile": {
+    "title": "Profil de l'entreprise",
+    "subtitle": "Les informations de votre entreprise, ses horaires et sa marque.",
+    "usageNotice": "Aujourd'hui l'assistant n'utilise que les deux messages de la section « Assistant ». Le reste est conservé pour les fonctions qui le liront (hors horaires, widget, marque du panneau) et ne change pas encore son comportement.",
+    "sections": {
+      "business": "Entreprise",
+      "contact": "Contact et localisation",
+      "hours": "Horaires d'ouverture",
+      "brand": "Marque",
+      "social": "Réseaux sociaux",
+      "assistant": "Assistant"
+    },
+    "fields": {
+      "business_name": "Nom de l'entreprise",
+      "business_type": "Type d'entreprise",
+      "description": "Description",
+      "phone": "Téléphone",
+      "email": "E-mail",
+      "website": "Site web",
+      "address": "Adresse",
+      "city": "Ville",
+      "country": "Pays",
+      "timezone": "Fuseau horaire",
+      "primary_color": "Couleur principale",
+      "secondary_color": "Couleur secondaire",
+      "logo_url": "URL du logo",
+      "welcome_message": "Message de bienvenue",
+      "handoff_message": "Message lors du passage à une personne"
+    },
+    "hints": {
+      "country": "Code à deux lettres, par ex. CO",
+      "timezone": "Nom IANA, par ex. America/Bogota",
+      "logo": "Un lien https vers une image. L'envoi de fichiers viendra quand le stockage sera configuré."
+    },
+    "hoursHint": "Heure locale de l'entreprise, format 24 h.",
+    "open": "ouvert",
+    "closed": "Fermé",
+    "opensAt": "ouvre",
+    "closesAt": "ferme",
+    "days": {
+      "monday": "Lundi",
+      "tuesday": "Mardi",
+      "wednesday": "Mercredi",
+      "thursday": "Jeudi",
+      "friday": "Vendredi",
+      "saturday": "Samedi",
+      "sunday": "Dimanche"
+    },
+    "social": {
+      "instagram": "Instagram (identifiant)",
+      "facebook": "Facebook (lien)",
+      "twitter": "X / Twitter (identifiant)",
+      "whatsapp": "WhatsApp (numéro)"
+    },
+    "assistantHint": "Ce que dit l'assistant à l'ouverture d'une conversation et lors du passage à une personne.",
+    "noAgent": "Votre compte n'a pas encore d'assistant actif : ces messages ne peuvent pas être enregistrés.",
+    "discard": "Annuler les modifications",
+    "errors": {
+      "required": "Champ obligatoire",
+      "tooLong": "Trop long",
+      "phone": "Numéro de téléphone invalide",
+      "email": "E-mail invalide",
+      "url": "Doit être un lien http(s)",
+      "country": "Code pays à deux lettres",
+      "timezone": "Fuseau horaire inconnu",
+      "color": "Couleur hexadécimale à six chiffres, comme #1D4ED8",
+      "handle": "Lettres, chiffres, point et tiret bas uniquement",
+      "time": "Heure invalide (HH:MM)",
+      "closeAfterOpen": "La fermeture doit suivre l'ouverture"
     }
   }
 }

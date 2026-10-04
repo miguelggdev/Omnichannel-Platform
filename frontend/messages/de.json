@@ -47,9 +47,11 @@
       "preferences": "Einstellungen",
       "quick-replies": "Schnellantworten",
       "sandbox": "Sandbox",
-      "team": "Team"
+      "team": "Team",
+      "business-profile": "Unternehmensprofil"
     },
-    "team": "Team"
+    "team": "Team",
+    "businessProfile": "Unternehmensprofil"
   },
   "roles": {
     "super_admin": "Super-Admin",
@@ -283,7 +285,27 @@
     "quickStartHint": "Verknüpfungen zu den häufigsten Aufgaben.",
     "goConversations": "Unterhaltungen ansehen",
     "goDocuments": "Wissensdatenbank",
-    "goPreferences": "Meine Einstellungen"
+    "goPreferences": "Meine Einstellungen",
+    "noData": "Keine Daten",
+    "inbound": "Empfangen",
+    "outbound": "Gesendet",
+    "newLast7Days": "{count} neu in 7 Tagen",
+    "vsPrevious7Days": "ggü. den vorherigen 7 Tagen",
+    "vsPrevious24h": "ggü. den vorherigen 24 Std.",
+    "messages24h": "Nachrichten (24 Std.)",
+    "responseTime": "Erste Antwort (Median)",
+    "responseTimeHint": "Von Bot oder Person, letzte 7 Tage",
+    "averageIs": "Durchschnitt: {value}",
+    "csat": "Zufriedenheit (CSAT)",
+    "csatResponses": "{count} Antworten in 30 Tagen",
+    "tokens": "Tokens im Monat",
+    "tokensHint": "Des KI-Budgets",
+    "unlimited": "Unbegrenzt",
+    "messagesOverTime": "Nachrichten pro Tag",
+    "messagesOverTimeHint": "Letzte 7 Tage (UTC)",
+    "conversationsByChannel": "Unterhaltungen pro Kanal",
+    "conversationsByChannelHint": "In den letzten 30 Tagen erstellt",
+    "noConversations": "In diesem Zeitraum noch keine Unterhaltungen."
   },
   "team": {
     "title": "Team",
@@ -334,6 +356,77 @@
       "invalidEmail": "Geben Sie eine gültige E-Mail ein",
       "passwordMin": "Mindestens 8 Zeichen",
       "passwordMax": "Höchstens 72 Zeichen"
+    }
+  },
+  "businessProfile": {
+    "title": "Unternehmensprofil",
+    "subtitle": "Die Daten Ihres Unternehmens, Öffnungszeiten und Marke.",
+    "usageNotice": "Heute verwendet der Assistent nur die beiden Nachrichten im Abschnitt „Assistent“. Der Rest wird für Funktionen gespeichert, die ihn künftig lesen (außerhalb der Öffnungszeiten, Widget, Panel-Branding) und ändert das Verhalten noch nicht.",
+    "sections": {
+      "business": "Unternehmen",
+      "contact": "Kontakt und Standort",
+      "hours": "Öffnungszeiten",
+      "brand": "Marke",
+      "social": "Soziale Medien",
+      "assistant": "Assistent"
+    },
+    "fields": {
+      "business_name": "Name des Unternehmens",
+      "business_type": "Art des Unternehmens",
+      "description": "Beschreibung",
+      "phone": "Telefon",
+      "email": "E-Mail",
+      "website": "Website",
+      "address": "Adresse",
+      "city": "Stadt",
+      "country": "Land",
+      "timezone": "Zeitzone",
+      "primary_color": "Primärfarbe",
+      "secondary_color": "Sekundärfarbe",
+      "logo_url": "Logo-URL",
+      "welcome_message": "Willkommensnachricht",
+      "handoff_message": "Nachricht bei Übergabe an eine Person"
+    },
+    "hints": {
+      "country": "Zwei-Buchstaben-Code, z. B. CO",
+      "timezone": "IANA-Name, z. B. America/Bogota",
+      "logo": "Ein https-Link zu einem Bild. Datei-Upload folgt, sobald Speicher konfiguriert ist."
+    },
+    "hoursHint": "Ortszeit des Unternehmens, 24-Stunden-Format.",
+    "open": "geöffnet",
+    "closed": "Geschlossen",
+    "opensAt": "öffnet",
+    "closesAt": "schließt",
+    "days": {
+      "monday": "Montag",
+      "tuesday": "Dienstag",
+      "wednesday": "Mittwoch",
+      "thursday": "Donnerstag",
+      "friday": "Freitag",
+      "saturday": "Samstag",
+      "sunday": "Sonntag"
+    },
+    "social": {
+      "instagram": "Instagram (Benutzername)",
+      "facebook": "Facebook (Link)",
+      "twitter": "X / Twitter (Benutzername)",
+      "whatsapp": "WhatsApp (Nummer)"
+    },
+    "assistantHint": "Was der Assistent beim Öffnen einer Unterhaltung und bei der Übergabe an eine Person sagt.",
+    "noAgent": "Ihr Konto hat noch keinen aktiven Assistenten, daher können diese Nachrichten nicht gespeichert werden.",
+    "discard": "Änderungen verwerfen",
+    "errors": {
+      "required": "Pflichtfeld",
+      "tooLong": "Zu lang",
+      "phone": "Ungültige Telefonnummer",
+      "email": "Ungültige E-Mail",
+      "url": "Muss ein http(s)-Link sein",
+      "country": "Zwei-Buchstaben-Ländercode",
+      "timezone": "Unbekannte Zeitzone",
+      "color": "Sechsstellige Hex-Farbe, z. B. #1D4ED8",
+      "handle": "Nur Buchstaben, Zahlen, Punkt und Unterstrich",
+      "time": "Ungültige Uhrzeit (HH:MM)",
+      "closeAfterOpen": "Das Ende muss nach dem Beginn liegen"
     }
   }
 }

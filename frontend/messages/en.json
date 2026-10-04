@@ -47,9 +47,11 @@
       "preferences": "Preferences",
       "quick-replies": "Quick replies",
       "sandbox": "Sandbox",
-      "team": "Team"
+      "team": "Team",
+      "business-profile": "Business profile"
     },
-    "team": "Team"
+    "team": "Team",
+    "businessProfile": "Business profile"
   },
   "roles": {
     "super_admin": "Super admin",
@@ -283,7 +285,27 @@
     "quickStartHint": "Shortcuts to the most common tasks.",
     "goConversations": "View conversations",
     "goDocuments": "Knowledge base",
-    "goPreferences": "My preferences"
+    "goPreferences": "My preferences",
+    "noData": "No data",
+    "inbound": "Received",
+    "outbound": "Sent",
+    "newLast7Days": "{count} new in 7 days",
+    "vsPrevious7Days": "vs. the previous 7 days",
+    "vsPrevious24h": "vs. the previous 24 h",
+    "messages24h": "Messages (24 h)",
+    "responseTime": "First response (median)",
+    "responseTimeHint": "By the bot or a person, last 7 days",
+    "averageIs": "Average: {value}",
+    "csat": "Satisfaction (CSAT)",
+    "csatResponses": "{count} responses in 30 days",
+    "tokens": "Tokens this month",
+    "tokensHint": "Of the AI budget",
+    "unlimited": "Unlimited",
+    "messagesOverTime": "Messages per day",
+    "messagesOverTimeHint": "Last 7 days (UTC)",
+    "conversationsByChannel": "Conversations by channel",
+    "conversationsByChannelHint": "Created in the last 30 days",
+    "noConversations": "No conversations in this period yet."
   },
   "team": {
     "title": "Team",
@@ -334,6 +356,77 @@
       "invalidEmail": "Enter a valid email",
       "passwordMin": "At least 8 characters",
       "passwordMax": "At most 72 characters"
+    }
+  },
+  "businessProfile": {
+    "title": "Business profile",
+    "subtitle": "Your business details, hours and brand.",
+    "usageNotice": "Today the assistant only uses the two messages in the “Assistant” section. The rest is stored for the features that will read it (out of hours, widget, panel branding) and does not change its behavior yet.",
+    "sections": {
+      "business": "Business",
+      "contact": "Contact and location",
+      "hours": "Opening hours",
+      "brand": "Brand",
+      "social": "Social media",
+      "assistant": "Assistant"
+    },
+    "fields": {
+      "business_name": "Business name",
+      "business_type": "Business type",
+      "description": "Description",
+      "phone": "Phone",
+      "email": "Email",
+      "website": "Website",
+      "address": "Address",
+      "city": "City",
+      "country": "Country",
+      "timezone": "Time zone",
+      "primary_color": "Primary color",
+      "secondary_color": "Secondary color",
+      "logo_url": "Logo URL",
+      "welcome_message": "Welcome message",
+      "handoff_message": "Message when handing over to a person"
+    },
+    "hints": {
+      "country": "Two-letter code, e.g. CO",
+      "timezone": "IANA name, e.g. America/Bogota",
+      "logo": "An https link to an image. File upload will arrive once storage is configured."
+    },
+    "hoursHint": "Local business time, 24-hour format.",
+    "open": "open",
+    "closed": "Closed",
+    "opensAt": "opens",
+    "closesAt": "closes",
+    "days": {
+      "monday": "Monday",
+      "tuesday": "Tuesday",
+      "wednesday": "Wednesday",
+      "thursday": "Thursday",
+      "friday": "Friday",
+      "saturday": "Saturday",
+      "sunday": "Sunday"
+    },
+    "social": {
+      "instagram": "Instagram (username)",
+      "facebook": "Facebook (link)",
+      "twitter": "X / Twitter (username)",
+      "whatsapp": "WhatsApp (number)"
+    },
+    "assistantHint": "What the assistant says when opening a conversation and when handing it to a person.",
+    "noAgent": "Your account has no active assistant yet, so these messages cannot be saved.",
+    "discard": "Discard changes",
+    "errors": {
+      "required": "Required field",
+      "tooLong": "Too long",
+      "phone": "Invalid phone number",
+      "email": "Invalid email",
+      "url": "Must be an http(s) link",
+      "country": "Two-letter country code",
+      "timezone": "Unknown time zone",
+      "color": "Six-digit hex color, like #1D4ED8",
+      "handle": "Letters, numbers, dot and underscore only",
+      "time": "Invalid time (HH:MM)",
+      "closeAfterOpen": "Closing must be after opening"
     }
   }
 }
