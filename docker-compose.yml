@@ -154,6 +154,40 @@ services:
       start_period: 40s
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # 2b. FRONTEND — Next.js (Sprint 15). El navegador llama a /api/v1/* en este mismo
+  #     origen y Next lo reenvia a la API por la red interna: no hace falta CORS.
+  # ─────────────────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Se fija al compilar (ver el Dockerfile). `api` resuelve a las dos replicas.
+        API_INTERNAL_URL: ${FRONTEND_API_INTERNAL_URL:-http://api:8000}
+        NEXT_PUBLIC_DEFAULT_LOCALE: ${FRONTEND_DEFAULT_LOCALE:-es}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`app.localhost`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls=true"
+      - "traefik.http.routers.frontend.middlewares=security-headers@file,compress@file"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+      - "traefik.http.services.frontend.loadbalancer.healthcheck.path=/api/health"
+      - "traefik.http.services.frontend.loadbalancer.healthcheck.interval=10s"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # 3. REDIS — Cache + Broker Celery + Dedup webhooks
   #    DB 0: Celery broker | DB 1: Celery results | DB 2: App cache
   # ─────────────────────────────────────────────────────────────────────────────
