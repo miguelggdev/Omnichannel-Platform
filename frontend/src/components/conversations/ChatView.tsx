@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Info, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { useEffect, useRef } from "react";
@@ -15,6 +15,7 @@ import {
   useAssignConversation,
   useChangeStatus,
   useConversation,
+  useSendMessage,
 } from "@/hooks/useConversations";
 import { useContact } from "@/hooks/useContacts";
 import { errorMessage } from "@/lib/api";
@@ -22,6 +23,7 @@ import { contactName } from "@/lib/utils";
 import { useAuthStore } from "@/stores/authStore";
 import { CHANNELS, STATUS_TRANSITIONS, type ConversationStatus } from "@/types";
 import { MessageBubble } from "./MessageBubble";
+import { MessageInput } from "./MessageInput";
 
 export function ChatView({ id }: { id: string }) {
   const t = useTranslations("conversations");
@@ -29,6 +31,7 @@ export function ChatView({ id }: { id: string }) {
   const { data: contact } = useContact(data?.contact_id);
   const changeStatus = useChangeStatus(id);
   const assign = useAssignConversation(id);
+  const send = useSendMessage(id);
   const user = useAuthStore((s) => s.user);
   const canAssign = useAuthStore((s) => s.hasMinRole("supervisor"));
   const finRef = useRef<HTMLDivElement>(null);
@@ -43,6 +46,13 @@ export function ChatView({ id }: { id: string }) {
   if (isLoading || !data) return <Skeleton className="h-[60vh] w-full" />;
 
   const transiciones = STATUS_TRANSITIONS[data.status];
+  // Un `agent` solo contesta lo suyo o lo que nadie lleva; el backend lo vuelve a comprobar.
+  const blockedReason: "closed" | "assignedToOther" | null =
+    data.status === "resolved" || data.status === "archived"
+      ? "closed"
+      : user?.role === "agent" && data.assigned_user_id && data.assigned_user_id !== user.id
+        ? "assignedToOther"
+        : null;
   const canal = (CHANNELS as readonly string[]).includes(data.channel)
     ? t(`channel.${data.channel}` as "channel.whatsapp")
     : data.channel;
@@ -126,10 +136,12 @@ export function ChatView({ id }: { id: string }) {
           )}
           <div ref={finRef} />
         </div>
-        <div className="flex items-center gap-2 border-t bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-          <Info className="h-4 w-4 shrink-0" aria-hidden />
-          {t("readOnlyNotice")}
-        </div>
+        <MessageInput
+          conversationId={id}
+          blockedReason={blockedReason}
+          sending={send.isPending}
+          onSend={(text) => send.mutateAsync(text)}
+        />
       </Card>
     </div>
   );

@@ -46,8 +46,20 @@
       "settings": "Einstellungen",
       "preferences": "Einstellungen",
       "quick-replies": "Schnellantworten",
-      "sandbox": "Sandbox"
-    }
+      "sandbox": "Sandbox",
+      "team": "Team",
+      "business-profile": "Unternehmensprofil",
+      "platform": "Plattform",
+      "clients": "Kunden",
+      "celery": "Celery & Redis",
+      "system": "System"
+    },
+    "team": "Team",
+    "businessProfile": "Unternehmensprofil",
+    "platform": "Plattform",
+    "platformClients": "Kunden",
+    "platformCelery": "Celery & Redis",
+    "platformSystem": "System"
   },
   "roles": {
     "super_admin": "Super-Admin",
@@ -63,7 +75,9 @@
     "password": "Passwort",
     "signIn": "Anmelden",
     "invalidEmail": "Geben Sie eine gültige E-Mail ein",
-    "passwordMin": "Mindestens 8 Zeichen"
+    "passwordMin": "Mindestens 8 Zeichen",
+    "noAccount": "Noch kein Konto?",
+    "createAccount": "Eines für Ihr Unternehmen erstellen"
   },
   "errors": {
     "notFoundTitle": "Seite nicht gefunden",
@@ -115,7 +129,6 @@
     "messages": "Nachrichten",
     "earlierNotLoaded": "Frühere Nachrichten werden nicht angezeigt.",
     "noMessages": "Noch keine Nachrichten.",
-    "readOnlyNotice": "Antworten über das Dashboard ist noch nicht verfügbar; die Unterhaltung wird im ursprünglichen Kanal bearbeitet.",
     "sender": {
       "contact": "Kontakt",
       "bot": "Assistent",
@@ -123,7 +136,17 @@
       "system": "System"
     },
     "noText": "[{type}]",
-    "attachment": "Anhang ansehen"
+    "attachment": "Anhang ansehen",
+    "reply": {
+      "placeholder": "Antwort schreiben…",
+      "send": "Nachricht senden",
+      "hint": "Enter sendet · Umschalt+Enter neue Zeile · „/“ sucht Schnellantworten. Mit einer Antwort übernehmen Sie die Unterhaltung und der Bot antwortet nicht mehr.",
+      "quickReplies": "Schnellantworten",
+      "noQuickReplies": "Noch keine Schnellantworten.",
+      "unresolved": "Prüfen Sie den Text: Es fehlen Daten für {vars}.",
+      "closed": "Diese Unterhaltung ist geschlossen und nimmt keine Antworten mehr an.",
+      "assignedToOther": "Ein anderes Teammitglied bearbeitet diese Unterhaltung."
+    }
   },
   "contacts": {
     "title": "Kontakte",
@@ -272,6 +295,318 @@
     "quickStartHint": "Verknüpfungen zu den häufigsten Aufgaben.",
     "goConversations": "Unterhaltungen ansehen",
     "goDocuments": "Wissensdatenbank",
-    "goPreferences": "Meine Einstellungen"
+    "goPreferences": "Meine Einstellungen",
+    "noData": "Keine Daten",
+    "inbound": "Empfangen",
+    "outbound": "Gesendet",
+    "newLast7Days": "{count} neu in 7 Tagen",
+    "vsPrevious7Days": "ggü. den vorherigen 7 Tagen",
+    "vsPrevious24h": "ggü. den vorherigen 24 Std.",
+    "messages24h": "Nachrichten (24 Std.)",
+    "responseTime": "Erste Antwort (Median)",
+    "responseTimeHint": "Von Bot oder Person, letzte 7 Tage",
+    "averageIs": "Durchschnitt: {value}",
+    "csat": "Zufriedenheit (CSAT)",
+    "csatResponses": "{count} Antworten in 30 Tagen",
+    "tokens": "Tokens im Monat",
+    "tokensHint": "Des KI-Budgets",
+    "unlimited": "Unbegrenzt",
+    "messagesOverTime": "Nachrichten pro Tag",
+    "messagesOverTimeHint": "Letzte 7 Tage (UTC)",
+    "conversationsByChannel": "Unterhaltungen pro Kanal",
+    "conversationsByChannelHint": "In den letzten 30 Tagen erstellt",
+    "noConversations": "In diesem Zeitraum noch keine Unterhaltungen."
+  },
+  "team": {
+    "title": "Team",
+    "subtitle": "Die Personen, die die Plattform in Ihrem Konto nutzen, und ihre Rolle.",
+    "search": "Benutzer suchen",
+    "searchPlaceholder": "Nach Name oder E-Mail suchen…",
+    "filterRole": "Nach Rolle filtern",
+    "filterState": "Nach Status filtern",
+    "allRoles": "Alle Rollen",
+    "allStates": "Alle",
+    "active": "Aktiv",
+    "inactive": "Deaktiviert",
+    "new": "Neuer Benutzer",
+    "created": "Benutzer erstellt",
+    "you": "Sie",
+    "never": "Nie",
+    "empty": "Keine Benutzer",
+    "emptySearch": "Kein Benutzer entspricht den Filtern.",
+    "columns": {
+      "user": "Benutzer",
+      "role": "Rolle",
+      "state": "Status",
+      "lastLogin": "Letzte Anmeldung"
+    },
+    "fields": {
+      "first_name": "Vorname",
+      "last_name": "Nachname",
+      "email": "E-Mail",
+      "role": "Rolle",
+      "initialPassword": "Anfangspasswort",
+      "newPassword": "Neues Passwort (optional)"
+    },
+    "newPasswordHint": "Leer lassen, um es nicht zu ändern. Die Person verwendet es bei der nächsten Anmeldung.",
+    "selfRoleHint": "Sie können Ihre eigene Rolle nicht ändern; bitten Sie einen anderen Administrator.",
+    "editUser": "{name} bearbeiten",
+    "deactivateUser": "{name} deaktivieren",
+    "reactivateUser": "{name} reaktivieren",
+    "deactivateTitle": "Benutzer deaktivieren",
+    "deactivateBody": "{name} kann sich nicht mehr anmelden oder die Sitzung erneuern. Eine bestehende Sitzung funktioniert noch einige Minuten.",
+    "reactivateTitle": "Benutzer reaktivieren",
+    "reactivateBody": "{name} kann sich wieder anmelden.",
+    "deactivate": "Deaktivieren",
+    "reactivate": "Reaktivieren",
+    "deactivated": "Benutzer deaktiviert",
+    "reactivated": "Benutzer reaktiviert",
+    "errors": {
+      "required": "Pflichtfeld",
+      "invalidEmail": "Geben Sie eine gültige E-Mail ein",
+      "passwordMin": "Mindestens 8 Zeichen",
+      "passwordMax": "Höchstens 72 Zeichen"
+    }
+  },
+  "businessProfile": {
+    "title": "Unternehmensprofil",
+    "subtitle": "Die Daten Ihres Unternehmens, Öffnungszeiten und Marke.",
+    "usageNotice": "Heute verwendet der Assistent nur die beiden Nachrichten im Abschnitt „Assistent“. Der Rest wird für Funktionen gespeichert, die ihn künftig lesen (außerhalb der Öffnungszeiten, Widget, Panel-Branding) und ändert das Verhalten noch nicht.",
+    "sections": {
+      "business": "Unternehmen",
+      "contact": "Kontakt und Standort",
+      "hours": "Öffnungszeiten",
+      "brand": "Marke",
+      "social": "Soziale Medien",
+      "assistant": "Assistent"
+    },
+    "fields": {
+      "business_name": "Name des Unternehmens",
+      "business_type": "Art des Unternehmens",
+      "description": "Beschreibung",
+      "phone": "Telefon",
+      "email": "E-Mail",
+      "website": "Website",
+      "address": "Adresse",
+      "city": "Stadt",
+      "country": "Land",
+      "timezone": "Zeitzone",
+      "primary_color": "Primärfarbe",
+      "secondary_color": "Sekundärfarbe",
+      "logo_url": "Logo-URL",
+      "welcome_message": "Willkommensnachricht",
+      "handoff_message": "Nachricht bei Übergabe an eine Person"
+    },
+    "hints": {
+      "country": "Zwei-Buchstaben-Code, z. B. CO",
+      "timezone": "IANA-Name, z. B. America/Bogota",
+      "logo": "Ein https-Link zu einem Bild. Datei-Upload folgt, sobald Speicher konfiguriert ist."
+    },
+    "hoursHint": "Ortszeit des Unternehmens, 24-Stunden-Format.",
+    "open": "geöffnet",
+    "closed": "Geschlossen",
+    "opensAt": "öffnet",
+    "closesAt": "schließt",
+    "days": {
+      "monday": "Montag",
+      "tuesday": "Dienstag",
+      "wednesday": "Mittwoch",
+      "thursday": "Donnerstag",
+      "friday": "Freitag",
+      "saturday": "Samstag",
+      "sunday": "Sonntag"
+    },
+    "social": {
+      "instagram": "Instagram (Benutzername)",
+      "facebook": "Facebook (Link)",
+      "twitter": "X / Twitter (Benutzername)",
+      "whatsapp": "WhatsApp (Nummer)"
+    },
+    "assistantHint": "Was der Assistent beim Öffnen einer Unterhaltung und bei der Übergabe an eine Person sagt.",
+    "noAgent": "Ihr Konto hat noch keinen aktiven Assistenten, daher können diese Nachrichten nicht gespeichert werden.",
+    "discard": "Änderungen verwerfen",
+    "errors": {
+      "required": "Pflichtfeld",
+      "tooLong": "Zu lang",
+      "phone": "Ungültige Telefonnummer",
+      "email": "Ungültige E-Mail",
+      "url": "Muss ein http(s)-Link sein",
+      "country": "Zwei-Buchstaben-Ländercode",
+      "timezone": "Unbekannte Zeitzone",
+      "color": "Sechsstellige Hex-Farbe, z. B. #1D4ED8",
+      "handle": "Nur Buchstaben, Zahlen, Punkt und Unterstrich",
+      "time": "Ungültige Uhrzeit (HH:MM)",
+      "closeAfterOpen": "Das Ende muss nach dem Beginn liegen"
+    }
+  },
+  "platform": {
+    "clients": {
+      "title": "Kunden",
+      "subtitle": "Die Unternehmen auf der Plattform, ihr Status und ihre Aktivität.",
+      "search": "Kunden suchen",
+      "searchPlaceholder": "Nach Name oder Slug suchen…",
+      "filterState": "Nach Status filtern",
+      "allStates": "Alle",
+      "active": "Aktiv",
+      "suspended": "Gesperrt",
+      "empty": "Kein Kunde entspricht.",
+      "never": "Nie",
+      "since": "seit {when}",
+      "columns": {
+        "client": "Kunde",
+        "state": "Status",
+        "plan": "Tarif",
+        "users": "Benutzer",
+        "conversations": "Unterh. 30 T",
+        "messages": "Nachr. 30 T",
+        "lastActivity": "Letzte Aktivität"
+      },
+      "usage": "Nutzung",
+      "usageHint": "Nur Zahlen und Daten: Die Plattform zeigt keine Inhalte der Unterhaltungen eines Kunden.",
+      "fields": {
+        "users": "Aktive / alle Benutzer",
+        "contacts": "Kontakte",
+        "openConversations": "Offene Unterhaltungen",
+        "conversations30d": "Unterhaltungen (30 T)",
+        "messages30d": "Nachrichten (30 T)",
+        "documents": "Fertige Dokumente",
+        "assistant": "Aktiver Assistent",
+        "tokens": "Tokens im Monat"
+      },
+      "yes": "Ja",
+      "no": "Nein",
+      "unlimited": "Unbegrenzt",
+      "lastActivity": "Letzte Aktivität",
+      "suspend": "Sperren",
+      "reactivate": "Entsperren",
+      "ownTenant": "Sie können Ihren eigenen Mandanten nicht sperren: Sie verlören den Zugriff.",
+      "suspendedSince": "Gesperrt seit {when}",
+      "suspendTitle": "{name} sperren",
+      "suspendBody": "Die Benutzer können sich nicht anmelden oder die Sitzung erneuern. Wer bereits angemeldet ist, behält den Zugriff noch einige Minuten, bis er abläuft.",
+      "reactivateTitle": "{name} entsperren",
+      "reactivateBody": "Die Benutzer können sich wieder anmelden.",
+      "reason": "Grund (optional)",
+      "reasonHint": "Wird mit der Sperre gespeichert und beim Entsperren gelöscht.",
+      "suspendedOk": "Kunde gesperrt",
+      "reactivatedOk": "Kunde entsperrt"
+    },
+    "celery": {
+      "title": "Celery & Redis",
+      "subtitle": "Worker, Warteschlangen und laufende Aufgaben der Plattform.",
+      "refreshHint": "Aktualisiert sich alle 30 Sekunden.",
+      "workers": "Worker",
+      "brokerDown": "Verbindung zum Broker fehlgeschlagen, daher ist die Zahl der Worker unbekannt. Das heißt nicht, dass es keine gibt: Prüfen Sie Redis.",
+      "noWorkers": "Der Broker antwortet, aber kein Worker ist verbunden. Nachrichten sammeln sich in den Warteschlangen, bis einer startet.",
+      "concurrency": "{n} Prozesse",
+      "columns": {
+        "worker": "Worker",
+        "active": "Aktiv",
+        "reserved": "Reserviert",
+        "processed": "Verarbeitet",
+        "queues": "Warteschlangen",
+        "uptime": "Laufzeit",
+        "task": "Aufgabe",
+        "state": "Status",
+        "queue": "Warteschlange"
+      },
+      "queues": "Warteschlangen",
+      "queuesHint": "Auf jede Warteschlange wartende Nachrichten.",
+      "pending": "Ausstehend",
+      "memory": "Speicher",
+      "noLimit": "ohne Limit",
+      "clients": "Clients",
+      "keys": "Schlüssel",
+      "hitRatio": "Trefferquote",
+      "redisUptime": "läuft {time}",
+      "tasks": "Laufende Aufgaben",
+      "tasksHint": "Argumente werden nicht angezeigt: Sie können Kontaktdaten enthalten.",
+      "noTasks": "Keine laufenden Aufgaben.",
+      "states": {
+        "active": "Läuft",
+        "reserved": "Reserviert",
+        "scheduled": "Geplant"
+      },
+      "revoke": "Widerrufen",
+      "revokeTitle": "Aufgabe widerrufen",
+      "revokeBody": "{name} wird nicht ausgeführt. Eine bereits laufende Aufgabe wird nicht gestoppt.",
+      "revoked": "Aufgabe widerrufen"
+    },
+    "system": {
+      "title": "System",
+      "subtitle": "Status von Datenbank, Redis und Workern.",
+      "versionLine": "Version {version} · Umgebung {env}",
+      "refresh": "Aktualisieren",
+      "components": {
+        "database": "Datenbank",
+        "redis": "Redis",
+        "celery": "Celery-Worker"
+      },
+      "ok": "Funktioniert",
+      "down": "Probleme",
+      "latency": "Latenz: {ms} ms"
+    }
+  },
+  "onboarding": {
+    "title": "Konto erstellen",
+    "subtitle": "Richten Sie Ihr Unternehmen in wenigen Minuten ein",
+    "stepOf": "Schritt {current} von {total}",
+    "steps": {
+      "business": "Unternehmen",
+      "account": "Ihr Konto",
+      "confirm": "Bestätigen"
+    },
+    "fields": {
+      "businessName": "Name des Unternehmens",
+      "businessType": "Art des Unternehmens",
+      "country": "Land",
+      "fullName": "Ihr vollständiger Name",
+      "email": "E-Mail",
+      "password": "Passwort",
+      "confirmPassword": "Passwort wiederholen"
+    },
+    "hints": {
+      "password": "8 bis 72 Zeichen, mit Großbuchstabe, Kleinbuchstabe und Zahl"
+    },
+    "types": {
+      "restaurant": "Restaurant",
+      "clinic": "Klinik",
+      "ecommerce": "Online-Shop",
+      "services": "Dienstleistungen",
+      "education": "Bildung",
+      "other": "Sonstiges"
+    },
+    "errors": {
+      "required": "Pflichtfeld",
+      "businessName": "Geben Sie den Namen des Unternehmens ein (mindestens 2 Zeichen)",
+      "fullName": "Geben Sie Ihren vollständigen Namen ein",
+      "email": "Geben Sie eine gültige E-Mail ein",
+      "passwordMin": "Mindestens 8 Zeichen",
+      "passwordMax": "Höchstens 72 Zeichen",
+      "passwordStrength": "Muss Großbuchstabe, Kleinbuchstabe und Zahl enthalten",
+      "passwordMismatch": "Die Passwörter stimmen nicht überein",
+      "terms": "Sie müssen die Nutzungsbedingungen akzeptieren"
+    },
+    "review": "Prüfen Sie Ihre Angaben",
+    "terms": "Ich akzeptiere die Nutzungsbedingungen",
+    "back": "Zurück",
+    "next": "Weiter",
+    "submit": "Konto erstellen",
+    "creating": "Wird erstellt…",
+    "haveAccount": "Sie haben bereits ein Konto?",
+    "signIn": "Anmelden",
+    "serverErrors": {
+      "conflict": "Mit dieser E-Mail existiert bereits ein Konto",
+      "rateLimited": "Zu viele Versuche. Bitte versuchen Sie es später erneut",
+      "unavailable": "Die Registrierung ist nicht verfügbar"
+    }
+  },
+  "verifyEmail": {
+    "title": "E-Mail-Verifizierung",
+    "verifying": "Ihre E-Mail wird verifiziert…",
+    "successTitle": "E-Mail verifiziert",
+    "successDesc": "Danke, Ihre Adresse ist jetzt bestätigt.",
+    "failedTitle": "Ungültiger Link",
+    "failedDesc": "Der Link ist falsch oder abgelaufen. Melden Sie sich an, um einen neuen anzufordern.",
+    "goToApp": "Zur Anwendung"
   }
 }

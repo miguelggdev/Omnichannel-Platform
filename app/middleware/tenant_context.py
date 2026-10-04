@@ -21,6 +21,15 @@ from app.core.security import decode_jwt
 
 logger = logging.getLogger(__name__)
 
+
+def _token_invalido() -> JSONResponse:
+    """Respuesta 401 uniforme para un token que no sirve como access token."""
+    return JSONResponse(
+        status_code=401,
+        content={"error_code": "INVALID_TOKEN", "message": "Token inválido"},
+    )
+
+
 # Rutas que NO requieren autenticación
 PUBLIC_PATHS: set[str] = {
     "/internal/health",
@@ -32,6 +41,9 @@ PUBLIC_PATHS: set[str] = {
     "/api/openapi.json",
     "/api/v1/auth/login",
     "/api/v1/auth/refresh",
+    # Auto-registro y verificacion de email (Sprint 15): no hay sesion todavia.
+    "/api/v1/onboarding/register",
+    "/api/v1/onboarding/verify-email",
     # Link de un clic en el email de la encuesta CSAT (Sprint 11, Dev B): quien
     # hace click no tiene JWT. La seguridad la da `survey_id`, no la sesion —
     # ver el docstring de `app/api/v1/csat.py`.
@@ -108,10 +120,28 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
                 },
             )
 
+        # Solo un access token autentica una peticion. Sin esta comprobacion un refresh
+        # token (7 dias, que nunca se revalida contra `is_active`) valia como Bearer en
+        # cualquier endpoint: desactivar a un usuario o suspender a un tenant no cortaba el
+        # acceso hasta que el refresh caducara. Lo mismo vale para cualquier otro tipo de
+        # token firmado con el mismo secreto (verificacion de email, etc.).
+        if payload.get("type") != "access":
+            return _token_invalido()
+
+        # Un token firmado pero sin las claims esperadas es un 401, no un 500 por KeyError.
+        try:
+            client_id = UUID(payload["client_id"])
+            user_id = UUID(payload["user_id"])
+            role = payload["role"]
+        except (KeyError, ValueError, TypeError, AttributeError):
+            return _token_invalido()
+        if not isinstance(role, str):
+            return _token_invalido()
+
         # Inyectar contexto en request.state
-        request.state.client_id = UUID(payload["client_id"])
-        request.state.user_id = UUID(payload["user_id"])
-        request.state.user_role = payload["role"]
+        request.state.client_id = client_id
+        request.state.user_id = user_id
+        request.state.user_role = role
         request.state.user_email = payload.get("email", "")
 
         return await call_next(request)

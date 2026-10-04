@@ -58,7 +58,8 @@ _LAST_LOGIN = text("UPDATE users SET last_login_at = :ahora WHERE id = :user_id"
 # ademas de la RLS de `tenant_session`, mismo patron que `contact_unifier.py` y
 # `documents.py`.
 _REFRESH_LOOKUP = text(
-    "SELECT u.is_active AS user_is_active, c.is_active AS client_is_active "
+    "SELECT u.is_active AS user_is_active, c.is_active AS client_is_active, "
+    "u.role::text AS role, u.email AS email "
     "FROM users u JOIN clients c ON c.id = u.client_id "
     "WHERE u.id = :user_id AND u.client_id = :client_id"
 )
@@ -201,7 +202,8 @@ async def refresh_token(refresh: RefreshRequest) -> TokenResponse:
        (BUG-041): el token puede tener hasta `JWT_REFRESH_EXPIRATION_DAYS` de
        vida, y nada obliga a que ese estado siga siendo el mismo que cuando se
        emitió.
-    4. Genera nuevo access_token (el refresh_token se mantiene).
+    4. Genera nuevo access_token con el rol y el email **actuales** de la base
+       (el refresh_token se mantiene).
 
     Args:
         refresh: Refresh token JWT.
@@ -241,12 +243,15 @@ async def refresh_token(refresh: RefreshRequest) -> TokenResponse:
     if not fila.client_is_active:
         raise AppException(status_code=401, error_code=FORBIDDEN, message="Organización suspendida")
 
-    # Generar nuevo access_token con los mismos datos
+    # Rol y email salen de la base, no del refresh token: si un admin cambia el rol de
+    # alguien (o lo degrada), el access token nuevo ya lleva el rol actual. Copiar los
+    # claims del token viejo le dejaria los permisos antiguos hasta que caduque el refresh
+    # (hasta 7 dias).
     token_data = {
         "user_id": payload["user_id"],
         "client_id": payload["client_id"],
-        "email": payload["email"],
-        "role": payload["role"],
+        "email": fila.email,
+        "role": fila.role,
     }
 
     return TokenResponse(

@@ -46,8 +46,20 @@
       "settings": "Impostazioni",
       "preferences": "Preferenze",
       "quick-replies": "Risposte rapide",
-      "sandbox": "Sandbox"
-    }
+      "sandbox": "Sandbox",
+      "team": "Team",
+      "business-profile": "Profilo dell'attività",
+      "platform": "Piattaforma",
+      "clients": "Clienti",
+      "celery": "Celery e Redis",
+      "system": "Sistema"
+    },
+    "team": "Team",
+    "businessProfile": "Profilo dell'attività",
+    "platform": "Piattaforma",
+    "platformClients": "Clienti",
+    "platformCelery": "Celery e Redis",
+    "platformSystem": "Sistema"
   },
   "roles": {
     "super_admin": "Super amministratore",
@@ -63,7 +75,9 @@
     "password": "Password",
     "signIn": "Accedi",
     "invalidEmail": "Inserisci un'email valida",
-    "passwordMin": "Almeno 8 caratteri"
+    "passwordMin": "Almeno 8 caratteri",
+    "noAccount": "Non hai ancora un account?",
+    "createAccount": "Crea quello della tua attività"
   },
   "errors": {
     "notFoundTitle": "Pagina non trovata",
@@ -115,7 +129,6 @@
     "messages": "Messaggi",
     "earlierNotLoaded": "Ci sono messaggi precedenti non mostrati.",
     "noMessages": "Ancora nessun messaggio.",
-    "readOnlyNotice": "Rispondere dal pannello non è ancora disponibile; la conversazione si gestisce sul canale originale.",
     "sender": {
       "contact": "Contatto",
       "bot": "Assistente",
@@ -123,7 +136,17 @@
       "system": "Sistema"
     },
     "noText": "[{type}]",
-    "attachment": "Vedi allegato"
+    "attachment": "Vedi allegato",
+    "reply": {
+      "placeholder": "Scrivi una risposta…",
+      "send": "Invia messaggio",
+      "hint": "Invio invia · Maiusc+Invio a capo · «/» cerca risposte rapide. Rispondendo prendi la conversazione e il bot smette di rispondere.",
+      "quickReplies": "Risposte rapide",
+      "noQuickReplies": "Ancora nessuna risposta rapida.",
+      "unresolved": "Controlla il testo: mancano dati per {vars}.",
+      "closed": "Questa conversazione è chiusa e non accetta più risposte.",
+      "assignedToOther": "Questa conversazione è gestita da un'altra persona del team."
+    }
   },
   "contacts": {
     "title": "Contatti",
@@ -272,6 +295,318 @@
     "quickStartHint": "Scorciatoie per le attività più comuni.",
     "goConversations": "Vedi conversazioni",
     "goDocuments": "Base di conoscenza",
-    "goPreferences": "Le mie preferenze"
+    "goPreferences": "Le mie preferenze",
+    "noData": "Nessun dato",
+    "inbound": "Ricevuti",
+    "outbound": "Inviati",
+    "newLast7Days": "{count} nuove in 7 giorni",
+    "vsPrevious7Days": "rispetto ai 7 giorni precedenti",
+    "vsPrevious24h": "rispetto alle 24 h precedenti",
+    "messages24h": "Messaggi (24 h)",
+    "responseTime": "Prima risposta (mediana)",
+    "responseTimeHint": "Del bot o di una persona, ultimi 7 giorni",
+    "averageIs": "Media: {value}",
+    "csat": "Soddisfazione (CSAT)",
+    "csatResponses": "{count} risposte in 30 giorni",
+    "tokens": "Token del mese",
+    "tokensHint": "Del budget IA",
+    "unlimited": "Illimitato",
+    "messagesOverTime": "Messaggi al giorno",
+    "messagesOverTimeHint": "Ultimi 7 giorni (UTC)",
+    "conversationsByChannel": "Conversazioni per canale",
+    "conversationsByChannelHint": "Create negli ultimi 30 giorni",
+    "noConversations": "Ancora nessuna conversazione in questo periodo."
+  },
+  "team": {
+    "title": "Team",
+    "subtitle": "Le persone che usano la piattaforma nel tuo account e il loro ruolo.",
+    "search": "Cerca utenti",
+    "searchPlaceholder": "Cerca per nome o email…",
+    "filterRole": "Filtra per ruolo",
+    "filterState": "Filtra per stato",
+    "allRoles": "Tutti i ruoli",
+    "allStates": "Tutti",
+    "active": "Attivo",
+    "inactive": "Disattivato",
+    "new": "Nuovo utente",
+    "created": "Utente creato",
+    "you": "tu",
+    "never": "Mai",
+    "empty": "Nessun utente",
+    "emptySearch": "Nessun utente corrisponde ai filtri.",
+    "columns": {
+      "user": "Utente",
+      "role": "Ruolo",
+      "state": "Stato",
+      "lastLogin": "Ultimo accesso"
+    },
+    "fields": {
+      "first_name": "Nome",
+      "last_name": "Cognome",
+      "email": "Email",
+      "role": "Ruolo",
+      "initialPassword": "Password iniziale",
+      "newPassword": "Nuova password (facoltativa)"
+    },
+    "newPasswordHint": "Lascia vuoto per non cambiarla. La persona la userà al prossimo accesso.",
+    "selfRoleHint": "Non puoi cambiare il tuo ruolo; chiedilo a un altro amministratore.",
+    "editUser": "Modifica {name}",
+    "deactivateUser": "Disattiva {name}",
+    "reactivateUser": "Riattiva {name}",
+    "deactivateTitle": "Disattiva utente",
+    "deactivateBody": "{name} non potrà più accedere né rinnovare la sessione. Se è già connesso, continuerà a funzionare per qualche minuto.",
+    "reactivateTitle": "Riattiva utente",
+    "reactivateBody": "{name} potrà accedere di nuovo.",
+    "deactivate": "Disattiva",
+    "reactivate": "Riattiva",
+    "deactivated": "Utente disattivato",
+    "reactivated": "Utente riattivato",
+    "errors": {
+      "required": "Campo obbligatorio",
+      "invalidEmail": "Inserisci un'email valida",
+      "passwordMin": "Almeno 8 caratteri",
+      "passwordMax": "Al massimo 72 caratteri"
+    }
+  },
+  "businessProfile": {
+    "title": "Profilo dell'attività",
+    "subtitle": "I dati della tua attività, l'orario e il marchio.",
+    "usageNotice": "Oggi l'assistente usa solo i due messaggi della sezione «Assistente». Il resto viene salvato per le funzioni che lo leggeranno (fuori orario, widget, marchio del pannello) e non cambia ancora il comportamento.",
+    "sections": {
+      "business": "Attività",
+      "contact": "Contatti e sede",
+      "hours": "Orari di apertura",
+      "brand": "Marchio",
+      "social": "Social media",
+      "assistant": "Assistente"
+    },
+    "fields": {
+      "business_name": "Nome dell'attività",
+      "business_type": "Tipo di attività",
+      "description": "Descrizione",
+      "phone": "Telefono",
+      "email": "Email",
+      "website": "Sito web",
+      "address": "Indirizzo",
+      "city": "Città",
+      "country": "Paese",
+      "timezone": "Fuso orario",
+      "primary_color": "Colore principale",
+      "secondary_color": "Colore secondario",
+      "logo_url": "URL del logo",
+      "welcome_message": "Messaggio di benvenuto",
+      "handoff_message": "Messaggio al passaggio a una persona"
+    },
+    "hints": {
+      "country": "Codice di due lettere, ad es. CO",
+      "timezone": "Nome IANA, ad es. America/Bogota",
+      "logo": "Un link https a un'immagine. Il caricamento di file arriverà quando lo storage sarà configurato."
+    },
+    "hoursHint": "Ora locale dell'attività, formato 24 h.",
+    "open": "aperto",
+    "closed": "Chiuso",
+    "opensAt": "apre",
+    "closesAt": "chiude",
+    "days": {
+      "monday": "Lunedì",
+      "tuesday": "Martedì",
+      "wednesday": "Mercoledì",
+      "thursday": "Giovedì",
+      "friday": "Venerdì",
+      "saturday": "Sabato",
+      "sunday": "Domenica"
+    },
+    "social": {
+      "instagram": "Instagram (utente)",
+      "facebook": "Facebook (link)",
+      "twitter": "X / Twitter (utente)",
+      "whatsapp": "WhatsApp (numero)"
+    },
+    "assistantHint": "Cosa dice l'assistente all'apertura di una conversazione e al passaggio a una persona.",
+    "noAgent": "Il tuo account non ha ancora un assistente attivo, quindi questi messaggi non possono essere salvati.",
+    "discard": "Annulla modifiche",
+    "errors": {
+      "required": "Campo obbligatorio",
+      "tooLong": "Troppo lungo",
+      "phone": "Telefono non valido",
+      "email": "Email non valida",
+      "url": "Deve essere un link http(s)",
+      "country": "Codice paese di due lettere",
+      "timezone": "Fuso orario sconosciuto",
+      "color": "Colore esadecimale a sei cifre, come #1D4ED8",
+      "handle": "Solo lettere, numeri, punto e trattino basso",
+      "time": "Ora non valida (HH:MM)",
+      "closeAfterOpen": "La chiusura deve essere successiva all'apertura"
+    }
+  },
+  "platform": {
+    "clients": {
+      "title": "Clienti",
+      "subtitle": "Le attività che usano la piattaforma, il loro stato e la loro attività.",
+      "search": "Cerca clienti",
+      "searchPlaceholder": "Cerca per nome o slug…",
+      "filterState": "Filtra per stato",
+      "allStates": "Tutti",
+      "active": "Attivo",
+      "suspended": "Sospeso",
+      "empty": "Nessun cliente corrisponde.",
+      "never": "Mai",
+      "since": "iscritto {when}",
+      "columns": {
+        "client": "Cliente",
+        "state": "Stato",
+        "plan": "Piano",
+        "users": "Utenti",
+        "conversations": "Conv. 30 g",
+        "messages": "Messaggi 30 g",
+        "lastActivity": "Ultima attività"
+      },
+      "usage": "Utilizzo",
+      "usageHint": "Solo cifre e date: la piattaforma non mostra il contenuto delle conversazioni di un cliente.",
+      "fields": {
+        "users": "Utenti attivi / totale",
+        "contacts": "Contatti",
+        "openConversations": "Conversazioni aperte",
+        "conversations30d": "Conversazioni (30 g)",
+        "messages30d": "Messaggi (30 g)",
+        "documents": "Documenti pronti",
+        "assistant": "Assistente attivo",
+        "tokens": "Token del mese"
+      },
+      "yes": "Sì",
+      "no": "No",
+      "unlimited": "Illimitato",
+      "lastActivity": "Ultima attività",
+      "suspend": "Sospendi",
+      "reactivate": "Riattiva",
+      "ownTenant": "Non puoi sospendere il tuo tenant: perderesti l'accesso.",
+      "suspendedSince": "Sospeso dal {when}",
+      "suspendTitle": "Sospendere {name}",
+      "suspendBody": "I suoi utenti non potranno accedere né rinnovare la sessione. Chi è già connesso continua per qualche minuto finché l'accesso scade.",
+      "reactivateTitle": "Riattivare {name}",
+      "reactivateBody": "I suoi utenti potranno accedere di nuovo.",
+      "reason": "Motivo (facoltativo)",
+      "reasonHint": "Viene salvato con la sospensione e cancellato alla riattivazione.",
+      "suspendedOk": "Cliente sospeso",
+      "reactivatedOk": "Cliente riattivato"
+    },
+    "celery": {
+      "title": "Celery e Redis",
+      "subtitle": "Worker, code e attività in corso della piattaforma.",
+      "refreshHint": "Si aggiorna ogni 30 secondi.",
+      "workers": "Worker",
+      "brokerDown": "Impossibile connettersi al broker, quindi non si sa quanti worker ci siano. Non significa che non ce ne siano: controlla Redis.",
+      "noWorkers": "Il broker risponde, ma nessun worker è connesso. I messaggi si accumuleranno nelle code finché non ne parte uno.",
+      "concurrency": "{n} processi",
+      "columns": {
+        "worker": "Worker",
+        "active": "Attive",
+        "reserved": "Riservate",
+        "processed": "Elaborate",
+        "queues": "Code",
+        "uptime": "Attivo da",
+        "task": "Attività",
+        "state": "Stato",
+        "queue": "Coda"
+      },
+      "queues": "Code",
+      "queuesHint": "Messaggi in attesa in ogni coda.",
+      "pending": "In attesa",
+      "memory": "Memoria",
+      "noLimit": "senza limite",
+      "clients": "Client",
+      "keys": "Chiavi",
+      "hitRatio": "Hit ratio",
+      "redisUptime": "attivo {time}",
+      "tasks": "Attività in corso",
+      "tasksHint": "Gli argomenti non vengono mostrati: possono contenere dati dei contatti.",
+      "noTasks": "Nessuna attività in corso.",
+      "states": {
+        "active": "In esecuzione",
+        "reserved": "Riservata",
+        "scheduled": "Programmata"
+      },
+      "revoke": "Revoca",
+      "revokeTitle": "Revoca attività",
+      "revokeBody": "{name} non verrà eseguita. Un'attività già in corso non viene fermata.",
+      "revoked": "Attività revocata"
+    },
+    "system": {
+      "title": "Sistema",
+      "subtitle": "Stato del database, di Redis e dei worker.",
+      "versionLine": "Versione {version} · ambiente {env}",
+      "refresh": "Aggiorna",
+      "components": {
+        "database": "Database",
+        "redis": "Redis",
+        "celery": "Worker Celery"
+      },
+      "ok": "Funzionante",
+      "down": "Con problemi",
+      "latency": "Latenza: {ms} ms"
+    }
+  },
+  "onboarding": {
+    "title": "Crea il tuo account",
+    "subtitle": "Configura la tua attività in pochi minuti",
+    "stepOf": "Passo {current} di {total}",
+    "steps": {
+      "business": "Attività",
+      "account": "Il tuo account",
+      "confirm": "Conferma"
+    },
+    "fields": {
+      "businessName": "Nome dell'attività",
+      "businessType": "Tipo di attività",
+      "country": "Paese",
+      "fullName": "Il tuo nome completo",
+      "email": "Email",
+      "password": "Password",
+      "confirmPassword": "Ripeti la password"
+    },
+    "hints": {
+      "password": "Da 8 a 72 caratteri, con maiuscola, minuscola e numero"
+    },
+    "types": {
+      "restaurant": "Ristorante",
+      "clinic": "Clinica",
+      "ecommerce": "Negozio online",
+      "services": "Servizi",
+      "education": "Istruzione",
+      "other": "Altro"
+    },
+    "errors": {
+      "required": "Campo obbligatorio",
+      "businessName": "Scrivi il nome dell'attività (minimo 2 caratteri)",
+      "fullName": "Scrivi il tuo nome completo",
+      "email": "Inserisci un’email valida",
+      "passwordMin": "Minimo 8 caratteri",
+      "passwordMax": "Massimo 72 caratteri",
+      "passwordStrength": "Deve avere maiuscola, minuscola e numero",
+      "passwordMismatch": "Le password non coincidono",
+      "terms": "Devi accettare i termini e le condizioni"
+    },
+    "review": "Controlla i tuoi dati",
+    "terms": "Accetto i termini e le condizioni",
+    "back": "Indietro",
+    "next": "Avanti",
+    "submit": "Crea account",
+    "creating": "Creazione…",
+    "haveAccount": "Hai già un account?",
+    "signIn": "Accedi",
+    "serverErrors": {
+      "conflict": "Esiste già un account con questa email",
+      "rateLimited": "Troppi tentativi. Riprova più tardi",
+      "unavailable": "La registrazione non è disponibile"
+    }
+  },
+  "verifyEmail": {
+    "title": "Verifica email",
+    "verifying": "Verifica della tua email…",
+    "successTitle": "Email verificata",
+    "successDesc": "Grazie, il tuo indirizzo è stato confermato.",
+    "failedTitle": "Link non valido",
+    "failedDesc": "Il link non è corretto o è scaduto. Accedi per richiederne uno nuovo.",
+    "goToApp": "Vai all'app"
   }
 }

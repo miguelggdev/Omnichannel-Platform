@@ -17,7 +17,9 @@ from app.api.internal.health import router as health_router
 from app.api.internal.metrics import router as metrics_router
 from app.api.v1.admin import router as admin_router
 from app.api.v1.agent_logs import router as agent_logs_router
+from app.api.v1.analytics import router as analytics_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.business_profile import router as business_profile_router
 from app.api.v1.campaigns import router as campaigns_router
 from app.api.v1.clinical import router as clinical_router
 from app.api.v1.contacts import router as contacts_router
@@ -27,6 +29,9 @@ from app.api.v1.documents import router as documents_router
 from app.api.v1.feature_flags import router as feature_flags_router
 from app.api.v1.marketing_settings import router as marketing_settings_router
 from app.api.v1.notes import router as notes_router
+from app.api.v1.onboarding import router as onboarding_router
+from app.api.v1.platform import router as platform_router
+from app.api.v1.platform_ops import router as platform_ops_router
 from app.api.v1.preferences import router as preferences_router
 from app.api.v1.quick_replies import router as quick_replies_router
 from app.api.v1.sandbox import router as sandbox_router
@@ -168,6 +173,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix="/internal", tags=["internal"])
     app.include_router(metrics_router, prefix="/internal", tags=["internal"])
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+    app.include_router(onboarding_router, prefix="/api/v1/onboarding", tags=["onboarding"])
     # Los webhooks NO pasan por TenantContextMiddleware: se autentican por firma
     # HMAC. El prefijo debe coincidir con WEBHOOK_PATHS_PREFIX del middleware.
     app.include_router(webhooks_router, prefix="/api/v1/webhooks", tags=["webhooks"])
@@ -188,6 +194,12 @@ def create_app() -> FastAPI:
     app.include_router(agent_logs_router, prefix="/api/v1/agent-logs", tags=["agent-logs"])
     app.include_router(quick_replies_router, prefix="/api/v1/quick-replies", tags=["quick-replies"])
     app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
+    app.include_router(analytics_router, prefix="/api/v1/analytics", tags=["analytics"])
+    app.include_router(platform_router, prefix="/api/v1/platform", tags=["platform"])
+    app.include_router(platform_ops_router, prefix="/api/v1/platform", tags=["platform"])
+    app.include_router(
+        business_profile_router, prefix="/api/v1/admin/business-profile", tags=["business-profile"]
+    )
     app.include_router(templates_router, prefix="/api/v1/admin/templates", tags=["templates"])
     app.include_router(preferences_router, prefix="/api/v1/settings/preferences", tags=["settings"])
     app.include_router(sandbox_router, prefix="/api/v1/sandbox", tags=["sandbox"])

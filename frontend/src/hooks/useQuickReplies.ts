@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiDelete, apiGet, apiPost, apiPut } from "@/lib/api";
-import type { QuickReply, QuickReplyInput } from "@/types";
+import type { QuickReply, QuickReplyInput, RenderedQuickReply } from "@/types";
 
 export function useQuickReplies() {
   return useQuery({
@@ -30,5 +30,15 @@ export function useDeleteQuickReply() {
   return useMutation({
     mutationFn: (id: string) => apiDelete(`/quick-replies/${id}`),
     onSuccess: invalidate,
+  });
+}
+
+/** Resuelve las variables ({{contact_name}}...) de una respuesta para una conversacion. */
+export async function renderQuickReply(
+  quickReplyId: string,
+  conversationId: string,
+): Promise<RenderedQuickReply> {
+  return apiPost<RenderedQuickReply>(`/quick-replies/${quickReplyId}/render`, {
+    conversation_id: conversationId,
   });
 }

@@ -46,8 +46,20 @@
       "settings": "Settings",
       "preferences": "Preferences",
       "quick-replies": "Quick replies",
-      "sandbox": "Sandbox"
-    }
+      "sandbox": "Sandbox",
+      "team": "Team",
+      "business-profile": "Business profile",
+      "platform": "Platform",
+      "clients": "Clients",
+      "celery": "Celery & Redis",
+      "system": "System"
+    },
+    "team": "Team",
+    "businessProfile": "Business profile",
+    "platform": "Platform",
+    "platformClients": "Clients",
+    "platformCelery": "Celery & Redis",
+    "platformSystem": "System"
   },
   "roles": {
     "super_admin": "Super admin",
@@ -63,7 +75,9 @@
     "password": "Password",
     "signIn": "Sign in",
     "invalidEmail": "Enter a valid email",
-    "passwordMin": "At least 8 characters"
+    "passwordMin": "At least 8 characters",
+    "noAccount": "Don't have an account yet?",
+    "createAccount": "Create one for your business"
   },
   "errors": {
     "notFoundTitle": "Page not found",
@@ -115,7 +129,6 @@
     "messages": "Messages",
     "earlierNotLoaded": "Earlier messages are not shown.",
     "noMessages": "No messages yet.",
-    "readOnlyNotice": "Replying from the panel is not available yet; the conversation is handled on its original channel.",
     "sender": {
       "contact": "Contact",
       "bot": "Assistant",
@@ -123,7 +136,17 @@
       "system": "System"
     },
     "noText": "[{type}]",
-    "attachment": "View attachment"
+    "attachment": "View attachment",
+    "reply": {
+      "placeholder": "Write a reply…",
+      "send": "Send message",
+      "hint": "Enter sends · Shift+Enter for a new line · “/” searches quick replies. Replying takes over the conversation and the bot stops answering.",
+      "quickReplies": "Quick replies",
+      "noQuickReplies": "No quick replies yet.",
+      "unresolved": "Check the text: data is missing for {vars}.",
+      "closed": "This conversation is closed and no longer accepts replies.",
+      "assignedToOther": "Another team member is handling this conversation."
+    }
   },
   "contacts": {
     "title": "Contacts",
@@ -272,6 +295,318 @@
     "quickStartHint": "Shortcuts to the most common tasks.",
     "goConversations": "View conversations",
     "goDocuments": "Knowledge base",
-    "goPreferences": "My preferences"
+    "goPreferences": "My preferences",
+    "noData": "No data",
+    "inbound": "Received",
+    "outbound": "Sent",
+    "newLast7Days": "{count} new in 7 days",
+    "vsPrevious7Days": "vs. the previous 7 days",
+    "vsPrevious24h": "vs. the previous 24 h",
+    "messages24h": "Messages (24 h)",
+    "responseTime": "First response (median)",
+    "responseTimeHint": "By the bot or a person, last 7 days",
+    "averageIs": "Average: {value}",
+    "csat": "Satisfaction (CSAT)",
+    "csatResponses": "{count} responses in 30 days",
+    "tokens": "Tokens this month",
+    "tokensHint": "Of the AI budget",
+    "unlimited": "Unlimited",
+    "messagesOverTime": "Messages per day",
+    "messagesOverTimeHint": "Last 7 days (UTC)",
+    "conversationsByChannel": "Conversations by channel",
+    "conversationsByChannelHint": "Created in the last 30 days",
+    "noConversations": "No conversations in this period yet."
+  },
+  "team": {
+    "title": "Team",
+    "subtitle": "The people who use the platform in your account, and their role.",
+    "search": "Search users",
+    "searchPlaceholder": "Search by name or email…",
+    "filterRole": "Filter by role",
+    "filterState": "Filter by state",
+    "allRoles": "All roles",
+    "allStates": "All",
+    "active": "Active",
+    "inactive": "Deactivated",
+    "new": "New user",
+    "created": "User created",
+    "you": "you",
+    "never": "Never",
+    "empty": "No users",
+    "emptySearch": "No user matches the filters.",
+    "columns": {
+      "user": "User",
+      "role": "Role",
+      "state": "Status",
+      "lastLogin": "Last sign-in"
+    },
+    "fields": {
+      "first_name": "First name",
+      "last_name": "Last name",
+      "email": "Email",
+      "role": "Role",
+      "initialPassword": "Initial password",
+      "newPassword": "New password (optional)"
+    },
+    "newPasswordHint": "Leave it empty to keep the current one. The person will use it the next time they sign in.",
+    "selfRoleHint": "You cannot change your own role; ask another administrator.",
+    "editUser": "Edit {name}",
+    "deactivateUser": "Deactivate {name}",
+    "reactivateUser": "Reactivate {name}",
+    "deactivateTitle": "Deactivate user",
+    "deactivateBody": "{name} will no longer be able to sign in or renew their session. If already signed in, access keeps working for a few minutes.",
+    "reactivateTitle": "Reactivate user",
+    "reactivateBody": "{name} will be able to sign in again.",
+    "deactivate": "Deactivate",
+    "reactivate": "Reactivate",
+    "deactivated": "User deactivated",
+    "reactivated": "User reactivated",
+    "errors": {
+      "required": "Required field",
+      "invalidEmail": "Enter a valid email",
+      "passwordMin": "At least 8 characters",
+      "passwordMax": "At most 72 characters"
+    }
+  },
+  "businessProfile": {
+    "title": "Business profile",
+    "subtitle": "Your business details, hours and brand.",
+    "usageNotice": "Today the assistant only uses the two messages in the “Assistant” section. The rest is stored for the features that will read it (out of hours, widget, panel branding) and does not change its behavior yet.",
+    "sections": {
+      "business": "Business",
+      "contact": "Contact and location",
+      "hours": "Opening hours",
+      "brand": "Brand",
+      "social": "Social media",
+      "assistant": "Assistant"
+    },
+    "fields": {
+      "business_name": "Business name",
+      "business_type": "Business type",
+      "description": "Description",
+      "phone": "Phone",
+      "email": "Email",
+      "website": "Website",
+      "address": "Address",
+      "city": "City",
+      "country": "Country",
+      "timezone": "Time zone",
+      "primary_color": "Primary color",
+      "secondary_color": "Secondary color",
+      "logo_url": "Logo URL",
+      "welcome_message": "Welcome message",
+      "handoff_message": "Message when handing over to a person"
+    },
+    "hints": {
+      "country": "Two-letter code, e.g. CO",
+      "timezone": "IANA name, e.g. America/Bogota",
+      "logo": "An https link to an image. File upload will arrive once storage is configured."
+    },
+    "hoursHint": "Local business time, 24-hour format.",
+    "open": "open",
+    "closed": "Closed",
+    "opensAt": "opens",
+    "closesAt": "closes",
+    "days": {
+      "monday": "Monday",
+      "tuesday": "Tuesday",
+      "wednesday": "Wednesday",
+      "thursday": "Thursday",
+      "friday": "Friday",
+      "saturday": "Saturday",
+      "sunday": "Sunday"
+    },
+    "social": {
+      "instagram": "Instagram (username)",
+      "facebook": "Facebook (link)",
+      "twitter": "X / Twitter (username)",
+      "whatsapp": "WhatsApp (number)"
+    },
+    "assistantHint": "What the assistant says when opening a conversation and when handing it to a person.",
+    "noAgent": "Your account has no active assistant yet, so these messages cannot be saved.",
+    "discard": "Discard changes",
+    "errors": {
+      "required": "Required field",
+      "tooLong": "Too long",
+      "phone": "Invalid phone number",
+      "email": "Invalid email",
+      "url": "Must be an http(s) link",
+      "country": "Two-letter country code",
+      "timezone": "Unknown time zone",
+      "color": "Six-digit hex color, like #1D4ED8",
+      "handle": "Letters, numbers, dot and underscore only",
+      "time": "Invalid time (HH:MM)",
+      "closeAfterOpen": "Closing must be after opening"
+    }
+  },
+  "platform": {
+    "clients": {
+      "title": "Clients",
+      "subtitle": "The businesses using the platform, their status and activity.",
+      "search": "Search clients",
+      "searchPlaceholder": "Search by name or slug…",
+      "filterState": "Filter by status",
+      "allStates": "All",
+      "active": "Active",
+      "suspended": "Suspended",
+      "empty": "No client matches.",
+      "never": "Never",
+      "since": "joined {when}",
+      "columns": {
+        "client": "Client",
+        "state": "Status",
+        "plan": "Plan",
+        "users": "Users",
+        "conversations": "Conv. 30 d",
+        "messages": "Messages 30 d",
+        "lastActivity": "Last activity"
+      },
+      "usage": "Usage",
+      "usageHint": "Only figures and dates: the platform does not show the content of a client's conversations.",
+      "fields": {
+        "users": "Active / total users",
+        "contacts": "Contacts",
+        "openConversations": "Open conversations",
+        "conversations30d": "Conversations (30 d)",
+        "messages30d": "Messages (30 d)",
+        "documents": "Documents ready",
+        "assistant": "Active assistant",
+        "tokens": "Tokens this month"
+      },
+      "yes": "Yes",
+      "no": "No",
+      "unlimited": "Unlimited",
+      "lastActivity": "Last activity",
+      "suspend": "Suspend",
+      "reactivate": "Reactivate",
+      "ownTenant": "You cannot suspend your own tenant: you would lose access.",
+      "suspendedSince": "Suspended since {when}",
+      "suspendTitle": "Suspend {name}",
+      "suspendBody": "Its users will not be able to sign in or renew their session. Anyone already signed in keeps access for a few minutes until it expires.",
+      "reactivateTitle": "Reactivate {name}",
+      "reactivateBody": "Its users will be able to sign in again.",
+      "reason": "Reason (optional)",
+      "reasonHint": "Saved with the suspension and cleared on reactivation.",
+      "suspendedOk": "Client suspended",
+      "reactivatedOk": "Client reactivated"
+    },
+    "celery": {
+      "title": "Celery & Redis",
+      "subtitle": "The platform's workers, queues and running tasks.",
+      "refreshHint": "Refreshes every 30 seconds.",
+      "workers": "Workers",
+      "brokerDown": "Could not connect to the broker, so the number of workers is unknown. It does not mean there are none: check Redis.",
+      "noWorkers": "The broker responds, but no worker is connected. Messages will pile up in the queues until one starts.",
+      "concurrency": "{n} processes",
+      "columns": {
+        "worker": "Worker",
+        "active": "Active",
+        "reserved": "Reserved",
+        "processed": "Processed",
+        "queues": "Queues",
+        "uptime": "Uptime",
+        "task": "Task",
+        "state": "State",
+        "queue": "Queue"
+      },
+      "queues": "Queues",
+      "queuesHint": "Messages waiting in each queue.",
+      "pending": "Pending",
+      "memory": "Memory",
+      "noLimit": "no limit",
+      "clients": "Clients",
+      "keys": "Keys",
+      "hitRatio": "Hit ratio",
+      "redisUptime": "up {time}",
+      "tasks": "Running tasks",
+      "tasksHint": "Arguments are not shown: they may contain contact data.",
+      "noTasks": "No tasks running.",
+      "states": {
+        "active": "Running",
+        "reserved": "Reserved",
+        "scheduled": "Scheduled"
+      },
+      "revoke": "Revoke",
+      "revokeTitle": "Revoke task",
+      "revokeBody": "{name} will not run. A task that is already running is not stopped.",
+      "revoked": "Task revoked"
+    },
+    "system": {
+      "title": "System",
+      "subtitle": "Status of the database, Redis and the workers.",
+      "versionLine": "Version {version} · {env} environment",
+      "refresh": "Refresh",
+      "components": {
+        "database": "Database",
+        "redis": "Redis",
+        "celery": "Celery workers"
+      },
+      "ok": "Working",
+      "down": "Having problems",
+      "latency": "Latency: {ms} ms"
+    }
+  },
+  "onboarding": {
+    "title": "Create your account",
+    "subtitle": "Set up your business in a few minutes",
+    "stepOf": "Step {current} of {total}",
+    "steps": {
+      "business": "Business",
+      "account": "Your account",
+      "confirm": "Confirm"
+    },
+    "fields": {
+      "businessName": "Business name",
+      "businessType": "Business type",
+      "country": "Country",
+      "fullName": "Your full name",
+      "email": "Email",
+      "password": "Password",
+      "confirmPassword": "Repeat password"
+    },
+    "hints": {
+      "password": "8 to 72 characters, with an uppercase letter, a lowercase letter and a number"
+    },
+    "types": {
+      "restaurant": "Restaurant",
+      "clinic": "Clinic",
+      "ecommerce": "Online store",
+      "services": "Services",
+      "education": "Education",
+      "other": "Other"
+    },
+    "errors": {
+      "required": "Required field",
+      "businessName": "Enter the business name (at least 2 characters)",
+      "fullName": "Enter your full name",
+      "email": "Enter a valid email",
+      "passwordMin": "At least 8 characters",
+      "passwordMax": "At most 72 characters",
+      "passwordStrength": "Must include an uppercase letter, a lowercase letter and a number",
+      "passwordMismatch": "Passwords don't match",
+      "terms": "You must accept the terms and conditions"
+    },
+    "review": "Review your details",
+    "terms": "I accept the terms and conditions",
+    "back": "Back",
+    "next": "Next",
+    "submit": "Create account",
+    "creating": "Creating…",
+    "haveAccount": "Already have an account?",
+    "signIn": "Sign in",
+    "serverErrors": {
+      "conflict": "An account with that email already exists",
+      "rateLimited": "Too many attempts. Please try again later",
+      "unavailable": "Sign-up is not available"
+    }
+  },
+  "verifyEmail": {
+    "title": "Email verification",
+    "verifying": "Verifying your email…",
+    "successTitle": "Email verified",
+    "successDesc": "Thanks, your address is now confirmed.",
+    "failedTitle": "Invalid link",
+    "failedDesc": "The link is wrong or has expired. Sign in to request a new one.",
+    "goToApp": "Go to the app"
   }
 }

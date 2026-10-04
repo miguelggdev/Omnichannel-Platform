@@ -19,7 +19,12 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:
 os.environ.setdefault("JWT_SECRET", "test-secret-key-for-testing-only-minimum-32-chars")
 os.environ.setdefault("ENCRYPTION_KEY", "test-encryption-key-minimum-32-characters-long")
 
-from app.core.security import create_access_token, create_refresh_token, hash_password
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_jwt,
+    hash_password,
+)
 
 
 def _make_user_mock(
@@ -113,10 +118,18 @@ class _SesionDeLogin:
 class _FilaRefresh:
     """Fila que devuelve `_REFRESH_LOOKUP`: estado actual de usuario y tenant."""
 
-    def __init__(self, user_is_active: bool = True, client_is_active: bool = True) -> None:
-        """Construye la fila con ambos activos por defecto."""
+    def __init__(
+        self,
+        user_is_active: bool = True,
+        client_is_active: bool = True,
+        role: str = "admin",
+        email: str = "test@test.com",
+    ) -> None:
+        """Construye la fila con ambos activos, rol admin y el email de los tests."""
         self.user_is_active = user_is_active
         self.client_is_active = client_is_active
+        self.role = role
+        self.email = email
 
 
 class _SesionDeRefresh:
@@ -519,6 +532,30 @@ class TestRefreshEndpoint:
         data = resp.json()
         assert "access_token" in data
         assert data["refresh_token"] == refresh
+
+    @pytest.mark.asyncio
+    async def test_refresh_lleva_el_rol_actual_de_la_base_no_el_del_token_viejo(
+        self, client: AsyncClient
+    ) -> None:
+        """Un admin degradado a agent no conserva el rol admin al refrescar."""
+        refresh = create_refresh_token(
+            {
+                "user_id": str(uuid.uuid4()),
+                "client_id": str(uuid.uuid4()),
+                "email": "viejo@test.com",
+                "role": "admin",
+            }
+        )
+
+        with patch(
+            "app.api.v1.auth.tenant_session",
+            _refresh_falso(_FilaRefresh(role="agent", email="nuevo@test.com")),
+        ):
+            resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
+
+        assert resp.status_code == 200
+        claims = decode_jwt(resp.json()["access_token"])
+        assert (claims["role"], claims["email"]) == ("agent", "nuevo@test.com")
 
     @pytest.mark.asyncio
     async def test_refresh_usuario_ya_no_existe(self, client: AsyncClient) -> None:

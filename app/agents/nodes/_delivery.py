@@ -89,6 +89,9 @@ async def deliver_message(
     text: str,
     metadata: dict[str, Any] | None = None,
     stored_text: str | None = None,
+    sender_type: str = "bot",
+    sender_id: UUID | None = None,
+    message_id: UUID | None = None,
 ) -> str | None:
     """Envia un texto al contacto y lo registra como mensaje saliente.
 
@@ -105,6 +108,11 @@ async def deliver_message(
             eventos, si debe ser distinto del que se envia. Lo usa el agente
             clinico para no dejar datos de salud en claro en el historial
             (ADR-072); al contacto le llega siempre `text`.
+        sender_type: Quien lo envia: `bot` (por defecto) o `agent` si lo escribe una
+            persona desde el panel.
+        sender_id: Usuario que lo escribe, si es una persona.
+        message_id: Id con el que se guarda el mensaje; permite al llamador
+            recuperarlo despues. Si falta, se genera uno.
 
     Returns:
         Id externo que devolvio el proveedor, o None si no devolvio ninguno.
@@ -128,7 +136,7 @@ async def deliver_message(
         channel_config=channel_config,
     )
 
-    message_id = uuid4()
+    message_id = message_id or uuid4()
 
     async with tenant_session(client_id) as session:
         session.add(
@@ -140,8 +148,8 @@ async def deliver_message(
                 message_type="text",
                 content=stored_text if stored_text is not None else text,
                 external_message_id=external_id or None,
-                sender_type="bot",
-                sender_id=None,
+                sender_type=sender_type,
+                sender_id=sender_id,
             )
         )
         conversation = (

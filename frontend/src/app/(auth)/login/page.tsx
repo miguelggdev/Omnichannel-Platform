@@ -1,7 +1,11 @@
 import { MessageSquare } from "lucide-react";
+import Link from "next/link";
 import { getTranslations } from "next-intl/server";
 import { LoginForm } from "@/components/auth/LoginForm";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+// El enlace al registro depende de `ONBOARDING_ENABLED`, que se lee en cada peticion.
+export const dynamic = "force-dynamic";
 
 export async function generateMetadata() {
   const t = await getTranslations("auth");
@@ -21,6 +25,17 @@ export default async function LoginPage() {
       </CardHeader>
       <CardContent>
         <LoginForm />
+        {process.env.ONBOARDING_ENABLED === "true" && (
+          <p className="mt-4 text-center text-sm text-muted-foreground">
+            {t("noAccount")}{" "}
+            <Link
+              href="/onboarding"
+              className="font-medium text-primary underline-offset-4 hover:underline"
+            >
+              {t("createAccount")}
+            </Link>
+          </p>
+        )}
       </CardContent>
     </Card>
   );

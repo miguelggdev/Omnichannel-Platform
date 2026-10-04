@@ -83,6 +83,36 @@ def create_refresh_token(data: dict[str, Any]) -> str:
     )
 
 
+def create_email_verification_token(user_id: str, client_id: str, email: str) -> str:
+    """Crea el token de un solo proposito que viaja en el enlace de verificacion.
+
+    Lleva `type=email_verification`, asi que el middleware lo rechaza como Bearer
+    y no sirve para llamar a la API.
+
+    Args:
+        user_id: Usuario cuyo email se verifica.
+        client_id: Tenant del usuario.
+        email: Email verificado; si el usuario lo cambia despues, el token deja de valer.
+
+    Returns:
+        Token JWT codificado, con `EMAIL_VERIFICATION_TTL_HOURS` de vida.
+    """
+    expire = datetime.now(timezone.utc) + timedelta(
+        hours=get_settings().EMAIL_VERIFICATION_TTL_HOURS
+    )
+    payload = {
+        "user_id": user_id,
+        "client_id": client_id,
+        "email": email,
+        "exp": expire,
+        "type": "email_verification",
+    }
+    return cast(
+        "str",
+        jwt.encode(payload, get_settings().JWT_SECRET, algorithm=get_settings().JWT_ALGORITHM),
+    )
+
+
 def decode_jwt(token: str) -> dict[str, Any]:
     """Decodifica y valida un token JWT.
 
