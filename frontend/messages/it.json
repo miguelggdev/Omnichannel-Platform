@@ -75,7 +75,9 @@
     "password": "Password",
     "signIn": "Accedi",
     "invalidEmail": "Inserisci un'email valida",
-    "passwordMin": "Almeno 8 caratteri"
+    "passwordMin": "Almeno 8 caratteri",
+    "noAccount": "Non hai ancora un account?",
+    "createAccount": "Crea quello della tua attività"
   },
   "errors": {
     "notFoundTitle": "Pagina non trovata",
@@ -543,5 +545,68 @@
       "down": "Con problemi",
       "latency": "Latenza: {ms} ms"
     }
+  },
+  "onboarding": {
+    "title": "Crea il tuo account",
+    "subtitle": "Configura la tua attività in pochi minuti",
+    "stepOf": "Passo {current} di {total}",
+    "steps": {
+      "business": "Attività",
+      "account": "Il tuo account",
+      "confirm": "Conferma"
+    },
+    "fields": {
+      "businessName": "Nome dell'attività",
+      "businessType": "Tipo di attività",
+      "country": "Paese",
+      "fullName": "Il tuo nome completo",
+      "email": "Email",
+      "password": "Password",
+      "confirmPassword": "Ripeti la password"
+    },
+    "hints": {
+      "password": "Da 8 a 72 caratteri, con maiuscola, minuscola e numero"
+    },
+    "types": {
+      "restaurant": "Ristorante",
+      "clinic": "Clinica",
+      "ecommerce": "Negozio online",
+      "services": "Servizi",
+      "education": "Istruzione",
+      "other": "Altro"
+    },
+    "errors": {
+      "required": "Campo obbligatorio",
+      "businessName": "Scrivi il nome dell'attività (minimo 2 caratteri)",
+      "fullName": "Scrivi il tuo nome completo",
+      "email": "Inserisci un’email valida",
+      "passwordMin": "Minimo 8 caratteri",
+      "passwordMax": "Massimo 72 caratteri",
+      "passwordStrength": "Deve avere maiuscola, minuscola e numero",
+      "passwordMismatch": "Le password non coincidono",
+      "terms": "Devi accettare i termini e le condizioni"
+    },
+    "review": "Controlla i tuoi dati",
+    "terms": "Accetto i termini e le condizioni",
+    "back": "Indietro",
+    "next": "Avanti",
+    "submit": "Crea account",
+    "creating": "Creazione…",
+    "haveAccount": "Hai già un account?",
+    "signIn": "Accedi",
+    "serverErrors": {
+      "conflict": "Esiste già un account con questa email",
+      "rateLimited": "Troppi tentativi. Riprova più tardi",
+      "unavailable": "La registrazione non è disponibile"
+    }
+  },
+  "verifyEmail": {
+    "title": "Verifica email",
+    "verifying": "Verifica della tua email…",
+    "successTitle": "Email verificata",
+    "successDesc": "Grazie, il tuo indirizzo è stato confermato.",
+    "failedTitle": "Link non valido",
+    "failedDesc": "Il link non è corretto o è scaduto. Accedi per richiederne uno nuovo.",
+    "goToApp": "Vai all'app"
   }
 }

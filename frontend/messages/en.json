@@ -75,7 +75,9 @@
     "password": "Password",
     "signIn": "Sign in",
     "invalidEmail": "Enter a valid email",
-    "passwordMin": "At least 8 characters"
+    "passwordMin": "At least 8 characters",
+    "noAccount": "Don't have an account yet?",
+    "createAccount": "Create one for your business"
   },
   "errors": {
     "notFoundTitle": "Page not found",
@@ -543,5 +545,68 @@
       "down": "Having problems",
       "latency": "Latency: {ms} ms"
     }
+  },
+  "onboarding": {
+    "title": "Create your account",
+    "subtitle": "Set up your business in a few minutes",
+    "stepOf": "Step {current} of {total}",
+    "steps": {
+      "business": "Business",
+      "account": "Your account",
+      "confirm": "Confirm"
+    },
+    "fields": {
+      "businessName": "Business name",
+      "businessType": "Business type",
+      "country": "Country",
+      "fullName": "Your full name",
+      "email": "Email",
+      "password": "Password",
+      "confirmPassword": "Repeat password"
+    },
+    "hints": {
+      "password": "8 to 72 characters, with an uppercase letter, a lowercase letter and a number"
+    },
+    "types": {
+      "restaurant": "Restaurant",
+      "clinic": "Clinic",
+      "ecommerce": "Online store",
+      "services": "Services",
+      "education": "Education",
+      "other": "Other"
+    },
+    "errors": {
+      "required": "Required field",
+      "businessName": "Enter the business name (at least 2 characters)",
+      "fullName": "Enter your full name",
+      "email": "Enter a valid email",
+      "passwordMin": "At least 8 characters",
+      "passwordMax": "At most 72 characters",
+      "passwordStrength": "Must include an uppercase letter, a lowercase letter and a number",
+      "passwordMismatch": "Passwords don't match",
+      "terms": "You must accept the terms and conditions"
+    },
+    "review": "Review your details",
+    "terms": "I accept the terms and conditions",
+    "back": "Back",
+    "next": "Next",
+    "submit": "Create account",
+    "creating": "Creating…",
+    "haveAccount": "Already have an account?",
+    "signIn": "Sign in",
+    "serverErrors": {
+      "conflict": "An account with that email already exists",
+      "rateLimited": "Too many attempts. Please try again later",
+      "unavailable": "Sign-up is not available"
+    }
+  },
+  "verifyEmail": {
+    "title": "Email verification",
+    "verifying": "Verifying your email…",
+    "successTitle": "Email verified",
+    "successDesc": "Thanks, your address is now confirmed.",
+    "failedTitle": "Invalid link",
+    "failedDesc": "The link is wrong or has expired. Sign in to request a new one.",
+    "goToApp": "Go to the app"
   }
 }

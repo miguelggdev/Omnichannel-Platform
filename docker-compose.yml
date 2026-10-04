@@ -173,6 +173,10 @@ services:
         API_INTERNAL_URL: ${FRONTEND_API_INTERNAL_URL:-http://api:8000}
         NEXT_PUBLIC_DEFAULT_LOCALE: ${FRONTEND_DEFAULT_LOCALE:-es}
     restart: unless-stopped
+    environment:
+      # Muestra /onboarding y el enlace del login (se lee en cada peticion). Debe coincidir
+      # con el ONBOARDING_ENABLED de la API, que es la que de verdad lo permite.
+      - ONBOARDING_ENABLED=${ONBOARDING_ENABLED:-false}
     depends_on:
       api:
         condition: service_healthy

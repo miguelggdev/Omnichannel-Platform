@@ -75,7 +75,9 @@
     "password": "Passwort",
     "signIn": "Anmelden",
     "invalidEmail": "Geben Sie eine gültige E-Mail ein",
-    "passwordMin": "Mindestens 8 Zeichen"
+    "passwordMin": "Mindestens 8 Zeichen",
+    "noAccount": "Noch kein Konto?",
+    "createAccount": "Eines für Ihr Unternehmen erstellen"
   },
   "errors": {
     "notFoundTitle": "Seite nicht gefunden",
@@ -543,5 +545,68 @@
       "down": "Probleme",
       "latency": "Latenz: {ms} ms"
     }
+  },
+  "onboarding": {
+    "title": "Konto erstellen",
+    "subtitle": "Richten Sie Ihr Unternehmen in wenigen Minuten ein",
+    "stepOf": "Schritt {current} von {total}",
+    "steps": {
+      "business": "Unternehmen",
+      "account": "Ihr Konto",
+      "confirm": "Bestätigen"
+    },
+    "fields": {
+      "businessName": "Name des Unternehmens",
+      "businessType": "Art des Unternehmens",
+      "country": "Land",
+      "fullName": "Ihr vollständiger Name",
+      "email": "E-Mail",
+      "password": "Passwort",
+      "confirmPassword": "Passwort wiederholen"
+    },
+    "hints": {
+      "password": "8 bis 72 Zeichen, mit Großbuchstabe, Kleinbuchstabe und Zahl"
+    },
+    "types": {
+      "restaurant": "Restaurant",
+      "clinic": "Klinik",
+      "ecommerce": "Online-Shop",
+      "services": "Dienstleistungen",
+      "education": "Bildung",
+      "other": "Sonstiges"
+    },
+    "errors": {
+      "required": "Pflichtfeld",
+      "businessName": "Geben Sie den Namen des Unternehmens ein (mindestens 2 Zeichen)",
+      "fullName": "Geben Sie Ihren vollständigen Namen ein",
+      "email": "Geben Sie eine gültige E-Mail ein",
+      "passwordMin": "Mindestens 8 Zeichen",
+      "passwordMax": "Höchstens 72 Zeichen",
+      "passwordStrength": "Muss Großbuchstabe, Kleinbuchstabe und Zahl enthalten",
+      "passwordMismatch": "Die Passwörter stimmen nicht überein",
+      "terms": "Sie müssen die Nutzungsbedingungen akzeptieren"
+    },
+    "review": "Prüfen Sie Ihre Angaben",
+    "terms": "Ich akzeptiere die Nutzungsbedingungen",
+    "back": "Zurück",
+    "next": "Weiter",
+    "submit": "Konto erstellen",
+    "creating": "Wird erstellt…",
+    "haveAccount": "Sie haben bereits ein Konto?",
+    "signIn": "Anmelden",
+    "serverErrors": {
+      "conflict": "Mit dieser E-Mail existiert bereits ein Konto",
+      "rateLimited": "Zu viele Versuche. Bitte versuchen Sie es später erneut",
+      "unavailable": "Die Registrierung ist nicht verfügbar"
+    }
+  },
+  "verifyEmail": {
+    "title": "E-Mail-Verifizierung",
+    "verifying": "Ihre E-Mail wird verifiziert…",
+    "successTitle": "E-Mail verifiziert",
+    "successDesc": "Danke, Ihre Adresse ist jetzt bestätigt.",
+    "failedTitle": "Ungültiger Link",
+    "failedDesc": "Der Link ist falsch oder abgelaufen. Melden Sie sich an, um einen neuen anzufordern.",
+    "goToApp": "Zur Anwendung"
   }
 }

@@ -75,7 +75,9 @@
     "password": "Palavra-passe",
     "signIn": "Iniciar sessão",
     "invalidEmail": "Introduza um e-mail válido",
-    "passwordMin": "Mínimo de 8 caracteres"
+    "passwordMin": "Mínimo de 8 caracteres",
+    "noAccount": "Ainda não tem uma conta?",
+    "createAccount": "Crie a do seu negócio"
   },
   "errors": {
     "notFoundTitle": "Página não encontrada",
@@ -543,5 +545,68 @@
       "down": "Com problemas",
       "latency": "Latência: {ms} ms"
     }
+  },
+  "onboarding": {
+    "title": "Crie a sua conta",
+    "subtitle": "Configure o seu negócio em poucos minutos",
+    "stepOf": "Passo {current} de {total}",
+    "steps": {
+      "business": "Negócio",
+      "account": "A sua conta",
+      "confirm": "Confirmar"
+    },
+    "fields": {
+      "businessName": "Nome do negócio",
+      "businessType": "Tipo de negócio",
+      "country": "País",
+      "fullName": "O seu nome completo",
+      "email": "E-mail",
+      "password": "Senha",
+      "confirmPassword": "Repita a senha"
+    },
+    "hints": {
+      "password": "Entre 8 e 72 caracteres, com maiúscula, minúscula e número"
+    },
+    "types": {
+      "restaurant": "Restaurante",
+      "clinic": "Clínica",
+      "ecommerce": "Loja online",
+      "services": "Serviços",
+      "education": "Educação",
+      "other": "Outro"
+    },
+    "errors": {
+      "required": "Campo obrigatório",
+      "businessName": "Escreva o nome do negócio (mínimo 2 caracteres)",
+      "fullName": "Escreva o seu nome completo",
+      "email": "Introduza um e-mail válido",
+      "passwordMin": "Mínimo 8 caracteres",
+      "passwordMax": "Máximo 72 caracteres",
+      "passwordStrength": "Deve ter maiúscula, minúscula e número",
+      "passwordMismatch": "As senhas não coincidem",
+      "terms": "Deve aceitar os termos e condições"
+    },
+    "review": "Revise os seus dados",
+    "terms": "Aceito os termos e condições",
+    "back": "Voltar",
+    "next": "Seguinte",
+    "submit": "Criar conta",
+    "creating": "A criar…",
+    "haveAccount": "Já tem uma conta?",
+    "signIn": "Iniciar sessão",
+    "serverErrors": {
+      "conflict": "Já existe uma conta com esse e-mail",
+      "rateLimited": "Demasiadas tentativas. Tente novamente mais tarde",
+      "unavailable": "O registo não está disponível"
+    }
+  },
+  "verifyEmail": {
+    "title": "Verificação de e-mail",
+    "verifying": "A verificar o seu e-mail…",
+    "successTitle": "E-mail verificado",
+    "successDesc": "Obrigado, o seu endereço foi confirmado.",
+    "failedTitle": "Ligação inválida",
+    "failedDesc": "A ligação está incorreta ou expirou. Inicie sessão para pedir uma nova.",
+    "goToApp": "Ir para a aplicação"
   }
 }

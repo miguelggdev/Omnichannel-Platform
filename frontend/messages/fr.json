@@ -75,7 +75,9 @@
     "password": "Mot de passe",
     "signIn": "Se connecter",
     "invalidEmail": "Saisissez un e-mail valide",
-    "passwordMin": "8 caractères minimum"
+    "passwordMin": "8 caractères minimum",
+    "noAccount": "Vous n'avez pas encore de compte ?",
+    "createAccount": "Créez celui de votre entreprise"
   },
   "errors": {
     "notFoundTitle": "Page introuvable",
@@ -543,5 +545,68 @@
       "down": "En difficulté",
       "latency": "Latence : {ms} ms"
     }
+  },
+  "onboarding": {
+    "title": "Créez votre compte",
+    "subtitle": "Configurez votre entreprise en quelques minutes",
+    "stepOf": "Étape {current} sur {total}",
+    "steps": {
+      "business": "Entreprise",
+      "account": "Votre compte",
+      "confirm": "Confirmer"
+    },
+    "fields": {
+      "businessName": "Nom de l'entreprise",
+      "businessType": "Type d'entreprise",
+      "country": "Pays",
+      "fullName": "Votre nom complet",
+      "email": "E-mail",
+      "password": "Mot de passe",
+      "confirmPassword": "Répétez le mot de passe"
+    },
+    "hints": {
+      "password": "De 8 à 72 caractères, avec majuscule, minuscule et chiffre"
+    },
+    "types": {
+      "restaurant": "Restaurant",
+      "clinic": "Clinique",
+      "ecommerce": "Boutique en ligne",
+      "services": "Services",
+      "education": "Éducation",
+      "other": "Autre"
+    },
+    "errors": {
+      "required": "Champ obligatoire",
+      "businessName": "Saisissez le nom de l'entreprise (2 caractères minimum)",
+      "fullName": "Saisissez votre nom complet",
+      "email": "Saisissez un e-mail valide",
+      "passwordMin": "8 caractères minimum",
+      "passwordMax": "72 caractères maximum",
+      "passwordStrength": "Doit contenir une majuscule, une minuscule et un chiffre",
+      "passwordMismatch": "Les mots de passe ne correspondent pas",
+      "terms": "Vous devez accepter les conditions d'utilisation"
+    },
+    "review": "Vérifiez vos informations",
+    "terms": "J'accepte les conditions d'utilisation",
+    "back": "Retour",
+    "next": "Suivant",
+    "submit": "Créer le compte",
+    "creating": "Création…",
+    "haveAccount": "Vous avez déjà un compte ?",
+    "signIn": "Se connecter",
+    "serverErrors": {
+      "conflict": "Un compte existe déjà avec cet e-mail",
+      "rateLimited": "Trop de tentatives. Réessayez plus tard",
+      "unavailable": "L'inscription n'est pas disponible"
+    }
+  },
+  "verifyEmail": {
+    "title": "Vérification de l'e-mail",
+    "verifying": "Vérification de votre e-mail…",
+    "successTitle": "E-mail vérifié",
+    "successDesc": "Merci, votre adresse est confirmée.",
+    "failedTitle": "Lien invalide",
+    "failedDesc": "Le lien est incorrect ou a expiré. Connectez-vous pour en demander un nouveau.",
+    "goToApp": "Accéder à l'application"
   }
 }
