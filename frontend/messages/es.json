@@ -1,0 +1,277 @@
+{
+  "common": {
+    "pageOf": "Página {page} de {pages}",
+    "previous": "Anterior",
+    "next": "Siguiente",
+    "close": "Cerrar",
+    "cancel": "Cancelar",
+    "save": "Guardar",
+    "saved": "Guardado",
+    "edit": "Editar",
+    "delete": "Eliminar",
+    "required": "Campo obligatorio",
+    "tooLong": "Demasiado largo",
+    "back": "Volver"
+  },
+  "theme": {
+    "toggle": "Cambiar tema",
+    "light": "Claro",
+    "dark": "Oscuro",
+    "system": "Sistema"
+  },
+  "language": {
+    "select": "Cambiar idioma"
+  },
+  "nav": {
+    "main": "Navegación principal",
+    "dashboard": "Inicio",
+    "conversations": "Conversaciones",
+    "contacts": "Contactos",
+    "documents": "Base de conocimiento",
+    "quickReplies": "Respuestas rápidas",
+    "preferences": "Preferencias",
+    "sandbox": "Sandbox y funciones",
+    "userMenu": "Menú de usuario",
+    "logout": "Cerrar sesión",
+    "expand": "Expandir menú",
+    "collapse": "Contraer menú",
+    "openMenu": "Abrir menú",
+    "closeMenu": "Cerrar menú",
+    "breadcrumbs": "Ruta de navegación",
+    "detail": "Detalle",
+    "crumbs": {
+      "conversations": "Conversaciones",
+      "contacts": "Contactos",
+      "documents": "Base de conocimiento",
+      "settings": "Ajustes",
+      "preferences": "Preferencias",
+      "quick-replies": "Respuestas rápidas",
+      "sandbox": "Sandbox"
+    }
+  },
+  "roles": {
+    "super_admin": "Superadministrador",
+    "admin": "Administrador",
+    "supervisor": "Supervisor",
+    "agent": "Agente",
+    "medical": "Profesional médico"
+  },
+  "auth": {
+    "welcome": "Bienvenido",
+    "subtitle": "Inicia sesión para continuar",
+    "email": "Correo electrónico",
+    "password": "Contraseña",
+    "signIn": "Iniciar sesión",
+    "invalidEmail": "Introduce un correo válido",
+    "passwordMin": "Mínimo 8 caracteres"
+  },
+  "errors": {
+    "notFoundTitle": "Página no encontrada",
+    "notFoundBody": "La página que buscas no existe o se ha movido.",
+    "backHome": "Volver al inicio",
+    "genericTitle": "Algo salió mal",
+    "genericBody": "Ocurrió un error inesperado. Inténtalo de nuevo.",
+    "retry": "Reintentar",
+    "loading": "Cargando…",
+    "forbiddenTitle": "Sin acceso",
+    "forbiddenBody": "Tu rol no tiene permiso para ver esta sección.",
+    "loadFailed": "No se pudieron cargar los datos"
+  },
+  "conversations": {
+    "title": "Conversaciones",
+    "subtitle": "Conversaciones con tus contactos en todos los canales.",
+    "filterStatus": "Filtrar por estado",
+    "filterChannel": "Filtrar por canal",
+    "allStatuses": "Todos los estados",
+    "allChannels": "Todos los canales",
+    "status": {
+      "new": "Nueva",
+      "bot_active": "Atiende el bot",
+      "human_active": "Atiende una persona",
+      "waiting_human": "Espera a una persona",
+      "waiting_client": "Espera al cliente",
+      "resolved": "Resuelta",
+      "archived": "Archivada"
+    },
+    "channel": {
+      "whatsapp": "WhatsApp",
+      "instagram": "Instagram",
+      "facebook": "Facebook",
+      "telegram": "Telegram",
+      "email": "Correo",
+      "webchat": "Chat web",
+      "voice": "Voz",
+      "sandbox": "Sandbox"
+    },
+    "empty": "No hay conversaciones",
+    "emptyHint": "Cuando un contacto escriba, aparecerá aquí.",
+    "noSubject": "Sin asunto",
+    "lastActivity": "Última actividad {when}",
+    "back": "Volver a conversaciones",
+    "statusChanged": "Estado actualizado",
+    "assigned": "Conversación asignada a ti",
+    "assignToMe": "Asignármela",
+    "moveTo": "Pasar a: {status}",
+    "messages": "Mensajes",
+    "earlierNotLoaded": "Hay mensajes anteriores que no se muestran.",
+    "noMessages": "Todavía no hay mensajes.",
+    "readOnlyNotice": "Responder desde el panel aún no está disponible; la conversación se atiende por el canal original.",
+    "sender": {
+      "contact": "Contacto",
+      "bot": "Asistente",
+      "agent": "Agente",
+      "system": "Sistema"
+    },
+    "noText": "[{type}]",
+    "attachment": "Ver adjunto"
+  },
+  "contacts": {
+    "title": "Contactos",
+    "subtitle": "Las personas que se comunican con tu negocio.",
+    "search": "Buscar contactos",
+    "searchPlaceholder": "Buscar por nombre…",
+    "new": "Nuevo contacto",
+    "createdAt": "Creado",
+    "empty": "No hay contactos",
+    "emptyHint": "Los contactos se crean solos cuando alguien escribe, o puedes añadir uno.",
+    "emptySearch": "Ningún contacto coincide con la búsqueda.",
+    "fields": {
+      "first_name": "Nombre",
+      "last_name": "Apellido",
+      "display_name": "Nombre a mostrar",
+      "name": "Nombre"
+    },
+    "since": "Contacto desde {when}",
+    "identifiers": "Canales y etiquetas",
+    "noIdentifiers": "Sin canales asociados.",
+    "conversations": "Conversaciones",
+    "noConversations": "Sin conversaciones.",
+    "notes": "Notas internas",
+    "notePlaceholder": "Escribe una nota para tu equipo…",
+    "addNote": "Añadir nota",
+    "noNotes": "Todavía no hay notas."
+  },
+  "documents": {
+    "title": "Base de conocimiento",
+    "subtitle": "Los documentos con los que el asistente responde a tus clientes.",
+    "status": {
+      "pending": "En cola",
+      "processing": "Procesando",
+      "completed": "Listo",
+      "failed": "Con error"
+    },
+    "tooLarge": "{name} supera el máximo de {max}",
+    "unsupported": "{name}: tipo de archivo no admitido",
+    "uploaded": "{name} subido; se está procesando",
+    "dropzoneLabel": "Seleccionar archivos",
+    "dropHere": "Suelta los archivos aquí",
+    "dropzoneTitle": "Arrastra archivos o haz clic para elegirlos",
+    "dropzoneHint": "PDF, DOCX, TXT, CSV, XLSX o imágenes · máximo {max}",
+    "columns": {
+      "title": "Título",
+      "status": "Estado",
+      "size": "Tamaño",
+      "chunks": "Fragmentos",
+      "created": "Subido"
+    },
+    "reprocess": "Reprocesar",
+    "reprocessing": "Reprocesando el documento",
+    "deleteTitle": "Eliminar documento",
+    "deleteBody": "«{title}» y sus fragmentos dejarán de usarse en las respuestas. No se puede deshacer.",
+    "deleted": "Documento eliminado",
+    "empty": "No hay documentos",
+    "emptyHint": "Sube documentos para que el asistente pueda responder con tu información."
+  },
+  "quickReplies": {
+    "title": "Respuestas rápidas",
+    "subtitle": "Mensajes predefinidos que tu equipo puede enviar con un atajo.",
+    "new": "Nueva respuesta",
+    "empty": "No hay respuestas rápidas",
+    "emptyHint": "Crea la primera para responder más rápido.",
+    "fields": {
+      "shortcut": "Atajo",
+      "title": "Título",
+      "content": "Mensaje",
+      "category": "Categoría (opcional)"
+    },
+    "shortcutFormat": "Debe empezar por / y usar solo minúsculas, números, guion y guion bajo (ej. /saludo)",
+    "variablesHint": "Variables disponibles: '{{contact_name}}', '{{agent_name}}', '{{ticket_id}}' y '{{date}}'; se rellenan al enviar.",
+    "deleteTitle": "Eliminar respuesta rápida",
+    "deleteBody": "Se eliminará «{title}». No se puede deshacer.",
+    "deleted": "Respuesta eliminada"
+  },
+  "preferences": {
+    "title": "Preferencias",
+    "subtitle": "Cómo quieres ver la aplicación. Se guardan en tu cuenta.",
+    "language": "Idioma",
+    "languageHint": "El idioma de los menús y textos de la aplicación.",
+    "theme": "Tema",
+    "themeHint": "Claro, oscuro, o el que use tu dispositivo."
+  },
+  "flags": {
+    "title": "Funciones del tenant",
+    "subtitle": "Activa o desactiva funciones de tu cuenta.",
+    "notEnforced": "Aún sin efecto",
+    "superAdminOnly": "Solo superadministrador",
+    "updated": "Función actualizada"
+  },
+  "sandbox": {
+    "title": "Sandbox y funciones",
+    "subtitle": "Prueba cambios en el asistente sin afectar a tus clientes y publícalos cuando estén listos.",
+    "disabledTitle": "El sandbox no está activado",
+    "disabledBody": "Pide al operador de la plataforma que active la función «enable_sandbox» para tu cuenta.",
+    "noneTitle": "Aún no tienes un sandbox",
+    "noneBody": "Se creará una copia de la configuración de tu asistente para probar sin riesgo.",
+    "create": "Crear sandbox",
+    "created": "Sandbox creado",
+    "statusTitle": "Tu sandbox",
+    "lastReset": "Copiado de producción {when}",
+    "lastPublished": "última publicación {when}",
+    "reset": "Rehacer desde producción",
+    "publish": "Publicar a producción",
+    "rollback": "Volver a la versión anterior ({versions})",
+    "done": {
+      "reset": "Sandbox rehecho desde producción",
+      "publish": "Configuración publicada en producción",
+      "rollback": "Producción devuelta a la versión anterior"
+    },
+    "confirm": {
+      "reset": {
+        "title": "Rehacer el sandbox",
+        "body": "Se perderán los cambios y las conversaciones de prueba del sandbox y se copiará de nuevo tu configuración de producción.",
+        "action": "Rehacer"
+      },
+      "publish": {
+        "title": "Publicar a producción",
+        "body": "La configuración del sandbox pasará a producción y la verán tus clientes. Se guarda la versión actual para poder volver atrás.",
+        "action": "Publicar"
+      },
+      "rollback": {
+        "title": "Volver a la versión anterior",
+        "body": "Producción recuperará la última configuración guardada. Lo que hay ahora se guarda como una versión más.",
+        "action": "Volver atrás"
+      }
+    },
+    "tryTitle": "Probar el asistente",
+    "tryHint": "Los mensajes van al asistente del sandbox y no se envían a nadie. Consumen tokens de tu cuota de pruebas.",
+    "tryEmpty": "Escribe un mensaje para empezar.",
+    "tryPlaceholder": "Escribe un mensaje de prueba…",
+    "send": "Enviar",
+    "handoff": "escaló a una persona",
+    "noResponse": "(sin respuesta)"
+  },
+  "dashboard": {
+    "title": "Inicio",
+    "subtitle": "Un vistazo a la actividad de tu cuenta.",
+    "waitingHuman": "Esperan a una persona",
+    "waitingHumanHint": "Conversaciones que el bot escaló",
+    "openConversations": "Conversaciones abiertas",
+    "contacts": "Contactos",
+    "knowledgeDocs": "Documentos listos",
+    "quickStart": "Empezar",
+    "quickStartHint": "Accesos directos a lo más habitual.",
+    "goConversations": "Ver conversaciones",
+    "goDocuments": "Base de conocimiento",
+    "goPreferences": "Mis preferencias"
+  }
+}
