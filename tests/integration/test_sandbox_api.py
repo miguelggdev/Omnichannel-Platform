@@ -91,18 +91,28 @@ async def test_las_claves_del_tenant_no_se_editan_en_el_sandbox(prod: Prod, admi
 
 
 async def test_apagar_la_flag_corta_el_acceso_y_encenderla_lo_devuelve(
-    prod: Prod, admin: Any
+    prod: Prod, authenticated_client_factory: Any
 ) -> None:
     """La flag se aplica de verdad: pasa por la API de flags, la base y el cache de Redis."""
-    assert (await admin.get(URL)).status_code == 200
 
-    assert (await admin.put(FLAGS, json={"value": False})).status_code == 200
-    bloqueado = await admin.get(URL)
+    # Mismo cliente HTTP: cada llamada a la factory le cambia el token.
+    def como(rol: str) -> Any:
+        return authenticated_client_factory(
+            role=rol, client_id=prod.client_id, user_id=prod.usuario
+        )
+
+    assert (await como("admin").get(URL)).status_code == 200
+
+    # El admin del tenant no puede tocarla; el super_admin si.
+    assert (await como("admin").put(FLAGS, json={"value": False})).status_code == 403
+    assert (await como("admin").get(URL)).status_code == 200
+    assert (await como("super_admin").put(FLAGS, json={"value": False})).status_code == 200
+    bloqueado = await como("admin").get(URL)
     assert bloqueado.status_code == 403
     assert "enable_sandbox" in bloqueado.json()["message"]
 
-    assert (await admin.put(FLAGS, json={"value": True})).status_code == 200
-    assert (await admin.get(URL)).status_code == 200
+    assert (await como("super_admin").put(FLAGS, json={"value": True})).status_code == 200
+    assert (await como("admin").get(URL)).status_code == 200
 
 
 async def test_un_tenant_sin_la_flag_no_puede_crear_sandbox(

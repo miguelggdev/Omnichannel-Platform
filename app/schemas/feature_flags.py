@@ -23,11 +23,14 @@ class FeatureFlagItem(BaseModel):
             agente, eso significa que manda `enabled_agents`).
         enforced: Si alguna feature la lee hoy. Una flag sin aplicar se guarda,
             pero no cambia el comportamiento de la plataforma.
+        editable: Si quien consulta puede cambiarla; las flags de
+            `SUPER_ADMIN_FLAGS` solo las cambia un `super_admin`.
     """
 
     flag: str
     value: bool | int | None
     enforced: bool
+    editable: bool = True
 
 
 class FeatureFlagsResponse(BaseModel):
