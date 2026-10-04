@@ -196,6 +196,19 @@ class Settings(BaseSettings):
     # "json" en produccion (agregadores de logs), "console" en desarrollo.
     LOG_FORMAT: str = "console"
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+    # URL publica del frontend: la usan los enlaces de los emails (verificacion).
+    FRONTEND_PUBLIC_URL: str = "http://localhost:3000"
+    # Cuantos proxies de confianza (Cloudflare, Traefik) hay delante de la API. La IP del
+    # cliente es la que esos proxies anadieron a `X-Forwarded-For`, contando desde la
+    # derecha; fiarse de la cabecera entera dejaria a cualquiera falsearla.
+    TRUSTED_PROXY_HOPS: int = 1
+
+    # Onboarding publico (auto-registro de tenants). Apagado por defecto: abre una
+    # superficie sin autenticar que crea tenants, asi que se activa a proposito.
+    ONBOARDING_ENABLED: bool = False
+    ONBOARDING_MAX_PER_IP_PER_HOUR: int = 5
+    ONBOARDING_FREE_TOKEN_BUDGET: int = 50_000
+    EMAIL_VERIFICATION_TTL_HOURS: int = 24
 
     # Observabilidad (Sprint 8)
     # Vacio = tracing deshabilitado. Es el valor por defecto a proposito: sin

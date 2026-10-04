@@ -41,6 +41,9 @@ PUBLIC_PATHS: set[str] = {
     "/api/openapi.json",
     "/api/v1/auth/login",
     "/api/v1/auth/refresh",
+    # Auto-registro y verificacion de email (Sprint 15): no hay sesion todavia.
+    "/api/v1/onboarding/register",
+    "/api/v1/onboarding/verify-email",
     # Link de un clic en el email de la encuesta CSAT (Sprint 11, Dev B): quien
     # hace click no tiene JWT. La seguridad la da `survey_id`, no la sesion —
     # ver el docstring de `app/api/v1/csat.py`.

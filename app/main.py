@@ -29,6 +29,7 @@ from app.api.v1.documents import router as documents_router
 from app.api.v1.feature_flags import router as feature_flags_router
 from app.api.v1.marketing_settings import router as marketing_settings_router
 from app.api.v1.notes import router as notes_router
+from app.api.v1.onboarding import router as onboarding_router
 from app.api.v1.platform import router as platform_router
 from app.api.v1.platform_ops import router as platform_ops_router
 from app.api.v1.preferences import router as preferences_router
@@ -172,6 +173,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix="/internal", tags=["internal"])
     app.include_router(metrics_router, prefix="/internal", tags=["internal"])
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+    app.include_router(onboarding_router, prefix="/api/v1/onboarding", tags=["onboarding"])
     # Los webhooks NO pasan por TenantContextMiddleware: se autentican por firma
     # HMAC. El prefijo debe coincidir con WEBHOOK_PATHS_PREFIX del middleware.
     app.include_router(webhooks_router, prefix="/api/v1/webhooks", tags=["webhooks"])
