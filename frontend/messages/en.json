@@ -1,0 +1,277 @@
+{
+  "common": {
+    "pageOf": "Page {page} of {pages}",
+    "previous": "Previous",
+    "next": "Next",
+    "close": "Close",
+    "cancel": "Cancel",
+    "save": "Save",
+    "saved": "Saved",
+    "edit": "Edit",
+    "delete": "Delete",
+    "required": "Required field",
+    "tooLong": "Too long",
+    "back": "Back"
+  },
+  "theme": {
+    "toggle": "Toggle theme",
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "language": {
+    "select": "Change language"
+  },
+  "nav": {
+    "main": "Main navigation",
+    "dashboard": "Home",
+    "conversations": "Conversations",
+    "contacts": "Contacts",
+    "documents": "Knowledge base",
+    "quickReplies": "Quick replies",
+    "preferences": "Preferences",
+    "sandbox": "Sandbox & features",
+    "userMenu": "User menu",
+    "logout": "Sign out",
+    "expand": "Expand menu",
+    "collapse": "Collapse menu",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu",
+    "breadcrumbs": "Breadcrumbs",
+    "detail": "Detail",
+    "crumbs": {
+      "conversations": "Conversations",
+      "contacts": "Contacts",
+      "documents": "Knowledge base",
+      "settings": "Settings",
+      "preferences": "Preferences",
+      "quick-replies": "Quick replies",
+      "sandbox": "Sandbox"
+    }
+  },
+  "roles": {
+    "super_admin": "Super admin",
+    "admin": "Admin",
+    "supervisor": "Supervisor",
+    "agent": "Agent",
+    "medical": "Medical professional"
+  },
+  "auth": {
+    "welcome": "Welcome",
+    "subtitle": "Sign in to continue",
+    "email": "Email",
+    "password": "Password",
+    "signIn": "Sign in",
+    "invalidEmail": "Enter a valid email",
+    "passwordMin": "At least 8 characters"
+  },
+  "errors": {
+    "notFoundTitle": "Page not found",
+    "notFoundBody": "The page you are looking for does not exist or has moved.",
+    "backHome": "Back to home",
+    "genericTitle": "Something went wrong",
+    "genericBody": "An unexpected error occurred. Please try again.",
+    "retry": "Retry",
+    "loading": "Loading…",
+    "forbiddenTitle": "No access",
+    "forbiddenBody": "Your role does not have permission to view this section.",
+    "loadFailed": "Could not load the data"
+  },
+  "conversations": {
+    "title": "Conversations",
+    "subtitle": "Conversations with your contacts across all channels.",
+    "filterStatus": "Filter by status",
+    "filterChannel": "Filter by channel",
+    "allStatuses": "All statuses",
+    "allChannels": "All channels",
+    "status": {
+      "new": "New",
+      "bot_active": "Bot active",
+      "human_active": "Human active",
+      "waiting_human": "Waiting for human",
+      "waiting_client": "Waiting for customer",
+      "resolved": "Resolved",
+      "archived": "Archived"
+    },
+    "channel": {
+      "whatsapp": "WhatsApp",
+      "instagram": "Instagram",
+      "facebook": "Facebook",
+      "telegram": "Telegram",
+      "email": "Email",
+      "webchat": "Web chat",
+      "voice": "Voice",
+      "sandbox": "Sandbox"
+    },
+    "empty": "No conversations",
+    "emptyHint": "When a contact writes in, it will show up here.",
+    "noSubject": "No subject",
+    "lastActivity": "Last activity {when}",
+    "back": "Back to conversations",
+    "statusChanged": "Status updated",
+    "assigned": "Conversation assigned to you",
+    "assignToMe": "Assign to me",
+    "moveTo": "Move to: {status}",
+    "messages": "Messages",
+    "earlierNotLoaded": "Earlier messages are not shown.",
+    "noMessages": "No messages yet.",
+    "readOnlyNotice": "Replying from the panel is not available yet; the conversation is handled on its original channel.",
+    "sender": {
+      "contact": "Contact",
+      "bot": "Assistant",
+      "agent": "Agent",
+      "system": "System"
+    },
+    "noText": "[{type}]",
+    "attachment": "View attachment"
+  },
+  "contacts": {
+    "title": "Contacts",
+    "subtitle": "The people who get in touch with your business.",
+    "search": "Search contacts",
+    "searchPlaceholder": "Search by name…",
+    "new": "New contact",
+    "createdAt": "Created",
+    "empty": "No contacts",
+    "emptyHint": "Contacts are created automatically when someone writes in, or you can add one.",
+    "emptySearch": "No contact matches the search.",
+    "fields": {
+      "first_name": "First name",
+      "last_name": "Last name",
+      "display_name": "Display name",
+      "name": "Name"
+    },
+    "since": "Contact since {when}",
+    "identifiers": "Channels and tags",
+    "noIdentifiers": "No linked channels.",
+    "conversations": "Conversations",
+    "noConversations": "No conversations.",
+    "notes": "Internal notes",
+    "notePlaceholder": "Write a note for your team…",
+    "addNote": "Add note",
+    "noNotes": "No notes yet."
+  },
+  "documents": {
+    "title": "Knowledge base",
+    "subtitle": "The documents the assistant uses to answer your customers.",
+    "status": {
+      "pending": "Queued",
+      "processing": "Processing",
+      "completed": "Ready",
+      "failed": "Failed"
+    },
+    "tooLarge": "{name} exceeds the {max} limit",
+    "unsupported": "{name}: unsupported file type",
+    "uploaded": "{name} uploaded; processing",
+    "dropzoneLabel": "Select files",
+    "dropHere": "Drop the files here",
+    "dropzoneTitle": "Drag files or click to choose",
+    "dropzoneHint": "PDF, DOCX, TXT, CSV, XLSX or images · up to {max}",
+    "columns": {
+      "title": "Title",
+      "status": "Status",
+      "size": "Size",
+      "chunks": "Chunks",
+      "created": "Uploaded"
+    },
+    "reprocess": "Reprocess",
+    "reprocessing": "Reprocessing the document",
+    "deleteTitle": "Delete document",
+    "deleteBody": "“{title}” and its chunks will no longer be used in answers. This cannot be undone.",
+    "deleted": "Document deleted",
+    "empty": "No documents",
+    "emptyHint": "Upload documents so the assistant can answer with your information."
+  },
+  "quickReplies": {
+    "title": "Quick replies",
+    "subtitle": "Predefined messages your team can send with a shortcut.",
+    "new": "New reply",
+    "empty": "No quick replies",
+    "emptyHint": "Create the first one to reply faster.",
+    "fields": {
+      "shortcut": "Shortcut",
+      "title": "Title",
+      "content": "Message",
+      "category": "Category (optional)"
+    },
+    "shortcutFormat": "Lowercase letters, numbers, hyphen and underscore only",
+    "variablesHint": "Available variables: '{{contact_name}}', '{{agent_name}}', '{{ticket_id}}' and '{{date}}'; they are filled in when sending.",
+    "deleteTitle": "Delete quick reply",
+    "deleteBody": "“{title}” will be deleted. This cannot be undone.",
+    "deleted": "Reply deleted"
+  },
+  "preferences": {
+    "title": "Preferences",
+    "subtitle": "How you want to see the app. They are saved to your account.",
+    "language": "Language",
+    "languageHint": "The language of the app's menus and texts.",
+    "theme": "Theme",
+    "themeHint": "Light, dark, or whatever your device uses."
+  },
+  "flags": {
+    "title": "Tenant features",
+    "subtitle": "Turn features of your account on or off.",
+    "notEnforced": "Not active yet",
+    "superAdminOnly": "Super admin only",
+    "updated": "Feature updated"
+  },
+  "sandbox": {
+    "title": "Sandbox & features",
+    "subtitle": "Try assistant changes without affecting your customers, and publish them when ready.",
+    "disabledTitle": "The sandbox is not enabled",
+    "disabledBody": "Ask the platform operator to enable the “enable_sandbox” feature for your account.",
+    "noneTitle": "You don't have a sandbox yet",
+    "noneBody": "A copy of your assistant's configuration will be created so you can test safely.",
+    "create": "Create sandbox",
+    "created": "Sandbox created",
+    "statusTitle": "Your sandbox",
+    "lastReset": "Copied from production {when}",
+    "lastPublished": "last published {when}",
+    "reset": "Reset from production",
+    "publish": "Publish to production",
+    "rollback": "Roll back to previous version ({versions})",
+    "done": {
+      "reset": "Sandbox reset from production",
+      "publish": "Configuration published to production",
+      "rollback": "Production rolled back to the previous version"
+    },
+    "confirm": {
+      "reset": {
+        "title": "Reset the sandbox",
+        "body": "Sandbox changes and test conversations will be lost and your production configuration will be copied again.",
+        "action": "Reset"
+      },
+      "publish": {
+        "title": "Publish to production",
+        "body": "The sandbox configuration will go to production and your customers will see it. The current version is saved so you can roll back.",
+        "action": "Publish"
+      },
+      "rollback": {
+        "title": "Roll back to the previous version",
+        "body": "Production will get back the last saved configuration. What is live now is saved as another version.",
+        "action": "Roll back"
+      }
+    },
+    "tryTitle": "Try the assistant",
+    "tryHint": "Messages go to the sandbox assistant and are sent to no one. They use tokens from your testing quota.",
+    "tryEmpty": "Type a message to start.",
+    "tryPlaceholder": "Type a test message…",
+    "send": "Send",
+    "handoff": "escalated to a person",
+    "noResponse": "(no response)"
+  },
+  "dashboard": {
+    "title": "Home",
+    "subtitle": "A quick look at your account's activity.",
+    "waitingHuman": "Waiting for a human",
+    "waitingHumanHint": "Conversations the bot escalated",
+    "openConversations": "Open conversations",
+    "contacts": "Contacts",
+    "knowledgeDocs": "Documents ready",
+    "quickStart": "Get started",
+    "quickStartHint": "Shortcuts to the most common tasks.",
+    "goConversations": "View conversations",
+    "goDocuments": "Knowledge base",
+    "goPreferences": "My preferences"
+  }
+}

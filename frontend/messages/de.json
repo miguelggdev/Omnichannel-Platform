@@ -1,0 +1,277 @@
+{
+  "common": {
+    "pageOf": "Seite {page} von {pages}",
+    "previous": "Zurück",
+    "next": "Weiter",
+    "close": "Schließen",
+    "cancel": "Abbrechen",
+    "save": "Speichern",
+    "saved": "Gespeichert",
+    "edit": "Bearbeiten",
+    "delete": "Löschen",
+    "required": "Pflichtfeld",
+    "tooLong": "Zu lang",
+    "back": "Zurück"
+  },
+  "theme": {
+    "toggle": "Design wechseln",
+    "light": "Hell",
+    "dark": "Dunkel",
+    "system": "System"
+  },
+  "language": {
+    "select": "Sprache ändern"
+  },
+  "nav": {
+    "main": "Hauptnavigation",
+    "dashboard": "Startseite",
+    "conversations": "Unterhaltungen",
+    "contacts": "Kontakte",
+    "documents": "Wissensdatenbank",
+    "quickReplies": "Schnellantworten",
+    "preferences": "Einstellungen",
+    "sandbox": "Sandbox & Funktionen",
+    "userMenu": "Benutzermenü",
+    "logout": "Abmelden",
+    "expand": "Menü erweitern",
+    "collapse": "Menü einklappen",
+    "openMenu": "Menü öffnen",
+    "closeMenu": "Menü schließen",
+    "breadcrumbs": "Brotkrumennavigation",
+    "detail": "Detail",
+    "crumbs": {
+      "conversations": "Unterhaltungen",
+      "contacts": "Kontakte",
+      "documents": "Wissensdatenbank",
+      "settings": "Einstellungen",
+      "preferences": "Einstellungen",
+      "quick-replies": "Schnellantworten",
+      "sandbox": "Sandbox"
+    }
+  },
+  "roles": {
+    "super_admin": "Super-Admin",
+    "admin": "Administrator",
+    "supervisor": "Supervisor",
+    "agent": "Agent",
+    "medical": "Medizinische Fachkraft"
+  },
+  "auth": {
+    "welcome": "Willkommen",
+    "subtitle": "Melden Sie sich an, um fortzufahren",
+    "email": "E-Mail",
+    "password": "Passwort",
+    "signIn": "Anmelden",
+    "invalidEmail": "Geben Sie eine gültige E-Mail ein",
+    "passwordMin": "Mindestens 8 Zeichen"
+  },
+  "errors": {
+    "notFoundTitle": "Seite nicht gefunden",
+    "notFoundBody": "Die gesuchte Seite existiert nicht oder wurde verschoben.",
+    "backHome": "Zurück zur Startseite",
+    "genericTitle": "Etwas ist schiefgelaufen",
+    "genericBody": "Ein unerwarteter Fehler ist aufgetreten. Bitte versuchen Sie es erneut.",
+    "retry": "Erneut versuchen",
+    "loading": "Wird geladen…",
+    "forbiddenTitle": "Kein Zugriff",
+    "forbiddenBody": "Ihre Rolle hat keine Berechtigung für diesen Bereich.",
+    "loadFailed": "Die Daten konnten nicht geladen werden"
+  },
+  "conversations": {
+    "title": "Unterhaltungen",
+    "subtitle": "Unterhaltungen mit Ihren Kontakten über alle Kanäle.",
+    "filterStatus": "Nach Status filtern",
+    "filterChannel": "Nach Kanal filtern",
+    "allStatuses": "Alle Status",
+    "allChannels": "Alle Kanäle",
+    "status": {
+      "new": "Neu",
+      "bot_active": "Bot aktiv",
+      "human_active": "Von Mensch betreut",
+      "waiting_human": "Wartet auf Mitarbeiter",
+      "waiting_client": "Wartet auf Kunden",
+      "resolved": "Gelöst",
+      "archived": "Archiviert"
+    },
+    "channel": {
+      "whatsapp": "WhatsApp",
+      "instagram": "Instagram",
+      "facebook": "Facebook",
+      "telegram": "Telegram",
+      "email": "E-Mail",
+      "webchat": "Web-Chat",
+      "voice": "Sprache",
+      "sandbox": "Sandbox"
+    },
+    "empty": "Keine Unterhaltungen",
+    "emptyHint": "Sobald ein Kontakt schreibt, erscheint er hier.",
+    "noSubject": "Kein Betreff",
+    "lastActivity": "Letzte Aktivität {when}",
+    "back": "Zurück zu den Unterhaltungen",
+    "statusChanged": "Status aktualisiert",
+    "assigned": "Unterhaltung Ihnen zugewiesen",
+    "assignToMe": "Mir zuweisen",
+    "moveTo": "Setzen auf: {status}",
+    "messages": "Nachrichten",
+    "earlierNotLoaded": "Frühere Nachrichten werden nicht angezeigt.",
+    "noMessages": "Noch keine Nachrichten.",
+    "readOnlyNotice": "Antworten über das Dashboard ist noch nicht verfügbar; die Unterhaltung wird im ursprünglichen Kanal bearbeitet.",
+    "sender": {
+      "contact": "Kontakt",
+      "bot": "Assistent",
+      "agent": "Mitarbeiter",
+      "system": "System"
+    },
+    "noText": "[{type}]",
+    "attachment": "Anhang ansehen"
+  },
+  "contacts": {
+    "title": "Kontakte",
+    "subtitle": "Die Personen, die Ihr Unternehmen kontaktieren.",
+    "search": "Kontakte suchen",
+    "searchPlaceholder": "Nach Namen suchen…",
+    "new": "Neuer Kontakt",
+    "createdAt": "Erstellt",
+    "empty": "Keine Kontakte",
+    "emptyHint": "Kontakte entstehen automatisch, wenn jemand schreibt, oder Sie fügen einen hinzu.",
+    "emptySearch": "Kein Kontakt entspricht der Suche.",
+    "fields": {
+      "first_name": "Vorname",
+      "last_name": "Nachname",
+      "display_name": "Anzeigename",
+      "name": "Name"
+    },
+    "since": "Kontakt seit {when}",
+    "identifiers": "Kanäle und Tags",
+    "noIdentifiers": "Keine verknüpften Kanäle.",
+    "conversations": "Unterhaltungen",
+    "noConversations": "Keine Unterhaltungen.",
+    "notes": "Interne Notizen",
+    "notePlaceholder": "Schreiben Sie eine Notiz für Ihr Team…",
+    "addNote": "Notiz hinzufügen",
+    "noNotes": "Noch keine Notizen."
+  },
+  "documents": {
+    "title": "Wissensdatenbank",
+    "subtitle": "Die Dokumente, mit denen der Assistent Ihren Kunden antwortet.",
+    "status": {
+      "pending": "In Warteschlange",
+      "processing": "Wird verarbeitet",
+      "completed": "Fertig",
+      "failed": "Fehlgeschlagen"
+    },
+    "tooLarge": "{name} überschreitet das Limit von {max}",
+    "unsupported": "{name}: Dateityp nicht unterstützt",
+    "uploaded": "{name} hochgeladen; wird verarbeitet",
+    "dropzoneLabel": "Dateien auswählen",
+    "dropHere": "Dateien hier ablegen",
+    "dropzoneTitle": "Dateien hierher ziehen oder klicken",
+    "dropzoneHint": "PDF, DOCX, TXT, CSV, XLSX oder Bilder · maximal {max}",
+    "columns": {
+      "title": "Titel",
+      "status": "Status",
+      "size": "Größe",
+      "chunks": "Abschnitte",
+      "created": "Hochgeladen"
+    },
+    "reprocess": "Erneut verarbeiten",
+    "reprocessing": "Dokument wird erneut verarbeitet",
+    "deleteTitle": "Dokument löschen",
+    "deleteBody": "„{title}“ und seine Abschnitte werden nicht mehr für Antworten verwendet. Dies kann nicht rückgängig gemacht werden.",
+    "deleted": "Dokument gelöscht",
+    "empty": "Keine Dokumente",
+    "emptyHint": "Laden Sie Dokumente hoch, damit der Assistent mit Ihren Informationen antworten kann."
+  },
+  "quickReplies": {
+    "title": "Schnellantworten",
+    "subtitle": "Vordefinierte Nachrichten, die Ihr Team per Kürzel senden kann.",
+    "new": "Neue Antwort",
+    "empty": "Keine Schnellantworten",
+    "emptyHint": "Erstellen Sie die erste, um schneller zu antworten.",
+    "fields": {
+      "shortcut": "Kürzel",
+      "title": "Titel",
+      "content": "Nachricht",
+      "category": "Kategorie (optional)"
+    },
+    "shortcutFormat": "Nur Kleinbuchstaben, Zahlen, Bindestrich und Unterstrich",
+    "variablesHint": "Verfügbare Variablen: '{{contact_name}}', '{{agent_name}}', '{{ticket_id}}' und '{{date}}'; sie werden beim Senden ausgefüllt.",
+    "deleteTitle": "Schnellantwort löschen",
+    "deleteBody": "„{title}“ wird gelöscht. Dies kann nicht rückgängig gemacht werden.",
+    "deleted": "Antwort gelöscht"
+  },
+  "preferences": {
+    "title": "Einstellungen",
+    "subtitle": "Wie Sie die App sehen möchten. Sie werden in Ihrem Konto gespeichert.",
+    "language": "Sprache",
+    "languageHint": "Die Sprache der Menüs und Texte der App.",
+    "theme": "Design",
+    "themeHint": "Hell, dunkel oder das Ihres Geräts."
+  },
+  "flags": {
+    "title": "Funktionen des Mandanten",
+    "subtitle": "Funktionen Ihres Kontos ein- oder ausschalten.",
+    "notEnforced": "Noch ohne Wirkung",
+    "superAdminOnly": "Nur Super-Admin",
+    "updated": "Funktion aktualisiert"
+  },
+  "sandbox": {
+    "title": "Sandbox & Funktionen",
+    "subtitle": "Testen Sie Änderungen am Assistenten, ohne Ihre Kunden zu beeinträchtigen, und veröffentlichen Sie sie, wenn sie fertig sind.",
+    "disabledTitle": "Die Sandbox ist nicht aktiviert",
+    "disabledBody": "Bitten Sie den Plattformbetreiber, die Funktion „enable_sandbox“ für Ihr Konto zu aktivieren.",
+    "noneTitle": "Sie haben noch keine Sandbox",
+    "noneBody": "Es wird eine Kopie der Konfiguration Ihres Assistenten erstellt, um risikofrei zu testen.",
+    "create": "Sandbox erstellen",
+    "created": "Sandbox erstellt",
+    "statusTitle": "Ihre Sandbox",
+    "lastReset": "Aus Produktion kopiert {when}",
+    "lastPublished": "zuletzt veröffentlicht {when}",
+    "reset": "Aus Produktion neu aufsetzen",
+    "publish": "In Produktion veröffentlichen",
+    "rollback": "Zur vorherigen Version zurück ({versions})",
+    "done": {
+      "reset": "Sandbox aus Produktion neu aufgesetzt",
+      "publish": "Konfiguration in Produktion veröffentlicht",
+      "rollback": "Produktion auf die vorherige Version zurückgesetzt"
+    },
+    "confirm": {
+      "reset": {
+        "title": "Sandbox neu aufsetzen",
+        "body": "Änderungen und Testunterhaltungen der Sandbox gehen verloren und Ihre Produktionskonfiguration wird erneut kopiert.",
+        "action": "Neu aufsetzen"
+      },
+      "publish": {
+        "title": "In Produktion veröffentlichen",
+        "body": "Die Sandbox-Konfiguration geht in Produktion und Ihre Kunden sehen sie. Die aktuelle Version wird gesichert, um zurückzugehen.",
+        "action": "Veröffentlichen"
+      },
+      "rollback": {
+        "title": "Zur vorherigen Version zurückkehren",
+        "body": "Die Produktion erhält die zuletzt gesicherte Konfiguration zurück. Der aktuelle Stand wird als weitere Version gesichert.",
+        "action": "Zurücksetzen"
+      }
+    },
+    "tryTitle": "Assistenten testen",
+    "tryHint": "Nachrichten gehen an den Sandbox-Assistenten und werden an niemanden gesendet. Sie verbrauchen Tokens Ihres Testkontingents.",
+    "tryEmpty": "Schreiben Sie eine Nachricht, um zu beginnen.",
+    "tryPlaceholder": "Testnachricht eingeben…",
+    "send": "Senden",
+    "handoff": "an einen Menschen übergeben",
+    "noResponse": "(keine Antwort)"
+  },
+  "dashboard": {
+    "title": "Startseite",
+    "subtitle": "Ein kurzer Überblick über die Aktivität Ihres Kontos.",
+    "waitingHuman": "Warten auf einen Mitarbeiter",
+    "waitingHumanHint": "Vom Bot übergebene Unterhaltungen",
+    "openConversations": "Offene Unterhaltungen",
+    "contacts": "Kontakte",
+    "knowledgeDocs": "Fertige Dokumente",
+    "quickStart": "Loslegen",
+    "quickStartHint": "Verknüpfungen zu den häufigsten Aufgaben.",
+    "goConversations": "Unterhaltungen ansehen",
+    "goDocuments": "Wissensdatenbank",
+    "goPreferences": "Meine Einstellungen"
+  }
+}
