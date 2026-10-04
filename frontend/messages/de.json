@@ -194,7 +194,7 @@
       "content": "Nachricht",
       "category": "Kategorie (optional)"
     },
-    "shortcutFormat": "Nur Kleinbuchstaben, Zahlen, Bindestrich und Unterstrich",
+    "shortcutFormat": "Muss mit / beginnen und nur Kleinbuchstaben, Zahlen, Bindestrich und Unterstrich enthalten (z. B. /gruss)",
     "variablesHint": "Verfügbare Variablen: '{{contact_name}}', '{{agent_name}}', '{{ticket_id}}' und '{{date}}'; sie werden beim Senden ausgefüllt.",
     "deleteTitle": "Schnellantwort löschen",
     "deleteBody": "„{title}“ wird gelöscht. Dies kann nicht rückgängig gemacht werden.",

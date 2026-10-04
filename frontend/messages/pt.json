@@ -194,7 +194,7 @@
       "content": "Mensagem",
       "category": "Categoria (opcional)"
     },
-    "shortcutFormat": "Apenas minúsculas, números, hífen e sublinhado",
+    "shortcutFormat": "Deve começar por / e usar apenas minúsculas, números, hífen e sublinhado (ex.: /saudacao)",
     "variablesHint": "Variáveis disponíveis: '{{contact_name}}', '{{agent_name}}', '{{ticket_id}}' e '{{date}}'; são preenchidas ao enviar.",
     "deleteTitle": "Eliminar resposta rápida",
     "deleteBody": "«{title}» será eliminada. Não é possível desfazer.",

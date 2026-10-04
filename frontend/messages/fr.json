@@ -194,7 +194,7 @@
       "content": "Message",
       "category": "Catégorie (facultatif)"
     },
-    "shortcutFormat": "Minuscules, chiffres, tiret et tiret bas uniquement",
+    "shortcutFormat": "Doit commencer par / et n'utiliser que des minuscules, chiffres, tiret et tiret bas (ex. /salut)",
     "variablesHint": "Variables disponibles : '{{contact_name}}', '{{agent_name}}', '{{ticket_id}}' et '{{date}}' ; elles sont remplies à l'envoi.",
     "deleteTitle": "Supprimer la réponse rapide",
     "deleteBody": "« {title} » sera supprimée. Action irréversible.",

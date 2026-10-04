@@ -2,7 +2,7 @@ import type { AxiosAdapter, AxiosResponse, InternalAxiosRequestConfig } from "ax
 import { AxiosError } from "axios";
 import axios from "axios";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "@/lib/api";
+import { api, errorMessage } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 
 function tokenDe(): string {
@@ -90,5 +90,41 @@ describe("cliente de la API", () => {
     await expect(api.post("/auth/login", {})).rejects.toBeDefined();
 
     expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe("errorMessage", () => {
+  const conRespuesta = (data: unknown) =>
+    new AxiosError("Request failed with status code 422", "ERR_BAD_REQUEST", undefined, null, {
+      data,
+      status: 422,
+      statusText: "",
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    });
+
+  it("usa el message de AppException", () => {
+    expect(errorMessage(conRespuesta({ error_code: "X", message: "Credenciales inválidas" }))).toBe(
+      "Credenciales inválidas",
+    );
+  });
+
+  it("resume los errores de validacion de FastAPI como campo: motivo", () => {
+    const e = conRespuesta({
+      detail: [
+        { loc: ["body", "shortcut"], msg: "String should match pattern" },
+        { loc: ["body", "title"], msg: "Field required" },
+      ],
+    });
+    expect(errorMessage(e)).toBe("shortcut: String should match pattern; title: Field required");
+  });
+
+  it("acepta un detail de texto", () => {
+    expect(errorMessage(conRespuesta({ detail: "Not found" }))).toBe("Not found");
+  });
+
+  it("cae al mensaje de axios y luego al fallback", () => {
+    expect(errorMessage(conRespuesta({}))).toBe("Request failed with status code 422");
+    expect(errorMessage("algo raro", "Fallo")).toBe("Fallo");
   });
 });

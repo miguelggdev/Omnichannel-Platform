@@ -64,10 +64,31 @@ api.interceptors.response.use(
   },
 );
 
-/** Mensaje legible de un error de la API (o del propio axios). */
+/** Un error de validacion de FastAPI (422): `detail` es una lista de `{loc, msg}`. */
+interface ValidationDetail {
+  detail?: { loc?: (string | number)[]; msg?: string }[] | string;
+}
+
+/**
+ * Mensaje legible de un error de la API (o del propio axios).
+ *
+ * Los errores propios llegan como `{error_code, message}` (`AppException`); los de validacion
+ * de FastAPI como `{detail: [{loc, msg}]}`, que se resumen como "campo: motivo".
+ */
 export function errorMessage(error: unknown, fallback = "Error inesperado"): string {
-  if (axios.isAxiosError<ApiError>(error)) {
-    return error.response?.data?.message ?? error.message ?? fallback;
+  if (axios.isAxiosError<ApiError & ValidationDetail>(error)) {
+    const data = error.response?.data;
+    if (data?.message) return data.message;
+    if (typeof data?.detail === "string") return data.detail;
+    if (Array.isArray(data?.detail) && data.detail.length > 0) {
+      return data.detail
+        .map((d) => {
+          const campo = d.loc?.filter((l) => l !== "body").join(".");
+          return campo ? `${campo}: ${d.msg ?? ""}` : (d.msg ?? "");
+        })
+        .join("; ");
+    }
+    return error.message || fallback;
   }
   return error instanceof Error ? error.message : fallback;
 }

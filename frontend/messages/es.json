@@ -194,7 +194,7 @@
       "content": "Mensaje",
       "category": "Categoría (opcional)"
     },
-    "shortcutFormat": "Solo minúsculas, números, guion y guion bajo",
+    "shortcutFormat": "Debe empezar por / y usar solo minúsculas, números, guion y guion bajo (ej. /saludo)",
     "variablesHint": "Variables disponibles: '{{contact_name}}', '{{agent_name}}', '{{ticket_id}}' y '{{date}}'; se rellenan al enviar.",
     "deleteTitle": "Eliminar respuesta rápida",
     "deleteBody": "Se eliminará «{title}». No se puede deshacer.",

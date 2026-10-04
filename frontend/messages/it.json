@@ -194,7 +194,7 @@
       "content": "Messaggio",
       "category": "Categoria (facoltativa)"
     },
-    "shortcutFormat": "Solo minuscole, numeri, trattino e trattino basso",
+    "shortcutFormat": "Deve iniziare con / e usare solo minuscole, numeri, trattino e trattino basso (es. /saluto)",
     "variablesHint": "Variabili disponibili: '{{contact_name}}', '{{agent_name}}', '{{ticket_id}}' e '{{date}}'; si compilano all'invio.",
     "deleteTitle": "Elimina risposta rapida",
     "deleteBody": "«{title}» verrà eliminata. Non si può annullare.",

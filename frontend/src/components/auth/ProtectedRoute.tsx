@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { useAuthStore } from "@/stores/authStore";
+import { useAuthHydrated, useAuthStore } from "@/stores/authStore";
 import type { UserRole } from "@/types";
 
 interface ProtectedRouteProps {
@@ -22,7 +22,7 @@ interface ProtectedRouteProps {
 export function ProtectedRoute({ children, minRole = "agent" }: ProtectedRouteProps) {
   const t = useTranslations("errors");
   const router = useRouter();
-  const hydrated = useAuthStore((s) => s.hydrated);
+  const hydrated = useAuthHydrated();
   const accessToken = useAuthStore((s) => s.accessToken);
   const allowed = useAuthStore((s) => s.hasMinRole(minRole));
 

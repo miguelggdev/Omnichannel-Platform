@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { userFromToken } from "@/lib/jwt";
@@ -19,9 +20,6 @@ interface AuthState {
   accessToken: string | null;
   refreshToken: string | null;
   user: User | null;
-  /** `true` hasta que zustand termina de leer el almacenamiento del navegador. */
-  hydrated: boolean;
-
   setTokens: (accessToken: string, refreshToken: string) => void;
   logout: () => void;
   hasMinRole: (minRole: UserRole) => boolean;
@@ -33,7 +31,6 @@ export const useAuthStore = create<AuthState>()(
       accessToken: null,
       refreshToken: null,
       user: null,
-      hydrated: false,
 
       setTokens: (accessToken, refreshToken) =>
         set({ accessToken, refreshToken, user: userFromToken(accessToken) }),
@@ -48,9 +45,23 @@ export const useAuthStore = create<AuthState>()(
     {
       name: "auth-storage",
       partialize: (s) => ({ accessToken: s.accessToken, refreshToken: s.refreshToken, user: s.user }),
-      onRehydrateStorage: () => () => {
-        useAuthStore.setState({ hydrated: true });
-      },
     },
   ),
 );
+
+/**
+ * `true` cuando zustand ya leyo la sesion del almacenamiento del navegador.
+ *
+ * Hasta entonces `accessToken` es `null` aunque haya sesion guardada, asi que decidir antes
+ * mandaria a /login a quien ya esta dentro. No se usa `onRehydrateStorage` con un flag dentro
+ * del store porque esa callback corre durante `create()`, antes de que exista `useAuthStore`.
+ */
+export function useAuthHydrated(): boolean {
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    const unsubscribe = useAuthStore.persist.onFinishHydration(() => setHydrated(true));
+    setHydrated(useAuthStore.persist.hasHydrated());
+    return unsubscribe;
+  }, []);
+  return hydrated;
+}

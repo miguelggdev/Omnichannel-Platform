@@ -23,9 +23,10 @@ import { errorMessage } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 import type { QuickReply } from "@/types";
 
-// SHORTCUT_PATTERN del backend: minusculas, numeros, guion y guion bajo.
+// SHORTCUT_PATTERN del backend: empieza por "/", luego minusculas, numeros, guion y guion bajo.
+const SHORTCUT = /^\/[a-z0-9][a-z0-9_-]{0,48}$/;
 const schema = z.object({
-  shortcut: z.string().min(1, "required").max(50).regex(/^[a-z0-9_-]+$/, "shortcutFormat"),
+  shortcut: z.string().min(1, "required").regex(SHORTCUT, "shortcutFormat"),
   title: z.string().min(1, "required").max(200),
   content: z.string().min(1, "required"),
   category: z.string().max(100),
@@ -74,7 +75,7 @@ function QuickReplyForm({ reply, onDone }: { reply: QuickReply | null; onDone: (
     <form onSubmit={submit} className="space-y-4" noValidate>
       <div className="space-y-2">
         <Label htmlFor="shortcut">{t("fields.shortcut")}</Label>
-        <Input id="shortcut" placeholder="saludo" aria-invalid={errors.shortcut ? true : undefined} {...register("shortcut")} />
+        <Input id="shortcut" placeholder="/saludo" aria-invalid={errors.shortcut ? true : undefined} {...register("shortcut")} />
         {campo("shortcut")}
       </div>
       <div className="space-y-2">
@@ -132,7 +133,7 @@ export function QuickReplyManager() {
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="truncate font-medium">{r.title}</p>
-                    <p className="font-mono text-xs text-muted-foreground">/{r.shortcut}</p>
+                    <p className="font-mono text-xs text-muted-foreground">{r.shortcut}</p>
                   </div>
                   <div className="flex shrink-0">
                     <Button variant="ghost" size="icon" aria-label={tc("edit")} onClick={() => setEditando(r)}>

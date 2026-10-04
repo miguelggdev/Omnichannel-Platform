@@ -194,7 +194,7 @@
       "content": "Message",
       "category": "Category (optional)"
     },
-    "shortcutFormat": "Lowercase letters, numbers, hyphen and underscore only",
+    "shortcutFormat": "Must start with / and use only lowercase letters, numbers, hyphen and underscore (e.g. /greeting)",
     "variablesHint": "Available variables: '{{contact_name}}', '{{agent_name}}', '{{ticket_id}}' and '{{date}}'; they are filled in when sending.",
     "deleteTitle": "Delete quick reply",
     "deleteBody": "“{title}” will be deleted. This cannot be undone.",
