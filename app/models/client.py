@@ -33,6 +33,7 @@ class Client(Base):
         payment_alert_config: Config de alertas de pago escalonadas (ADR-015).
         alert_message: Mensaje que recibe el cliente suspendido.
         suspended_at: Timestamp de suspensión efectiva.
+        is_sandbox: Si el tenant es el sandbox de otro (Sprint 14c, ADR-078).
     """
 
     __tablename__ = "clients"
@@ -57,6 +58,8 @@ class Client(Base):
     )
     settings: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    # Sandbox (Sprint 14c, migracion 022): tenant clonado para probar configuracion.
+    is_sandbox: Mapped[bool] = mapped_column(Boolean, server_default="false", nullable=False)
 
     # Admin Assistant (ADR-019)
     admin_assistant_enabled: Mapped[bool] = mapped_column(Boolean, server_default="false")

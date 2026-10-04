@@ -28,6 +28,7 @@ from app.agents.nodes._tenant import get_agent_settings
 from app.core.config import get_settings
 from app.middleware.token_budget import TokenBudgetGuard
 from app.services.embedding import EmbeddingService
+from app.services.i18n import con_idioma
 from app.services.rag import FEW_SHOT_TOP_K, RAGService
 
 logger = logging.getLogger(__name__)
@@ -126,8 +127,9 @@ async def rag_query_node(state: ConversationState) -> dict[str, Any]:
     llm = get_chat_model(modelo, temperature=settings.temperature)
 
     mensajes: list[dict[str, str]] = []
-    if settings.system_prompt:
-        mensajes.append({"role": "system", "content": settings.system_prompt})
+    sistema = con_idioma(settings.system_prompt, state.get("detected_language"))
+    if sistema:
+        mensajes.append({"role": "system", "content": sistema})
     mensajes.append({"role": "user", "content": prompt})
 
     respuesta = await llm.ainvoke(mensajes)

@@ -16,6 +16,7 @@ from app.agents.nodes import human_handoff as handoff_module
 from app.agents.nodes import respond as respond_module
 from app.agents.nodes._tenant import AgentSettings, ChannelNotConfiguredError
 from app.models.message import Message
+from app.services.i18n import get_system_message
 from tests.unit.agent_doubles import (
     FakeSession,
     estado,
@@ -208,6 +209,57 @@ class TestHumanHandoff:
 
         assert envios[0]["text"] == handoff_module.HANDOFF_MESSAGES[reason]
         assert resultado["response_text"] == handoff_module.HANDOFF_MESSAGES[reason]
+
+    @pytest.mark.parametrize("idioma", ["en", "fr", "de"])
+    async def test_sin_idioma_en_el_estado_usa_el_que_guardo_la_conversacion(
+        self, monkeypatch: pytest.MonkeyPatch, idioma: str
+    ) -> None:
+        """Con el presupuesto agotado el grafo llega aqui sin pasar por `language_detect`.
+
+        `_initial_state` pone `detected_language=None`, pero la conversacion ya tiene su
+        idioma guardado: el aviso no debe volver al espanol.
+        """
+        conversacion = FakeConversation()
+        conversacion.metadata_ = {"detected_language": idioma}
+        envios, _ = self._preparar(monkeypatch, conversacion)
+
+        await handoff_module.human_handoff_node(
+            estado(conversation_id=str(uuid.UUID(int=1)), handoff_reason="budget_exceeded")
+        )
+
+        assert envios[0]["text"] == get_system_message("handoff_budget_exceeded", idioma)
+        assert envios[0]["text"] != handoff_module.HANDOFF_MESSAGES["budget_exceeded"]
+
+    async def test_el_idioma_del_estado_gana_sobre_el_guardado(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        conversacion = FakeConversation()
+        conversacion.metadata_ = {"detected_language": "fr"}
+        envios, _ = self._preparar(monkeypatch, conversacion)
+
+        await handoff_module.human_handoff_node(
+            estado(
+                conversation_id=str(uuid.UUID(int=1)),
+                handoff_reason="human_request",
+                detected_language="de",
+            )
+        )
+
+        assert envios[0]["text"] == get_system_message("handoff_human_request", "de")
+
+    @pytest.mark.parametrize("guardado", [None, "klingon", 3])
+    async def test_un_idioma_guardado_invalido_cae_al_espanol(
+        self, monkeypatch: pytest.MonkeyPatch, guardado: object
+    ) -> None:
+        conversacion = FakeConversation()
+        conversacion.metadata_ = {"detected_language": guardado}
+        envios, _ = self._preparar(monkeypatch, conversacion)
+
+        await handoff_module.human_handoff_node(
+            estado(conversation_id=str(uuid.UUID(int=1)), handoff_reason="complaint")
+        )
+
+        assert envios[0]["text"] == handoff_module.HANDOFF_MESSAGES["complaint"]
 
     async def test_el_mensaje_configurado_por_el_tenant_gana(
         self, monkeypatch: pytest.MonkeyPatch

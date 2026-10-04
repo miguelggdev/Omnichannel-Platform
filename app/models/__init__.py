@@ -26,6 +26,7 @@ from app.models.message import Message
 from app.models.outgoing_webhook_log import OutgoingWebhookLog
 from app.models.pending_response import PendingResponse
 from app.models.quick_reply import QuickReply
+from app.models.sandbox import ConfigHistory, TenantSandbox
 from app.models.satisfaction_survey import SatisfactionSurvey
 from app.models.service_type import Appointment, ServiceType
 from app.models.tag import Tag
@@ -48,6 +49,7 @@ __all__ = [
     "Cie10Catalog",
     "Client",
     "ClinicalRecord",
+    "ConfigHistory",
     "Contact",
     "ContactIdentifier",
     "ContactTag",
@@ -68,6 +70,7 @@ __all__ = [
     "Tag",
     "TemplateInstantiation",
     "TenantBaseModel",
+    "TenantSandbox",
     "TenantTemplate",
     "TenantWebhook",
     "TokenBudget",

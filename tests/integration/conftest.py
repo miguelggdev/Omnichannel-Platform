@@ -36,6 +36,23 @@ async def _liberar_pool_al_terminar() -> AsyncGenerator[None, None]:
     await engine.dispose()
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _liberar_redis_al_terminar() -> AsyncGenerator[None, None]:
+    """Cierra el cliente Redis global en el loop del test que lo creo.
+
+    `app.services.dedup.get_redis()` guarda un cliente de modulo (el grafo, el
+    presupuesto de tokens y las feature flags lo usan). pytest-asyncio abre un loop
+    por test: si el cliente sobrevive al test que lo creo, el siguiente test que
+    intente cerrarlo (o usarlo) lo hace desde otro loop ya cerrado y revienta con
+    "Event loop is closed". En produccion `run_isolated()` cierra en el mismo loop;
+    esto hace lo mismo para los tests. Misma razon que la fixture del pool de arriba.
+    """
+    yield
+    from app.services.dedup import close_redis
+
+    await close_redis()
+
+
 @pytest_asyncio.fixture
 async def webhook_tenant(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[uuid.UUID, None]:
     """Crea un tenant commiteado y lo deja como DEFAULT_CLIENT_ID del worker.

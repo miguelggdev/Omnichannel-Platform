@@ -6,10 +6,11 @@ Contrato: `specs/sprint-06-langgraph.md` §2-3, 12; `specs/sprint-07-scheduling-
 actividad en `agent_action_logs`); y `specs/sprint-12-agents-advanced.md` §1-2
 y §8 (nodos `financial` y `marketing`, Sprint 12); y `specs/sprint-10-templates.md`
 §5-6 (nodo `sentiment_analysis`, Sprint 10); y `specs/sprint-13-advanced-modules.md`
-§9 y §11 (nodo `clinical`, Sprint 13). Ensambla los 11 nodos en el
+§9 y §11 (nodo `clinical`, Sprint 13); y `specs/sprint-14-sandbox-i18n.md` §4
+(nodo `language_detect`, Sprint 14). Ensambla los 12 nodos en el
 flujo:
 
-    token_budget_check -> intent_routing -> sentiment_analysis
+    token_budget_check -> language_detect -> intent_routing -> sentiment_analysis
                        -> [rag_query | respond | human_handoff |
                            scheduling | financial | marketing | clinical]
                                               rag_query    -> [training_mode_approval | respond | human_handoff]
@@ -63,6 +64,7 @@ from app.agents.nodes.clinical import clinical_agent_node
 from app.agents.nodes.financial import financial_node
 from app.agents.nodes.human_handoff import human_handoff_node
 from app.agents.nodes.intent_router import intent_routing_node
+from app.agents.nodes.language_detect import language_detect_node
 from app.agents.nodes.marketing import marketing_node
 from app.agents.nodes.rag_query import rag_query_node
 from app.agents.nodes.respond import respond_node
@@ -79,6 +81,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 NODE_TOKEN_BUDGET = "token_budget_check"  # noqa: S105 -- nombre de nodo, no una credencial
+NODE_LANGUAGE_DETECT = "language_detect"
 NODE_INTENT_ROUTING = "intent_routing"
 NODE_RAG_QUERY = "rag_query"
 NODE_RESPOND = "respond"
@@ -224,7 +227,7 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
     """Arma el grafo de conversacion, sin compilar.
 
     Returns:
-        `StateGraph` con los 11 nodos (envueltos en `logged_node()`) y el
+        `StateGraph` con los 12 nodos (envueltos en `logged_node()`) y el
         routing condicional del sprint.
     """
     graph = StateGraph(ConversationState)
@@ -235,6 +238,9 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
     # ver app/agents/middleware/logging_middleware.py).
     graph.add_node(
         NODE_TOKEN_BUDGET, _logged(NODE_TOKEN_BUDGET, "decision", token_budget_check_node)
+    )
+    graph.add_node(
+        NODE_LANGUAGE_DETECT, _logged(NODE_LANGUAGE_DETECT, "decision", language_detect_node)
     )
     graph.add_node(
         NODE_INTENT_ROUTING, _logged(NODE_INTENT_ROUTING, "decision", intent_routing_node)
@@ -256,8 +262,9 @@ def build_conversation_graph() -> "StateGraph[ConversationState]":
     graph.add_conditional_edges(
         NODE_TOKEN_BUDGET,
         route_after_budget_check,
-        {"continue": NODE_INTENT_ROUTING, "exceeded": NODE_HUMAN_HANDOFF},
+        {"continue": NODE_LANGUAGE_DETECT, "exceeded": NODE_HUMAN_HANDOFF},
     )
+    graph.add_edge(NODE_LANGUAGE_DETECT, NODE_INTENT_ROUTING)
     graph.add_edge(NODE_INTENT_ROUTING, NODE_SENTIMENT)
     graph.add_conditional_edges(
         NODE_SENTIMENT,

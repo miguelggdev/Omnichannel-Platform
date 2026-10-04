@@ -28,7 +28,7 @@ Cambios sobre el pseudocodigo del spec, todos en ADR-072:
 
 import logging
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -44,8 +44,10 @@ from app.core.habeas_data import (
     normalizar_documento,
 )
 from app.models.agent_config import AgentConfig
+from app.models.call_record import CallRecord
 from app.models.clinical_record import (
     RECORD_DRAFT,
+    RECORD_REVIEWED,
     RECORD_STATUSES,
     RECORD_TRANSITIONS,
     ClinicalRecord,
@@ -82,6 +84,15 @@ _ZONA_COLOMBIA = ZoneInfo("America/Bogota")
 
 _FINALIDAD_PATTERN = re.compile(r"^(0[1-9]|10)$")
 _CAUSA_EXTERNA_PATTERN = re.compile(r"^(0[1-9]|1[0-5])$")
+
+#: Cuanto despues de terminar una llamada se sigue atribuyendole un registro.
+#: El agente procesa el ultimo turno en una tarea aparte, que puede terminar
+#: despues de que Twilio cierre la llamada.
+VENTANA_POSTERIOR_A_LA_LLAMADA = timedelta(minutes=15)
+
+#: Una llamada sin `ended_at` (se perdio el webhook de cierre) no se considera abierta
+#: para siempre: pasado este tiempo desde su inicio ya no explica ningun registro.
+DURACION_MAXIMA_DE_UNA_LLAMADA = timedelta(hours=4)
 
 MAX_LARGO_NOTA = 4000
 _CAMPOS_SOAP = ("subjective", "objective", "assessment", "plan")
@@ -377,6 +388,112 @@ async def _aplicar_catalogo_oficial(session: AsyncSession, datos: dict[str, Any]
             item["description"] = item["description"] or oficial
 
 
+async def llamada_en_curso(
+    session: AsyncSession,
+    client_id: UUID,
+    conversation_id: UUID,
+    instante: datetime,
+) -> UUID | None:
+    """Llamada de la conversacion durante la cual ocurre `instante`.
+
+    Una conversacion de voz puede acumular varias llamadas del mismo contacto:
+    se toma la que ya habia empezado y sigue abierta, o que termino hace menos
+    de `VENTANA_POSTERIOR_A_LA_LLAMADA`. Una llamada anterior ya cerrada no
+    cuenta: atribuirle un dictado de otra llamada seria un dato falso en el
+    historial.
+
+    Args:
+        session: Sesion con el contexto de tenant aplicado.
+        client_id: Tenant dueno.
+        conversation_id: Conversacion del dictado.
+        instante: Momento del dictado.
+
+    Returns:
+        El `id` del `CallRecord`, o `None` si no hay una llamada que lo explique
+        (el caso normal en WhatsApp, Telegram, etc.).
+    """
+    return (
+        await session.execute(
+            select(CallRecord.id)
+            .where(
+                CallRecord.client_id == client_id,
+                CallRecord.conversation_id == conversation_id,
+                CallRecord.started_at <= instante,
+                CallRecord.started_at >= instante - DURACION_MAXIMA_DE_UNA_LLAMADA,
+                (CallRecord.ended_at.is_(None))
+                | (CallRecord.ended_at >= instante - VENTANA_POSTERIOR_A_LA_LLAMADA),
+            )
+            .order_by(CallRecord.started_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def vincular_registros_con_llamada(
+    session: AsyncSession,
+    *,
+    client_id: UUID,
+    call_record_id: UUID,
+    conversation_id: UUID,
+    started_at: datetime,
+    ended_at: datetime | None,
+) -> int:
+    """Liga a una llamada los registros clinicos que se dictaron durante ella.
+
+    Cubre el orden contrario al de `crear_registro_rips`: el `conversation_id`
+    de un `CallRecord` solo se conoce cuando ya hay mensajes de la llamada, asi
+    que el registro puede haberse creado antes de poder enlazarlo.
+
+    Solo toca borradores y registros revisados: el trigger de retencion de la
+    migracion 017 rechaza cualquier cambio en uno firmado o enviado, y ese
+    error abortaria la transaccion que esta guardando la llamada. Un registro
+    firmado antes de enlazarse queda sin llamada.
+
+    Args:
+        session: Sesion con el contexto de tenant aplicado.
+        client_id: Tenant dueno.
+        call_record_id: Llamada a la que se ligan.
+        conversation_id: Conversacion de la llamada.
+        started_at: Inicio de la llamada.
+        ended_at: Fin de la llamada, si ya termino.
+
+    Returns:
+        Cuantos registros se ligaron.
+    """
+    hasta = (
+        ended_at + VENTANA_POSTERIOR_A_LA_LLAMADA
+        if ended_at is not None
+        else min(datetime.now(timezone.utc), started_at + DURACION_MAXIMA_DE_UNA_LLAMADA)
+    )
+    # La ventana posterior no puede invadir la llamada siguiente de la misma
+    # conversacion: un callback tardio de A no reclama lo que se dicto durante B.
+    siguiente = (
+        await session.execute(
+            select(func.min(CallRecord.started_at)).where(
+                CallRecord.client_id == client_id,
+                CallRecord.conversation_id == conversation_id,
+                CallRecord.started_at > started_at,
+            )
+        )
+    ).scalar_one_or_none()
+    if siguiente is not None:
+        hasta = min(hasta, siguiente)
+    resultado = await session.execute(
+        update(ClinicalRecord)
+        .where(
+            ClinicalRecord.client_id == client_id,
+            ClinicalRecord.conversation_id == conversation_id,
+            ClinicalRecord.call_record_id.is_(None),
+            ClinicalRecord.status.in_((RECORD_DRAFT, RECORD_REVIEWED)),
+            ClinicalRecord.created_at >= started_at,
+            ClinicalRecord.created_at <= hasta,
+        )
+        .values(call_record_id=call_record_id)
+        .returning(ClinicalRecord.id)
+    )
+    return len(resultado.all())
+
+
 async def crear_registro_rips(
     session: AsyncSession,
     *,
@@ -454,10 +571,18 @@ async def crear_registro_rips(
             return {"success": True, "duplicate": True, **resumen_registro(existente, numero)}
 
     ahora = datetime.now(timezone.utc)
+    # Si el dictado llego por voz, el registro apunta a la llamada. Sin
+    # conversacion o sin llamada (WhatsApp, Telegram...) queda en `None`.
+    llamada = (
+        await llamada_en_curso(session, client_id, conversation_id, ahora)
+        if conversation_id is not None
+        else None
+    )
     registro = ClinicalRecord(
         client_id=client_id,
         dictated_by_contact_id=dictated_by_contact_id,
         conversation_id=conversation_id,
+        call_record_id=llamada,
         patient_document_type=tipo,
         patient_document_number=numero,
         patient_document_hash=hash_documento,

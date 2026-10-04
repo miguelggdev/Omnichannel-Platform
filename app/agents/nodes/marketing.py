@@ -29,6 +29,7 @@ from app.agents.tools.marketing_tools import CANALES_VALIDOS, MARKETING_TOOLS
 from app.core.database import tenant_session
 from app.services.campaigns import es_operador_de_marketing
 from app.services.channel_identity import identidad_verificada
+from app.services.i18n import con_idioma
 
 logger = logging.getLogger(__name__)
 
@@ -107,9 +108,12 @@ async def marketing_node(state: ConversationState) -> dict[str, Any]:
         )
         return {"response_text": MENSAJE_NO_AUTORIZADO, "intent": INTENT}
 
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        canales=", ".join(CANALES_VALIDOS),
-        fecha=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    system_prompt = con_idioma(
+        SYSTEM_PROMPT_TEMPLATE.format(
+            canales=", ".join(CANALES_VALIDOS),
+            fecha=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        ),
+        state.get("detected_language"),
     )
 
     texto = await responder_con_tools(

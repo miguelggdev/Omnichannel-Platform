@@ -101,12 +101,14 @@ class TestBuildConversationGraph:
 
         assert compiled is not None
 
-    def test_tiene_los_once_nodos(self) -> None:
-        """Los 6 de Sprint 6, `scheduling` (7), los agentes del 12, `sentiment_analysis` (10) y `clinical` (13)."""
+    def test_tiene_los_doce_nodos(self) -> None:
+        """Los 6 de Sprint 6, `scheduling` (7), los agentes del 12, `sentiment_analysis` (10),
+        `clinical` (13) y `language_detect` (14)."""
         graph = build_conversation_graph()
 
         assert set(graph.nodes.keys()) == {
             "token_budget_check",
+            "language_detect",
             "intent_routing",
             "rag_query",
             "respond",
@@ -118,6 +120,22 @@ class TestBuildConversationGraph:
             "clinical",
             "sentiment_analysis",
         }
+
+    def test_la_deteccion_de_idioma_va_entre_el_presupuesto_y_el_intent(self) -> None:
+        """START -> token_budget_check -> language_detect -> intent_routing (spec Sprint 14 §4)."""
+        graph = build_conversation_graph()
+
+        assert ("language_detect", "intent_routing") in graph.edges
+        # El presupuesto ya no apunta directo al router: pasa por la deteccion.
+        rama = graph.branches["token_budget_check"]["route_after_budget_check"]
+        assert rama.ends == {"continue": "language_detect", "exceeded": "human_handoff"}
+
+    def test_el_presupuesto_agotado_va_a_humano_sin_gastar_una_deteccion(self) -> None:
+        """Un tenant sin presupuesto no debe gastar ni la llamada de clasificacion de idioma."""
+        graph = build_conversation_graph()
+
+        rama = graph.branches["token_budget_check"]["route_after_budget_check"]
+        assert rama.ends["exceeded"] == "human_handoff"
 
     def test_el_sentimiento_va_entre_el_intent_y_el_destino(self) -> None:
         graph = build_conversation_graph()

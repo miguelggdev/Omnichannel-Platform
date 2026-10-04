@@ -110,6 +110,11 @@ ignore_missing_imports = true
 module = "langchain.*"
 ignore_missing_imports = true
 
+# Deteccion de idioma (Sprint 14b): `langdetect` no publica stubs ni py.typed.
+[[tool.mypy.overrides]]
+module = "langdetect.*"
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = "langgraph.*"
 ignore_missing_imports = true

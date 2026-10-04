@@ -48,6 +48,7 @@ from app.services.clinical_privacy import (
     marcar_conversacion_clinica,
     proteger_llamadas_de_la_conversacion,
 )
+from app.services.i18n import con_idioma
 
 logger = logging.getLogger(__name__)
 
@@ -195,8 +196,9 @@ async def clinical_agent_node(state: ConversationState) -> dict[str, Any]:
         )
         return {"response_text": MENSAJE_NO_AUTORIZADO, "intent": INTENT}
 
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        fecha=datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    system_prompt = con_idioma(
+        SYSTEM_PROMPT_TEMPLATE.format(fecha=datetime.now(timezone.utc).strftime("%Y-%m-%d")),
+        state.get("detected_language"),
     )
     try:
         texto = await responder_con_tools(

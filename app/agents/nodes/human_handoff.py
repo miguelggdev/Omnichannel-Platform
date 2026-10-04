@@ -36,52 +36,51 @@ from app.agents.nodes._tenant import get_agent_settings
 from app.core.database import tenant_session
 from app.core.metrics import record_handoff
 from app.models.conversation import Conversation
+from app.services.i18n import SYSTEM_MESSAGES, get_system_message, normalizar_idioma
 
 logger = logging.getLogger(__name__)
 
 HANDOFF_STATUS = "waiting_human"
 
+#: Motivos de handoff con texto propio. Los textos viven en `app/services/i18n.py`
+#: (`handoff_<motivo>`), una sola copia para los seis idiomas.
+HANDOFF_REASONS: tuple[str, ...] = (
+    "insufficient_context",
+    "budget_exceeded",
+    "human_request",
+    "complaint",
+    "transcription_failed",
+    "negative_sentiment",
+    "scheduling_unavailable",
+)
+
+#: El texto en espanol de cada motivo (el de referencia y el de rescate).
 HANDOFF_MESSAGES: dict[str, str] = {
-    "insufficient_context": (
-        "No tengo suficiente informacion para responder tu consulta. Te estoy "
-        "transfiriendo con un agente humano que podra ayudarte mejor."
-    ),
-    "budget_exceeded": (
-        "Te estoy transfiriendo con un agente humano para atenderte personalmente."
-    ),
-    "human_request": "Entendido, te transfiero con un agente humano ahora mismo.",
-    "complaint": (
-        "Lamento la situacion. Te transfiero con un agente especializado para resolver tu caso."
-    ),
-    "transcription_failed": (
-        "No pude escuchar tu audio. Te comunico con una persona del equipo para que te ayude."
-    ),
-    "negative_sentiment": (
-        "Siento mucho la molestia. Te comunico con una persona del equipo para que "
-        "revise tu caso directamente."
-    ),
-    "scheduling_unavailable": (
-        "Hubo un problema al gestionar tu cita. Te transfiero con un agente humano "
-        "para ayudarte a agendarla."
-    ),
+    motivo: SYSTEM_MESSAGES["es"][f"handoff_{motivo}"] for motivo in HANDOFF_REASONS
 }
 
 DEFAULT_HANDOFF_REASON = "insufficient_context"
 
 
-def _handoff_text(reason: str, configurado: str | None) -> str:
+def _handoff_text(reason: str, configurado: str | None, idioma: str | None = None) -> str:
     """Elige el texto que se le envia al contacto.
+
+    El mensaje que el tenant configuro manda siempre: es su voz, en el idioma
+    que el haya escrito. Sin el, se usa el del motivo en el idioma del contacto;
+    un motivo desconocido cae al de `DEFAULT_HANDOFF_REASON`.
 
     Args:
         reason: Motivo del handoff.
         configurado: `agent_configs.handoff_message` del tenant, si lo definio.
+        idioma: Idioma detectado del contacto; `None` o no soportado es espanol.
 
     Returns:
         Mensaje de transferencia.
     """
     if configurado:
         return configurado
-    return HANDOFF_MESSAGES.get(reason, HANDOFF_MESSAGES[DEFAULT_HANDOFF_REASON])
+    motivo = reason if reason in HANDOFF_MESSAGES else DEFAULT_HANDOFF_REASON
+    return get_system_message(f"handoff_{motivo}", idioma)
 
 
 def _handoff_metadata(state: ConversationState, reason: str) -> dict[str, Any]:
@@ -129,6 +128,7 @@ async def human_handoff_node(state: ConversationState) -> dict[str, Any]:
     reason = state.get("handoff_reason") or DEFAULT_HANDOFF_REASON
 
     registro = _handoff_metadata(state, reason)
+    idioma = state.get("detected_language")
 
     async with tenant_session(client_id) as session:
         conversation = (
@@ -145,9 +145,14 @@ async def human_handoff_node(state: ConversationState) -> dict[str, Any]:
             # Reasignar el dict entero: SQLAlchemy no detecta mutaciones in-place
             # de un JSONB sin MutableDict.
             conversation.metadata_ = {**(conversation.metadata_ or {}), "handoff": registro}
+            # Con el presupuesto agotado el grafo llega aqui sin pasar por
+            # `language_detect`, pero el idioma de la conversacion ya esta guardado.
+            idioma = idioma or normalizar_idioma(
+                (conversation.metadata_ or {}).get("detected_language")
+            )
 
     settings = await get_agent_settings(client_id)
-    texto = _handoff_text(reason, settings.handoff_message)
+    texto = _handoff_text(reason, settings.handoff_message, idioma)
 
     await deliver_message(
         client_id=client_id,

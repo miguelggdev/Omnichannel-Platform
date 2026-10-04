@@ -216,6 +216,11 @@ class Settings(BaseSettings):
     OPENAI_CHAT_MODEL: str = "gpt-4o"
     OPENAI_FALLBACK_MODEL: str = "gpt-4o-mini"
 
+    # Sandbox por tenant (Sprint 14c, ADR-078): presupuesto mensual de tokens de cada
+    # sandbox. Las pruebas llaman al LLM de verdad: sin tope, un sandbox olvidado en
+    # un bucle de pruebas gastaria sin limite.
+    SANDBOX_TOKEN_BUDGET: int = 200_000
+
     # Transcripcion de audios entrantes (Whisper) — Sprint 9
     WHISPER_MODEL: str = "whisper-1"
     # Vacio = Whisper detecta el idioma (la plataforma atiende 6 idiomas).

@@ -12,6 +12,7 @@ import pytest
 
 from app.agents.middleware import logging_middleware as modulo
 from app.agents.middleware.logging_middleware import (
+    CONTENIDO_OMITIDO,
     _build_input_summary,
     _build_output_summary,
     _extract_details,
@@ -76,6 +77,25 @@ class TestResumenes:
 
         assert "quiero una cita" in resumen
         assert "scheduling" in resumen
+
+    def test_language_detect_no_copia_el_texto_al_log(self) -> None:
+        """Corre antes de conocer el intent: no puede saber si es un dictado clinico.
+
+        Un dictado de un profesional es dato de salud y `agent_action_logs` lo lee
+        cualquier admin/supervisor; este nodo no necesita el texto para su traza.
+        """
+        estado = {"message": {"text": "paciente Ana Perez, hipertension"}}
+
+        resumen = _build_input_summary(estado, "language_detect")  # type: ignore[arg-type]
+
+        assert "Ana Perez" not in resumen
+        assert CONTENIDO_OMITIDO in resumen
+
+    def test_los_demas_nodos_previos_siguen_registrando_el_texto(self) -> None:
+        """El cambio es solo para `language_detect`: no altera lo que ya se registraba."""
+        estado = {"message": {"text": "quiero una cita"}}
+
+        assert "quiero una cita" in _build_input_summary(estado, "intent_routing")  # type: ignore[arg-type]
 
     def test_input_summary_sin_nada_usa_placeholder(self) -> None:
         """Un estado vacío no debe producir un resumen vacío."""

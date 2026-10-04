@@ -46,6 +46,7 @@ from app.services.calendar import (
     CalendarCredentialsError,
     SchedulingNotConfiguredError,
 )
+from app.services.i18n import con_idioma
 
 logger = logging.getLogger(__name__)
 
@@ -168,10 +169,13 @@ async def scheduling_node(state: ConversationState) -> dict[str, Any]:
     model_to_use = state.get("model_to_use") or get_settings().OPENAI_CHAT_MODEL
 
     service_types_text, timezone = await _tenant_scheduling_context(UUID(client_id))
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        service_types=service_types_text,
-        current_datetime=datetime.now(ZoneInfo(timezone)).strftime("%Y-%m-%d %H:%M"),
-        timezone=timezone,
+    system_prompt = con_idioma(
+        SYSTEM_PROMPT_TEMPLATE.format(
+            service_types=service_types_text,
+            current_datetime=datetime.now(ZoneInfo(timezone)).strftime("%Y-%m-%d %H:%M"),
+            timezone=timezone,
+        ),
+        state.get("detected_language"),
     )
 
     llm = get_chat_model(model_to_use, temperature=0.0).bind_tools(SCHEDULING_TOOLS)
