@@ -41,7 +41,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import tenant_session
 from app.core.dependencies import require_role
-from app.core.exceptions import DUPLICATE, NOT_FOUND, VALIDATION_ERROR, AppException
+from app.core.exceptions import (
+    CONFLICT,
+    DUPLICATE,
+    FORBIDDEN,
+    NOT_FOUND,
+    VALIDATION_ERROR,
+    AppException,
+)
 from app.core.security import hash_password
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
@@ -53,7 +60,7 @@ from app.models.satisfaction_survey import SatisfactionSurvey
 from app.models.tag import Tag
 from app.models.user import User
 from app.schemas.csat import CsatSummaryResponse
-from app.schemas.user import UserCreate, UserResponse
+from app.schemas.user import UserCreate, UserListResponse, UserResponse, UserUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -748,5 +755,172 @@ async def create_user(
         respuesta.role,
         user.get("user_id"),
         client_id,
+    )
+    return respuesta
+
+
+@router.get("/users", response_model=UserListResponse)
+async def list_users(
+    search: str | None = Query(default=None, description="Busca en nombre, apellido y email"),
+    role: str | None = Query(default=None, description="Filtra por rol"),
+    is_active: bool | None = Query(default=None, description="Solo activos o solo inactivos"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    user: dict[str, Any] = Depends(require_role(*_USER_ADMIN_ROLES)),
+) -> UserListResponse:
+    """Lista los usuarios del tenant, de los mas recientes a los mas antiguos.
+
+    Args:
+        search: Texto a buscar (sin distinguir mayusculas) en nombre, apellido o email.
+        role: Rol exacto.
+        is_active: `true` solo activos, `false` solo desactivados.
+        page: Pagina, empezando en 1.
+        page_size: Tamano de pagina, maximo 100.
+        user: Usuario autenticado; solo admin o super_admin.
+
+    Returns:
+        Pagina de usuarios, sin `password_hash`, y el total de coincidencias.
+    """
+    client_id: UUID = user["client_id"]
+    filtros = [User.client_id == client_id]
+    if search:
+        patron = f"%{search.strip()}%"
+        filtros.append(
+            User.first_name.ilike(patron) | User.last_name.ilike(patron) | User.email.ilike(patron)
+        )
+    if role:
+        filtros.append(User.role == role)
+    if is_active is not None:
+        filtros.append(User.is_active == is_active)
+
+    async with tenant_session(client_id) as session:
+        total = (
+            await session.execute(select(func.count()).select_from(User).where(*filtros))
+        ).scalar_one()
+        filas = (
+            (
+                await session.execute(
+                    select(User)
+                    .where(*filtros)
+                    .order_by(User.created_at.desc(), User.id)
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        items = [UserResponse.model_validate(f) for f in filas]
+
+    return UserListResponse(items=items, total=int(total), page=page, page_size=page_size)
+
+
+# Roles que pueden administrar el tenant: lo que no puede quedarse a cero.
+_ROLES_DE_ADMINISTRACION = ("admin", "super_admin")
+
+
+@router.put("/users/{user_id}", response_model=UserResponse)
+async def update_user(
+    user_id: UUID,
+    data: UserUpdate,
+    user: dict[str, Any] = Depends(require_role(*_USER_ADMIN_ROLES)),
+) -> UserResponse:
+    """Edita, cambia de rol, desactiva o restablece la contrasena de un usuario del tenant.
+
+    Reglas, para que nadie se quede sin acceso ni escale privilegios:
+
+    - Nadie cambia su **propio** rol ni se desactiva (otro administrador puede hacerlo).
+    - Un `super_admin` es de la plataforma: solo otro `super_admin` puede tocarlo.
+    - El tenant no puede quedarse sin ningun administrador activo.
+    - Desactivar a alguien corta su acceso: no puede iniciar sesion ni renovarla
+      (`/auth/refresh` revalida `is_active`). El access token que ya tenga sigue valiendo
+      hasta que caduque (`JWT_EXPIRATION_MINUTES`, 30 por defecto).
+
+    Args:
+        user_id: Usuario a modificar.
+        data: Campos a cambiar; los omitidos no se tocan.
+        user: Usuario autenticado; solo admin o super_admin.
+
+    Returns:
+        El usuario ya modificado, sin `password_hash`.
+
+    Raises:
+        AppException: 404 si no existe en este tenant; 403 si es un `super_admin` y quien
+            llama no lo es; 400 si intenta cambiarse su propio rol o desactivarse; 409 si
+            dejaria al tenant sin administrador activo.
+    """
+    client_id: UUID = user["client_id"]
+    es_uno_mismo = user_id == user["user_id"]
+    password_hash = await asyncio.to_thread(hash_password, data.password) if data.password else None
+
+    async with tenant_session(client_id) as session:
+        objetivo = (
+            await session.execute(
+                select(User).where(User.id == user_id, User.client_id == client_id)
+            )
+        ).scalar_one_or_none()
+        if objetivo is None:
+            raise AppException(
+                status_code=404, error_code=NOT_FOUND, message="Usuario no encontrado"
+            )
+        if objetivo.role == "super_admin" and user["role"] != "super_admin":
+            raise AppException(
+                status_code=403,
+                error_code=FORBIDDEN,
+                message="Un super_admin solo lo puede modificar otro super_admin",
+            )
+
+        cambia_rol = data.role is not None and data.role != objetivo.role
+        se_desactiva = data.is_active is False and objetivo.is_active
+        if es_uno_mismo and (cambia_rol or se_desactiva):
+            raise AppException(
+                status_code=400,
+                error_code=VALIDATION_ERROR,
+                message="No puedes cambiar tu propio rol ni desactivarte",
+            )
+
+        deja_de_administrar = objetivo.is_active and objetivo.role in _ROLES_DE_ADMINISTRACION
+        if deja_de_administrar and (
+            (cambia_rol and data.role not in _ROLES_DE_ADMINISTRACION) or se_desactiva
+        ):
+            quedan = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(User)
+                    .where(
+                        User.client_id == client_id,
+                        User.id != user_id,
+                        User.is_active.is_(True),
+                        User.role.in_(_ROLES_DE_ADMINISTRACION),
+                    )
+                )
+            ).scalar_one()
+            if quedan == 0:
+                raise AppException(
+                    status_code=409,
+                    error_code=CONFLICT,
+                    message="El tenant no puede quedarse sin un administrador activo",
+                )
+
+        if data.first_name is not None:
+            objetivo.first_name = data.first_name
+        if data.last_name is not None:
+            objetivo.last_name = data.last_name
+        if data.role is not None:
+            objetivo.role = data.role
+        if data.is_active is not None:
+            objetivo.is_active = data.is_active
+        if password_hash is not None:
+            objetivo.password_hash = password_hash
+        await session.flush()
+        await session.refresh(objetivo)
+        respuesta = UserResponse.model_validate(objetivo)
+
+    logger.info(
+        "Usuario %s modificado por %s (client_id=%s): campos=%s",
+        user_id,
+        user.get("user_id"),
+        client_id,
+        sorted(data.model_fields_set),
     )
     return respuesta
