@@ -48,10 +48,18 @@
       "quick-replies": "Quick replies",
       "sandbox": "Sandbox",
       "team": "Team",
-      "business-profile": "Business profile"
+      "business-profile": "Business profile",
+      "platform": "Platform",
+      "clients": "Clients",
+      "celery": "Celery & Redis",
+      "system": "System"
     },
     "team": "Team",
-    "businessProfile": "Business profile"
+    "businessProfile": "Business profile",
+    "platform": "Platform",
+    "platformClients": "Clients",
+    "platformCelery": "Celery & Redis",
+    "platformSystem": "System"
   },
   "roles": {
     "super_admin": "Super admin",
@@ -427,6 +435,113 @@
       "handle": "Letters, numbers, dot and underscore only",
       "time": "Invalid time (HH:MM)",
       "closeAfterOpen": "Closing must be after opening"
+    }
+  },
+  "platform": {
+    "clients": {
+      "title": "Clients",
+      "subtitle": "The businesses using the platform, their status and activity.",
+      "search": "Search clients",
+      "searchPlaceholder": "Search by name or slug…",
+      "filterState": "Filter by status",
+      "allStates": "All",
+      "active": "Active",
+      "suspended": "Suspended",
+      "empty": "No client matches.",
+      "never": "Never",
+      "since": "joined {when}",
+      "columns": {
+        "client": "Client",
+        "state": "Status",
+        "plan": "Plan",
+        "users": "Users",
+        "conversations": "Conv. 30 d",
+        "messages": "Messages 30 d",
+        "lastActivity": "Last activity"
+      },
+      "usage": "Usage",
+      "usageHint": "Only figures and dates: the platform does not show the content of a client's conversations.",
+      "fields": {
+        "users": "Active / total users",
+        "contacts": "Contacts",
+        "openConversations": "Open conversations",
+        "conversations30d": "Conversations (30 d)",
+        "messages30d": "Messages (30 d)",
+        "documents": "Documents ready",
+        "assistant": "Active assistant",
+        "tokens": "Tokens this month"
+      },
+      "yes": "Yes",
+      "no": "No",
+      "unlimited": "Unlimited",
+      "lastActivity": "Last activity",
+      "suspend": "Suspend",
+      "reactivate": "Reactivate",
+      "ownTenant": "You cannot suspend your own tenant: you would lose access.",
+      "suspendedSince": "Suspended since {when}",
+      "suspendTitle": "Suspend {name}",
+      "suspendBody": "Its users will not be able to sign in or renew their session. Anyone already signed in keeps access for a few minutes until it expires.",
+      "reactivateTitle": "Reactivate {name}",
+      "reactivateBody": "Its users will be able to sign in again.",
+      "reason": "Reason (optional)",
+      "reasonHint": "Saved with the suspension and cleared on reactivation.",
+      "suspendedOk": "Client suspended",
+      "reactivatedOk": "Client reactivated"
+    },
+    "celery": {
+      "title": "Celery & Redis",
+      "subtitle": "The platform's workers, queues and running tasks.",
+      "refreshHint": "Refreshes every 30 seconds.",
+      "workers": "Workers",
+      "brokerDown": "Could not connect to the broker, so the number of workers is unknown. It does not mean there are none: check Redis.",
+      "noWorkers": "The broker responds, but no worker is connected. Messages will pile up in the queues until one starts.",
+      "concurrency": "{n} processes",
+      "columns": {
+        "worker": "Worker",
+        "active": "Active",
+        "reserved": "Reserved",
+        "processed": "Processed",
+        "queues": "Queues",
+        "uptime": "Uptime",
+        "task": "Task",
+        "state": "State",
+        "queue": "Queue"
+      },
+      "queues": "Queues",
+      "queuesHint": "Messages waiting in each queue.",
+      "pending": "Pending",
+      "memory": "Memory",
+      "noLimit": "no limit",
+      "clients": "Clients",
+      "keys": "Keys",
+      "hitRatio": "Hit ratio",
+      "redisUptime": "up {time}",
+      "tasks": "Running tasks",
+      "tasksHint": "Arguments are not shown: they may contain contact data.",
+      "noTasks": "No tasks running.",
+      "states": {
+        "active": "Running",
+        "reserved": "Reserved",
+        "scheduled": "Scheduled"
+      },
+      "revoke": "Revoke",
+      "revokeTitle": "Revoke task",
+      "revokeBody": "{name} will not run. A task that is already running is not stopped.",
+      "revoked": "Task revoked"
+    },
+    "system": {
+      "title": "System",
+      "subtitle": "Status of the database, Redis and the workers.",
+      "versionLine": "Version {version} · {env} environment",
+      "refresh": "Refresh",
+      "components": {
+        "database": "Database",
+        "redis": "Redis",
+        "celery": "Celery workers"
+      },
+      "ok": "Working",
+      "down": "Having problems",
+      "latency": "Latency: {ms} ms"
     }
   }
 }

@@ -6,7 +6,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const KNOWN = ["conversations", "contacts", "documents", "settings", "preferences", "quick-replies", "sandbox", "team", "business-profile"];
+const KNOWN = ["conversations", "contacts", "documents", "settings", "preferences", "quick-replies", "sandbox", "team", "business-profile", "platform", "clients", "celery", "system"];
 
 /** Ruta actual como migas de pan; los ids se muestran como "detalle". */
 export function Breadcrumbs() {

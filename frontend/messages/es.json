@@ -48,10 +48,18 @@
       "quick-replies": "Respuestas rápidas",
       "sandbox": "Sandbox",
       "team": "Equipo",
-      "business-profile": "Perfil del negocio"
+      "business-profile": "Perfil del negocio",
+      "platform": "Plataforma",
+      "clients": "Clientes",
+      "celery": "Celery y Redis",
+      "system": "Sistema"
     },
     "team": "Equipo",
-    "businessProfile": "Perfil del negocio"
+    "businessProfile": "Perfil del negocio",
+    "platform": "Plataforma",
+    "platformClients": "Clientes",
+    "platformCelery": "Celery y Redis",
+    "platformSystem": "Sistema"
   },
   "roles": {
     "super_admin": "Superadministrador",
@@ -427,6 +435,113 @@
       "handle": "Solo letras, números, punto y guion bajo",
       "time": "Hora no válida (HH:MM)",
       "closeAfterOpen": "El cierre debe ser posterior a la apertura"
+    }
+  },
+  "platform": {
+    "clients": {
+      "title": "Clientes",
+      "subtitle": "Los negocios que usan la plataforma, su estado y su actividad.",
+      "search": "Buscar clientes",
+      "searchPlaceholder": "Buscar por nombre o slug…",
+      "filterState": "Filtrar por estado",
+      "allStates": "Todos",
+      "active": "Activo",
+      "suspended": "Suspendido",
+      "empty": "Ningún cliente coincide.",
+      "never": "Nunca",
+      "since": "alta {when}",
+      "columns": {
+        "client": "Cliente",
+        "state": "Estado",
+        "plan": "Plan",
+        "users": "Usuarios",
+        "conversations": "Conv. 30 d",
+        "messages": "Mensajes 30 d",
+        "lastActivity": "Última actividad"
+      },
+      "usage": "Uso",
+      "usageHint": "Solo cifras y fechas: la plataforma no muestra el contenido de las conversaciones de un cliente.",
+      "fields": {
+        "users": "Usuarios activos / total",
+        "contacts": "Contactos",
+        "openConversations": "Conversaciones abiertas",
+        "conversations30d": "Conversaciones (30 d)",
+        "messages30d": "Mensajes (30 d)",
+        "documents": "Documentos listos",
+        "assistant": "Asistente activo",
+        "tokens": "Tokens del mes"
+      },
+      "yes": "Sí",
+      "no": "No",
+      "unlimited": "Sin límite",
+      "lastActivity": "Última actividad",
+      "suspend": "Suspender",
+      "reactivate": "Reactivar",
+      "ownTenant": "No puedes suspender tu propio tenant: te quedarías sin acceso.",
+      "suspendedSince": "Suspendido desde {when}",
+      "suspendTitle": "Suspender a {name}",
+      "suspendBody": "Sus usuarios no podrán iniciar sesión ni renovar la sesión. Quien ya la tenga abierta seguirá unos minutos hasta que caduque su acceso.",
+      "reactivateTitle": "Reactivar a {name}",
+      "reactivateBody": "Sus usuarios podrán volver a iniciar sesión.",
+      "reason": "Motivo (opcional)",
+      "reasonHint": "Se guarda con la suspensión y se borra al reactivar.",
+      "suspendedOk": "Cliente suspendido",
+      "reactivatedOk": "Cliente reactivado"
+    },
+    "celery": {
+      "title": "Celery y Redis",
+      "subtitle": "Workers, colas y tareas en curso de la plataforma.",
+      "refreshHint": "Se actualiza cada 30 segundos.",
+      "workers": "Workers",
+      "brokerDown": "No se pudo conectar con el broker, así que no se sabe cuántos workers hay. No significa que no haya ninguno: revisa Redis.",
+      "noWorkers": "El broker responde, pero ningún worker está conectado. Los mensajes se acumularán en las colas hasta que arranque alguno.",
+      "concurrency": "{n} procesos",
+      "columns": {
+        "worker": "Worker",
+        "active": "Activas",
+        "reserved": "Reservadas",
+        "processed": "Procesadas",
+        "queues": "Colas",
+        "uptime": "Activo desde hace",
+        "task": "Tarea",
+        "state": "Estado",
+        "queue": "Cola"
+      },
+      "queues": "Colas",
+      "queuesHint": "Mensajes esperando en cada cola.",
+      "pending": "Pendientes",
+      "memory": "Memoria",
+      "noLimit": "sin límite",
+      "clients": "Clientes",
+      "keys": "Claves",
+      "hitRatio": "Aciertos",
+      "redisUptime": "activo {time}",
+      "tasks": "Tareas en curso",
+      "tasksHint": "No se muestran los argumentos: pueden contener datos de los contactos.",
+      "noTasks": "No hay tareas en curso.",
+      "states": {
+        "active": "En ejecución",
+        "reserved": "Reservada",
+        "scheduled": "Programada"
+      },
+      "revoke": "Revocar",
+      "revokeTitle": "Revocar tarea",
+      "revokeBody": "{name} no llegará a ejecutarse. Una tarea que ya está corriendo no se detiene.",
+      "revoked": "Tarea revocada"
+    },
+    "system": {
+      "title": "Sistema",
+      "subtitle": "Estado de la base de datos, Redis y los workers.",
+      "versionLine": "Versión {version} · entorno {env}",
+      "refresh": "Actualizar",
+      "components": {
+        "database": "Base de datos",
+        "redis": "Redis",
+        "celery": "Workers de Celery"
+      },
+      "ok": "Funciona",
+      "down": "Con problemas",
+      "latency": "Latencia: {ms} ms"
     }
   }
 }

@@ -48,10 +48,18 @@
       "quick-replies": "Schnellantworten",
       "sandbox": "Sandbox",
       "team": "Team",
-      "business-profile": "Unternehmensprofil"
+      "business-profile": "Unternehmensprofil",
+      "platform": "Plattform",
+      "clients": "Kunden",
+      "celery": "Celery & Redis",
+      "system": "System"
     },
     "team": "Team",
-    "businessProfile": "Unternehmensprofil"
+    "businessProfile": "Unternehmensprofil",
+    "platform": "Plattform",
+    "platformClients": "Kunden",
+    "platformCelery": "Celery & Redis",
+    "platformSystem": "System"
   },
   "roles": {
     "super_admin": "Super-Admin",
@@ -427,6 +435,113 @@
       "handle": "Nur Buchstaben, Zahlen, Punkt und Unterstrich",
       "time": "Ungültige Uhrzeit (HH:MM)",
       "closeAfterOpen": "Das Ende muss nach dem Beginn liegen"
+    }
+  },
+  "platform": {
+    "clients": {
+      "title": "Kunden",
+      "subtitle": "Die Unternehmen auf der Plattform, ihr Status und ihre Aktivität.",
+      "search": "Kunden suchen",
+      "searchPlaceholder": "Nach Name oder Slug suchen…",
+      "filterState": "Nach Status filtern",
+      "allStates": "Alle",
+      "active": "Aktiv",
+      "suspended": "Gesperrt",
+      "empty": "Kein Kunde entspricht.",
+      "never": "Nie",
+      "since": "seit {when}",
+      "columns": {
+        "client": "Kunde",
+        "state": "Status",
+        "plan": "Tarif",
+        "users": "Benutzer",
+        "conversations": "Unterh. 30 T",
+        "messages": "Nachr. 30 T",
+        "lastActivity": "Letzte Aktivität"
+      },
+      "usage": "Nutzung",
+      "usageHint": "Nur Zahlen und Daten: Die Plattform zeigt keine Inhalte der Unterhaltungen eines Kunden.",
+      "fields": {
+        "users": "Aktive / alle Benutzer",
+        "contacts": "Kontakte",
+        "openConversations": "Offene Unterhaltungen",
+        "conversations30d": "Unterhaltungen (30 T)",
+        "messages30d": "Nachrichten (30 T)",
+        "documents": "Fertige Dokumente",
+        "assistant": "Aktiver Assistent",
+        "tokens": "Tokens im Monat"
+      },
+      "yes": "Ja",
+      "no": "Nein",
+      "unlimited": "Unbegrenzt",
+      "lastActivity": "Letzte Aktivität",
+      "suspend": "Sperren",
+      "reactivate": "Entsperren",
+      "ownTenant": "Sie können Ihren eigenen Mandanten nicht sperren: Sie verlören den Zugriff.",
+      "suspendedSince": "Gesperrt seit {when}",
+      "suspendTitle": "{name} sperren",
+      "suspendBody": "Die Benutzer können sich nicht anmelden oder die Sitzung erneuern. Wer bereits angemeldet ist, behält den Zugriff noch einige Minuten, bis er abläuft.",
+      "reactivateTitle": "{name} entsperren",
+      "reactivateBody": "Die Benutzer können sich wieder anmelden.",
+      "reason": "Grund (optional)",
+      "reasonHint": "Wird mit der Sperre gespeichert und beim Entsperren gelöscht.",
+      "suspendedOk": "Kunde gesperrt",
+      "reactivatedOk": "Kunde entsperrt"
+    },
+    "celery": {
+      "title": "Celery & Redis",
+      "subtitle": "Worker, Warteschlangen und laufende Aufgaben der Plattform.",
+      "refreshHint": "Aktualisiert sich alle 30 Sekunden.",
+      "workers": "Worker",
+      "brokerDown": "Verbindung zum Broker fehlgeschlagen, daher ist die Zahl der Worker unbekannt. Das heißt nicht, dass es keine gibt: Prüfen Sie Redis.",
+      "noWorkers": "Der Broker antwortet, aber kein Worker ist verbunden. Nachrichten sammeln sich in den Warteschlangen, bis einer startet.",
+      "concurrency": "{n} Prozesse",
+      "columns": {
+        "worker": "Worker",
+        "active": "Aktiv",
+        "reserved": "Reserviert",
+        "processed": "Verarbeitet",
+        "queues": "Warteschlangen",
+        "uptime": "Laufzeit",
+        "task": "Aufgabe",
+        "state": "Status",
+        "queue": "Warteschlange"
+      },
+      "queues": "Warteschlangen",
+      "queuesHint": "Auf jede Warteschlange wartende Nachrichten.",
+      "pending": "Ausstehend",
+      "memory": "Speicher",
+      "noLimit": "ohne Limit",
+      "clients": "Clients",
+      "keys": "Schlüssel",
+      "hitRatio": "Trefferquote",
+      "redisUptime": "läuft {time}",
+      "tasks": "Laufende Aufgaben",
+      "tasksHint": "Argumente werden nicht angezeigt: Sie können Kontaktdaten enthalten.",
+      "noTasks": "Keine laufenden Aufgaben.",
+      "states": {
+        "active": "Läuft",
+        "reserved": "Reserviert",
+        "scheduled": "Geplant"
+      },
+      "revoke": "Widerrufen",
+      "revokeTitle": "Aufgabe widerrufen",
+      "revokeBody": "{name} wird nicht ausgeführt. Eine bereits laufende Aufgabe wird nicht gestoppt.",
+      "revoked": "Aufgabe widerrufen"
+    },
+    "system": {
+      "title": "System",
+      "subtitle": "Status von Datenbank, Redis und Workern.",
+      "versionLine": "Version {version} · Umgebung {env}",
+      "refresh": "Aktualisieren",
+      "components": {
+        "database": "Datenbank",
+        "redis": "Redis",
+        "celery": "Celery-Worker"
+      },
+      "ok": "Funktioniert",
+      "down": "Probleme",
+      "latency": "Latenz: {ms} ms"
     }
   }
 }

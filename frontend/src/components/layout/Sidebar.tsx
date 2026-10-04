@@ -1,7 +1,10 @@
 "use client";
 
 import {
+  Activity,
   BookOpen,
+  Building,
+  Cpu,
   Building2,
   ChevronLeft,
   FlaskConical,
@@ -35,7 +38,10 @@ interface NavItem {
     | "team"
     | "businessProfile"
     | "preferences"
-    | "sandbox";
+    | "sandbox"
+    | "platformClients"
+    | "platformCelery"
+    | "platformSystem";
   minRole?: UserRole;
 }
 
@@ -51,6 +57,13 @@ const NAV: NavItem[] = [
   { href: "/settings/preferences", icon: Settings, labelKey: "preferences" },
 ];
 
+/** Secciones solo para el operador de la plataforma (super_admin). */
+const PLATFORM: NavItem[] = [
+  { href: "/platform/clients", icon: Building, labelKey: "platformClients", minRole: "super_admin" },
+  { href: "/platform/celery", icon: Cpu, labelKey: "platformCelery", minRole: "super_admin" },
+  { href: "/platform/system", icon: Activity, labelKey: "platformSystem", minRole: "super_admin" },
+];
+
 function isActive(pathname: string, href: string): boolean {
   return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
 }
@@ -60,20 +73,31 @@ function NavList({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: (
   const pathname = usePathname();
   const hasMinRole = useAuthStore((s) => s.hasMinRole);
   const items = NAV.filter((i) => !i.minRole || hasMinRole(i.minRole));
+  const platform = PLATFORM.filter((i) => !i.minRole || hasMinRole(i.minRole));
+  const render = (item: NavItem) => (
+    <SidebarItem
+      key={item.href}
+      href={item.href}
+      icon={item.icon}
+      label={t(item.labelKey)}
+      active={isActive(pathname, item.href)}
+      collapsed={collapsed}
+      onNavigate={onNavigate}
+    />
+  );
 
   return (
     <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-4" aria-label={t("main")}>
-      {items.map((item) => (
-        <SidebarItem
-          key={item.href}
-          href={item.href}
-          icon={item.icon}
-          label={t(item.labelKey)}
-          active={isActive(pathname, item.href)}
-          collapsed={collapsed}
-          onNavigate={onNavigate}
-        />
-      ))}
+      {items.map(render)}
+      {platform.length > 0 && (
+        <>
+          <div className="my-3 border-t" role="separator" />
+          <p className={cn("px-3 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground", "md:sr-only", !collapsed && "lg:not-sr-only")}>
+            {t("platform")}
+          </p>
+          {platform.map(render)}
+        </>
+      )}
     </nav>
   );
 }

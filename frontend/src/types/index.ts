@@ -5,5 +5,6 @@ export * from "./common";
 export * from "./contact";
 export * from "./conversation";
 export * from "./document";
+export * from "./platform";
 export * from "./quick-reply";
 export * from "./settings";
