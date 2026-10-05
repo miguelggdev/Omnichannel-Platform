@@ -25,6 +25,8 @@ pytestmark = [pytest.mark.db, pytest.mark.asyncio]
 
 REGISTER = "/api/v1/onboarding/register"
 VERIFY = "/api/v1/onboarding/verify-email"
+STATUS = "/api/v1/onboarding/verification"
+RESEND = "/api/v1/onboarding/resend-verification"
 
 
 def _cuerpo(email: str, **extra: Any) -> dict[str, Any]:
@@ -172,8 +174,9 @@ class TestRegistro:
         email = f"no-{uuid.uuid4().hex[:8]}@example.com"
         r = await api.post(REGISTER, json=_cuerpo(email), headers=_ip())
         assert r.status_code == 404
+        # La verificacion sigue disponible: un enlace ya enviado no debe romperse al cerrar el registro.
         r = await api.post(VERIFY, json={"token": "x" * 20})
-        assert r.status_code == 404
+        assert r.status_code == 400
         login = await api.post(
             "/api/v1/auth/login", json={"email": email, "password": "ClaveSegura1"}
         )
@@ -309,3 +312,71 @@ class TestVerificacion:
             assert r.status_code == 400
         finally:
             await _limpiar(uuid.UUID(datos["client_id"]))
+
+
+class TestReenvio:
+    async def test_el_estado_distingue_verificado_no_verificado_y_sin_registro(
+        self, api: AsyncClient
+    ) -> None:
+        datos = await _registrar(api)
+        cid = uuid.UUID(datos["client_id"])
+        auth = {"Authorization": f"Bearer {datos['access_token']}"}
+        try:
+            r = await api.get(STATUS, headers=auth)
+            assert r.json() == {"email": datos["email"], "verified": False}
+
+            token = create_email_verification_token(
+                datos["user_id"], datos["client_id"], datos["email"]
+            )
+            assert (await api.post(VERIFY, json={"token": token})).status_code == 200
+            assert (await api.get(STATUS, headers=auth)).json()["verified"] is True
+
+            # Una cuenta que no nacio del registro publico no tiene nada que verificar.
+            async with tenant_session(cid) as s:
+                await s.execute(
+                    text("UPDATE users SET settings = '{}'::jsonb WHERE client_id = :c"),
+                    {"c": str(cid)},
+                )
+            assert (await api.get(STATUS, headers=auth)).json()["verified"] is None
+        finally:
+            await _limpiar(cid)
+
+    async def test_el_reenvio_encola_al_email_actual_y_se_limita_por_usuario(
+        self, api: AsyncClient
+    ) -> None:
+        datos = await _registrar(api)
+        cid = uuid.UUID(datos["client_id"])
+        auth = {"Authorization": f"Bearer {datos['access_token']}"}
+        api.encolados.clear()  # type: ignore[attr-defined]
+        try:
+            for _ in range(3):
+                r = await api.post(RESEND, headers=auth)
+                assert r.status_code == 200, r.text
+                assert r.json() == {"sent": True}
+            assert api.encolados == [(cid, uuid.UUID(datos["user_id"]), datos["email"])] * 3  # type: ignore[attr-defined]
+            r = await api.post(RESEND, headers=auth)
+            assert r.status_code == 429
+            assert len(api.encolados) == 3  # type: ignore[attr-defined]
+        finally:
+            await _limpiar(cid)
+
+    async def test_si_ya_esta_verificado_el_reenvio_es_409_y_no_encola(
+        self, api: AsyncClient
+    ) -> None:
+        datos = await _registrar(api)
+        auth = {"Authorization": f"Bearer {datos['access_token']}"}
+        try:
+            token = create_email_verification_token(
+                datos["user_id"], datos["client_id"], datos["email"]
+            )
+            await api.post(VERIFY, json={"token": token})
+            api.encolados.clear()  # type: ignore[attr-defined]
+            r = await api.post(RESEND, headers=auth)
+            assert r.status_code == 409
+            assert api.encolados == []  # type: ignore[attr-defined]
+        finally:
+            await _limpiar(uuid.UUID(datos["client_id"]))
+
+    async def test_exigen_sesion(self, api: AsyncClient) -> None:
+        assert (await api.get(STATUS)).status_code == 401
+        assert (await api.post(RESEND)).status_code == 401

@@ -2,9 +2,14 @@
 
     POST /api/v1/onboarding/register       crea tenant + administrador y devuelve su sesion
     POST /api/v1/onboarding/verify-email   confirma el email con el token del enlace
+    GET  /api/v1/onboarding/verification   si el email del usuario autenticado esta verificado
+    POST /api/v1/onboarding/resend-verification   reenvia el enlace al usuario autenticado
 
 Ambos son publicos (sin JWT). Para que no sean una puerta abierta:
-- Estan apagados salvo `ONBOARDING_ENABLED=true` (responden 404, como si no existieran).
+- El registro esta apagado salvo `ONBOARDING_ENABLED=true` (responde 404, como si no existiera).
+  La verificacion y el reenvio **no**: un enlace ya enviado debe seguir funcionando aunque el
+  registro se cierre despues, y solo aceptan un token firmado o un usuario autenticado.
+- El reenvio se limita por usuario (3 por hora): sin eso seria un grifo de correo.
 - El registro se limita por IP (`ONBOARDING_MAX_PER_IP_PER_HOUR`).
 - La verificacion de email no bloquea el uso de la cuenta: es informativa por ahora.
 """
@@ -14,10 +19,14 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
+from sqlalchemy import select
 
 from app.core.config import get_settings
+from app.core.database import tenant_session
+from app.core.dependencies import require_role
 from app.core.exceptions import (
+    CONFLICT,
     NOT_FOUND,
     VALIDATION_ERROR,
     AppException,
@@ -26,9 +35,12 @@ from app.core.exceptions import (
 )
 from app.core.rate_limit import client_ip, hit
 from app.core.security import decode_jwt
+from app.models.user import User
 from app.schemas.onboarding import (
     OnboardingRequest,
     OnboardingResponse,
+    ResendVerificationResponse,
+    VerificationStatus,
     VerifyEmailRequest,
     VerifyEmailResponse,
 )
@@ -110,10 +122,9 @@ async def verify_email(payload: VerifyEmailRequest) -> VerifyEmailResponse:
         `verified=True` si quedo confirmado.
 
     Raises:
-        AppException: 404 si esta apagado; 400 si el token es invalido, caduco, no es de
-            verificacion, o el usuario ya no existe o cambio de email.
+        AppException: 400 si el token es invalido, caduco, no es de verificacion, o el
+            usuario ya no existe o cambio de email.
     """
-    _exigir_habilitado()
     invalido = AppException(
         status_code=400,
         error_code=VALIDATION_ERROR,
@@ -134,3 +145,79 @@ async def verify_email(payload: VerifyEmailRequest) -> VerifyEmailResponse:
     if not await mark_email_verified(client_id, user_id, email):
         raise invalido
     return VerifyEmailResponse(verified=True)
+
+
+_TODOS_LOS_ROLES = ("super_admin", "admin", "supervisor", "agent", "medical")
+_REENVIOS_POR_HORA = 3
+
+
+async def _leer_usuario(user: dict[str, Any]) -> tuple[str, bool | None]:
+    """Email actual del usuario del token y su estado de verificacion.
+
+    Args:
+        user: Usuario autenticado.
+
+    Returns:
+        `(email, verificado)`. `verificado` es `None` si la cuenta no pasa por el registro
+        publico (la creo un administrador o una plantilla): no hay nada que verificar.
+
+    Raises:
+        AppException: 404 si el usuario del token ya no existe.
+    """
+    client_id: UUID = user["client_id"]
+    async with tenant_session(client_id) as session:
+        fila = (
+            await session.execute(
+                select(User.email, User.settings).where(
+                    User.id == UUID(str(user["user_id"])), User.client_id == client_id
+                )
+            )
+        ).first()
+    if fila is None:
+        raise AppException(status_code=404, error_code=NOT_FOUND, message="Usuario no encontrado")
+    verificado = fila.settings.get("email_verified")
+    return fila.email, verificado if isinstance(verificado, bool) else None
+
+
+@router.get("/verification", response_model=VerificationStatus)
+async def verification_status(
+    user: dict[str, Any] = Depends(require_role(*_TODOS_LOS_ROLES)),
+) -> VerificationStatus:
+    """Si el email del usuario autenticado esta verificado.
+
+    Args:
+        user: Usuario autenticado.
+
+    Returns:
+        `verified` es `true`/`false` para quien se registro solo y `null` para el resto.
+    """
+    email, verificado = await _leer_usuario(user)
+    return VerificationStatus(email=email, verified=verificado)
+
+
+@router.post("/resend-verification", response_model=ResendVerificationResponse)
+async def resend_verification(
+    user: dict[str, Any] = Depends(require_role(*_TODOS_LOS_ROLES)),
+) -> ResendVerificationResponse:
+    """Reenvia el enlace de verificacion al email actual del usuario autenticado.
+
+    Args:
+        user: Usuario autenticado.
+
+    Returns:
+        `sent=true` cuando se encolo el envio.
+
+    Raises:
+        AppException: 409 si el email ya esta verificado o la cuenta no lo requiere; 429 si
+            ya pidio demasiados reenvios esta hora.
+    """
+    email, verificado = await _leer_usuario(user)
+    if verificado is not False:
+        raise AppException(
+            status_code=409,
+            error_code=CONFLICT,
+            message="El correo ya está verificado o no requiere verificación",
+        )
+    await hit(f"verify-resend:{user['user_id']}", _REENVIOS_POR_HORA, 3600)
+    await _encolar_verificacion(user["client_id"], UUID(str(user["user_id"])), email)
+    return ResendVerificationResponse(sent=True)

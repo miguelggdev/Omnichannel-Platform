@@ -100,3 +100,22 @@ class VerifyEmailResponse(BaseModel):
     """Resultado de la verificacion."""
 
     verified: bool
+
+
+class VerificationStatus(BaseModel):
+    """Estado de verificacion del email del usuario autenticado.
+
+    Attributes:
+        email: Email actual.
+        verified: `True`/`False` si la cuenta nacio del registro publico; `None` si no
+            hay nada que verificar (cuentas creadas por un administrador).
+    """
+
+    email: str
+    verified: bool | None
+
+
+class ResendVerificationResponse(BaseModel):
+    """Resultado del reenvio."""
+
+    sent: bool
