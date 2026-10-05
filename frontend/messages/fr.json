@@ -665,6 +665,13 @@
     "successDesc": "Merci, votre adresse est confirmée.",
     "failedTitle": "Lien invalide",
     "failedDesc": "Le lien est incorrect ou a expiré. Connectez-vous pour en demander un nouveau.",
-    "goToApp": "Accéder à l'application"
+    "goToApp": "Accéder à l'application",
+    "banner": {
+      "message": "Vérifiez votre e-mail ({email}) avec le lien que nous vous avons envoyé.",
+      "resend": "Renvoyer le lien",
+      "sent": "Lien envoyé à {email}",
+      "tooMany": "Vous avez demandé trop d'envois. Réessayez plus tard.",
+      "dismiss": "Fermer l'avis"
+    }
   }
 }

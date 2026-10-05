@@ -665,6 +665,13 @@
     "successDesc": "Danke, Ihre Adresse ist jetzt bestätigt.",
     "failedTitle": "Ungültiger Link",
     "failedDesc": "Der Link ist falsch oder abgelaufen. Melden Sie sich an, um einen neuen anzufordern.",
-    "goToApp": "Zur Anwendung"
+    "goToApp": "Zur Anwendung",
+    "banner": {
+      "message": "Bestätigen Sie Ihre E-Mail ({email}) mit dem Link, den wir Ihnen gesendet haben.",
+      "resend": "Link erneut senden",
+      "sent": "Link an {email} gesendet",
+      "tooMany": "Sie haben zu viele erneute Sendungen angefordert. Versuchen Sie es später erneut.",
+      "dismiss": "Hinweis schließen"
+    }
   }
 }

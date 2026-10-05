@@ -665,6 +665,13 @@
     "successDesc": "Grazie, il tuo indirizzo è stato confermato.",
     "failedTitle": "Link non valido",
     "failedDesc": "Il link non è corretto o è scaduto. Accedi per richiederne uno nuovo.",
-    "goToApp": "Vai all'app"
+    "goToApp": "Vai all'app",
+    "banner": {
+      "message": "Verifica la tua email ({email}) con il link che ti abbiamo inviato.",
+      "resend": "Reinvia il link",
+      "sent": "Link inviato a {email}",
+      "tooMany": "Hai richiesto troppi invii. Riprova più tardi.",
+      "dismiss": "Chiudi avviso"
+    }
   }
 }

@@ -665,6 +665,13 @@
     "successDesc": "Gracias, ya hemos confirmado tu dirección.",
     "failedTitle": "Enlace no válido",
     "failedDesc": "El enlace es incorrecto o ha caducado. Inicia sesión para pedir uno nuevo.",
-    "goToApp": "Ir a la aplicación"
+    "goToApp": "Ir a la aplicación",
+    "banner": {
+      "message": "Verifica tu correo ({email}) con el enlace que te enviamos.",
+      "resend": "Reenviar enlace",
+      "sent": "Enlace enviado a {email}",
+      "tooMany": "Has pedido demasiados reenvíos. Inténtalo más tarde.",
+      "dismiss": "Cerrar aviso"
+    }
   }
 }

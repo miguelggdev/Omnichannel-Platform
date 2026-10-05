@@ -665,6 +665,13 @@
     "successDesc": "Obrigado, o seu endereço foi confirmado.",
     "failedTitle": "Ligação inválida",
     "failedDesc": "A ligação está incorreta ou expirou. Inicie sessão para pedir uma nova.",
-    "goToApp": "Ir para a aplicação"
+    "goToApp": "Ir para a aplicação",
+    "banner": {
+      "message": "Verifique o seu e-mail ({email}) com a ligação que lhe enviámos.",
+      "resend": "Reenviar ligação",
+      "sent": "Ligação enviada para {email}",
+      "tooMany": "Pediu demasiados reenvios. Tente mais tarde.",
+      "dismiss": "Fechar aviso"
+    }
   }
 }

@@ -665,6 +665,13 @@
     "successDesc": "Thanks, your address is now confirmed.",
     "failedTitle": "Invalid link",
     "failedDesc": "The link is wrong or has expired. Sign in to request a new one.",
-    "goToApp": "Go to the app"
+    "goToApp": "Go to the app",
+    "banner": {
+      "message": "Verify your email ({email}) using the link we sent you.",
+      "resend": "Resend link",
+      "sent": "Link sent to {email}",
+      "tooMany": "You have requested too many resends. Try again later.",
+      "dismiss": "Dismiss notice"
+    }
   }
 }
