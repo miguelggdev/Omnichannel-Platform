@@ -59,7 +59,8 @@
     "platform": "Platform",
     "platformClients": "Clients",
     "platformCelery": "Celery & Redis",
-    "platformSystem": "System"
+    "platformSystem": "System",
+    "platformSecurity": "Security"
   },
   "roles": {
     "super_admin": "Super admin",
@@ -400,7 +401,7 @@
     "hints": {
       "country": "Two-letter code, e.g. CO",
       "timezone": "IANA name, e.g. America/Bogota",
-      "logo": "An https link to an image. File upload will arrive once storage is configured."
+      "logo": "HTTPS link to an image. If you upload a file this link is no longer used; if you save a new link the file is discarded."
     },
     "hoursHint": "Local business time, 24-hour format.",
     "open": "open",
@@ -437,6 +438,18 @@
       "handle": "Letters, numbers, dot and underscore only",
       "time": "Invalid time (HH:MM)",
       "closeAfterOpen": "Closing must be after opening"
+    },
+    "logo": {
+      "label": "Logo",
+      "alt": "Business logo",
+      "upload": "Upload logo",
+      "replace": "Change logo",
+      "remove": "Remove",
+      "help": "PNG, JPEG or WebP, up to 512 KB.",
+      "badType": "The logo must be PNG, JPEG or WebP.",
+      "tooBig": "The logo cannot exceed 512 KB.",
+      "uploadedOk": "Logo updated",
+      "removedOk": "Logo removed"
     }
   },
   "platform": {
@@ -544,6 +557,63 @@
       "ok": "Working",
       "down": "Having problems",
       "latency": "Latency: {ms} ms"
+    },
+    "security": {
+      "title": "Security",
+      "subtitle": "Tenant isolation, database role and configuration.",
+      "refresh": "Refresh",
+      "summary": "{fails} failure(s) and {warns} warning(s) · environment {env}",
+      "status": {
+        "ok": "OK",
+        "warn": "Review",
+        "fail": "Fix"
+      },
+      "checks": {
+        "environment": {
+          "label": "Environment",
+          "help": "Not production: make sure this is intended."
+        },
+        "jwt_lifetime": {
+          "label": "Access token lifetime",
+          "help": "It is long: a stolen token stays valid longer. 60 minutes or less is recommended."
+        },
+        "cors": {
+          "label": "Allowed origins (CORS)",
+          "help": "There is a wildcard or a local origin in production. Restrict CORS_ORIGINS to your domains."
+        },
+        "webhook_secrets": {
+          "label": "Webhook secrets",
+          "help": "Secrets for the channels listed below are missing: without them webhook senders cannot be verified."
+        },
+        "onboarding_proxy_hops": {
+          "label": "Client IP on public sign-up",
+          "help": "With TRUSTED_PROXY_HOPS=0 behind a proxy, everyone shares the same IP and the limit cannot tell anyone apart."
+        },
+        "onboarding_smtp": {
+          "label": "Verification email",
+          "help": "Public sign-up is on but SMTP is not configured: links will not be sent."
+        },
+        "onboarding_disabled": {
+          "label": "Public sign-up",
+          "help": "Public sign-up is disabled."
+        },
+        "rls_tables": {
+          "label": "RLS on tenant tables",
+          "help": "Some tables with client_id lack enabled and forced RLS. Fix the migration."
+        },
+        "db_role_rls": {
+          "label": "Database role subject to RLS",
+          "help": "The role the API runs as bypasses RLS (superuser or BYPASSRLS): tenant isolation is not enforced. Use a role without those privileges."
+        }
+      },
+      "rls": {
+        "title": "Row Level Security per table",
+        "description": "{count} tables with tenant isolation.",
+        "unprotected": "Not fully protected: {tables}",
+        "forced": "Forced",
+        "notForced": "No FORCE",
+        "off": "Disabled"
+      }
     }
   },
   "onboarding": {
@@ -607,6 +677,13 @@
     "successDesc": "Thanks, your address is now confirmed.",
     "failedTitle": "Invalid link",
     "failedDesc": "The link is wrong or has expired. Sign in to request a new one.",
-    "goToApp": "Go to the app"
+    "goToApp": "Go to the app",
+    "banner": {
+      "message": "Verify your email ({email}) using the link we sent you.",
+      "resend": "Resend link",
+      "sent": "Link sent to {email}",
+      "tooMany": "You have requested too many resends. Try again later.",
+      "dismiss": "Dismiss notice"
+    }
   }
 }

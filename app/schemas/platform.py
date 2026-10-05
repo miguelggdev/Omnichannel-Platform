@@ -154,3 +154,41 @@ class SystemStatus(BaseModel):
     version: str
     environment: str
     components: list[ComponentStatus]
+
+
+class SecurityCheck(BaseModel):
+    """Una comprobacion de la postura de seguridad.
+
+    Attributes:
+        id: Identificador estable (el frontend lo traduce).
+        status: `ok`, `warn` (revisar) o `fail` (corregir).
+        detail: Dato que justifica el estado. Nunca un secreto.
+    """
+
+    id: str
+    status: str
+    detail: str | None = None
+
+
+class RlsTableStatus(BaseModel):
+    """Estado de RLS de una tabla con aislamiento por tenant."""
+
+    name: str
+    rls_enabled: bool
+    rls_forced: bool
+
+
+class SecurityOverview(BaseModel):
+    """Vision general de seguridad de la plataforma (solo `super_admin`).
+
+    Attributes:
+        environment: `APP_ENV`.
+        checks: Comprobaciones de configuracion y del rol de base de datos.
+        rls_tables: Cada tabla con `client_id` (y `clients`) y su RLS.
+        rls_unprotected: Nombres de las que no tienen RLS habilitado **y forzado**.
+    """
+
+    environment: str
+    checks: list[SecurityCheck]
+    rls_tables: list[RlsTableStatus]
+    rls_unprotected: list[str]

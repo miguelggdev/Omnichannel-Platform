@@ -8,6 +8,7 @@ import type {
   Paginated,
   QueueDepth,
   RedisInfo,
+  SecurityOverview,
   SystemStatus,
   TaskInfo,
   WorkersResponse,
@@ -68,6 +69,12 @@ export const useRedisInfo = () =>
     queryKey: ["platform", "redis"],
     queryFn: () => apiGet<RedisInfo>("/platform/redis"),
     refetchInterval: CADA_30S,
+  });
+
+export const useSecurityOverview = () =>
+  useQuery({
+    queryKey: ["platform", "security"],
+    queryFn: () => apiGet<SecurityOverview>("/platform/security"),
   });
 
 export const useSystemStatus = () =>

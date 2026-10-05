@@ -188,6 +188,8 @@ class BusinessProfile(BaseModel):
     primary_color: str | None = None
     secondary_color: str | None = None
     logo_url: str | None = None
+    #: `True` si hay un logo subido (se descarga de `GET .../logo`); manda sobre `logo_url`.
+    logo_uploaded: bool = False
     #: Del agente activo; `None` si el tenant no tiene agente (no se pueden guardar).
     welcome_message: str | None = None
     handoff_message: str | None = None

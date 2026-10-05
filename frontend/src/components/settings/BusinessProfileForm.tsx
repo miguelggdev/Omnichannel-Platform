@@ -7,6 +7,7 @@ import { useEffect, useMemo } from "react";
 import { Controller, useForm, type FieldErrors } from "react-hook-form";
 import { toast } from "sonner";
 import { QueryError } from "@/components/common/QueryError";
+import { LogoField } from "@/components/settings/LogoField";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -204,6 +205,9 @@ export function BusinessProfileForm() {
               <Input id="secondary_color" {...register("secondary_color")} />
             </div>
           </Field>
+          <div className="sm:col-span-2">
+            <LogoField uploaded={data.logo_uploaded} logoUrl={data.logo_url} />
+          </div>
           <div className="sm:col-span-2">
             <Field id="logo_url" label={t("fields.logo_url")} error={err(errors, "logo_url")} hint={t("hints.logo")}>
               <Input id="logo_url" placeholder="https://" {...register("logo_url")} />

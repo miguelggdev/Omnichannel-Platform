@@ -1,4 +1,3 @@
-import { notFound } from "next/navigation";
 import { getTranslations } from "next-intl/server";
 import { VerifyEmail } from "@/components/auth/VerifyEmail";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,7 +14,6 @@ export default async function VerifyEmailPage({
 }: {
   searchParams: Promise<{ token?: string }>;
 }) {
-  if (process.env.ONBOARDING_ENABLED !== "true") notFound();
   const { token } = await searchParams;
   const t = await getTranslations("verifyEmail");
   return (

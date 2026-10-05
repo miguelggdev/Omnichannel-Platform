@@ -59,7 +59,8 @@
     "platform": "Plataforma",
     "platformClients": "Clientes",
     "platformCelery": "Celery y Redis",
-    "platformSystem": "Sistema"
+    "platformSystem": "Sistema",
+    "platformSecurity": "Seguridad"
   },
   "roles": {
     "super_admin": "Superadministrador",
@@ -400,7 +401,7 @@
     "hints": {
       "country": "Código de dos letras, por ejemplo CO",
       "timezone": "Nombre IANA, por ejemplo America/Bogota",
-      "logo": "Enlace https a una imagen. Subir archivos llegará cuando haya almacenamiento configurado."
+      "logo": "Enlace https a una imagen. Si subes un archivo, este enlace deja de usarse; si guardas un enlace nuevo, se descarta el archivo."
     },
     "hoursHint": "Hora local del negocio, en formato 24 h.",
     "open": "abierto",
@@ -437,6 +438,18 @@
       "handle": "Solo letras, números, punto y guion bajo",
       "time": "Hora no válida (HH:MM)",
       "closeAfterOpen": "El cierre debe ser posterior a la apertura"
+    },
+    "logo": {
+      "label": "Logotipo",
+      "alt": "Logotipo del negocio",
+      "upload": "Subir logo",
+      "replace": "Cambiar logo",
+      "remove": "Quitar",
+      "help": "PNG, JPEG o WebP, hasta 512 KB.",
+      "badType": "El logo debe ser PNG, JPEG o WebP.",
+      "tooBig": "El logo no puede pesar más de 512 KB.",
+      "uploadedOk": "Logo actualizado",
+      "removedOk": "Logo eliminado"
     }
   },
   "platform": {
@@ -544,6 +557,63 @@
       "ok": "Funciona",
       "down": "Con problemas",
       "latency": "Latencia: {ms} ms"
+    },
+    "security": {
+      "title": "Seguridad",
+      "subtitle": "Aislamiento entre tenants, rol de la base de datos y configuración.",
+      "refresh": "Actualizar",
+      "summary": "{fails} fallo(s) y {warns} aviso(s) · entorno {env}",
+      "status": {
+        "ok": "Correcto",
+        "warn": "Revisar",
+        "fail": "Corregir"
+      },
+      "checks": {
+        "environment": {
+          "label": "Entorno",
+          "help": "No es producción: revisa que esto sea lo esperado."
+        },
+        "jwt_lifetime": {
+          "label": "Duración del token de acceso",
+          "help": "Es larga: un token robado vale más tiempo. Se recomienda 60 minutos o menos."
+        },
+        "cors": {
+          "label": "Orígenes permitidos (CORS)",
+          "help": "Hay un comodín o un origen local en producción. Limita CORS_ORIGINS a tus dominios."
+        },
+        "webhook_secrets": {
+          "label": "Secretos de webhooks",
+          "help": "Faltan secretos de los canales que se listan abajo: sin ellos no se puede validar quién envía los webhooks."
+        },
+        "onboarding_proxy_hops": {
+          "label": "IP del cliente en el registro público",
+          "help": "Con TRUSTED_PROXY_HOPS=0 detrás de un proxy, todos comparten la misma IP y el límite no distingue a nadie."
+        },
+        "onboarding_smtp": {
+          "label": "Correo de verificación",
+          "help": "El registro público está activo pero el SMTP no está configurado: no se enviarán los enlaces."
+        },
+        "onboarding_disabled": {
+          "label": "Registro público",
+          "help": "El registro público está desactivado."
+        },
+        "rls_tables": {
+          "label": "RLS en tablas con tenant",
+          "help": "Hay tablas con client_id sin RLS habilitada y forzada. Corrige la migración."
+        },
+        "db_role_rls": {
+          "label": "Rol de la base de datos sujeto a RLS",
+          "help": "El rol con el que corre la API salta RLS (superuser o BYPASSRLS): el aislamiento entre tenants no se aplica. Usa un rol sin esos privilegios."
+        }
+      },
+      "rls": {
+        "title": "Row Level Security por tabla",
+        "description": "{count} tablas con aislamiento por tenant.",
+        "unprotected": "Sin protección completa: {tables}",
+        "forced": "Forzada",
+        "notForced": "Sin FORCE",
+        "off": "Desactivada"
+      }
     }
   },
   "onboarding": {
@@ -607,6 +677,13 @@
     "successDesc": "Gracias, ya hemos confirmado tu dirección.",
     "failedTitle": "Enlace no válido",
     "failedDesc": "El enlace es incorrecto o ha caducado. Inicia sesión para pedir uno nuevo.",
-    "goToApp": "Ir a la aplicación"
+    "goToApp": "Ir a la aplicación",
+    "banner": {
+      "message": "Verifica tu correo ({email}) con el enlace que te enviamos.",
+      "resend": "Reenviar enlace",
+      "sent": "Enlace enviado a {email}",
+      "tooMany": "Has pedido demasiados reenvíos. Inténtalo más tarde.",
+      "dismiss": "Cerrar aviso"
+    }
   }
 }

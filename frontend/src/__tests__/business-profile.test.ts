@@ -22,6 +22,7 @@ const perfil = (over: Partial<BusinessProfile> = {}): BusinessProfile => ({
   primary_color: "#1d4ed8",
   secondary_color: null,
   logo_url: null,
+  logo_uploaded: false,
   welcome_message: "Hola",
   handoff_message: null,
   has_agent: true,

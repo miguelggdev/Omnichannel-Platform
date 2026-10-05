@@ -88,3 +88,24 @@ export interface SystemStatus {
   environment: string;
   components: ComponentStatus[];
 }
+
+export type SecurityStatus = "ok" | "warn" | "fail";
+
+export interface SecurityCheck {
+  id: string;
+  status: SecurityStatus;
+  detail: string | null;
+}
+
+export interface RlsTableStatus {
+  name: string;
+  rls_enabled: boolean;
+  rls_forced: boolean;
+}
+
+export interface SecurityOverview {
+  environment: string;
+  checks: SecurityCheck[];
+  rls_tables: RlsTableStatus[];
+  rls_unprotected: string[];
+}

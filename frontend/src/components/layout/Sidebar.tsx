@@ -11,6 +11,7 @@ import {
   Home,
   MessageSquare,
   Settings,
+  ShieldCheck,
   Users,
   UsersRound,
   Zap,
@@ -41,7 +42,8 @@ interface NavItem {
     | "sandbox"
     | "platformClients"
     | "platformCelery"
-    | "platformSystem";
+    | "platformSystem"
+    | "platformSecurity";
   minRole?: UserRole;
 }
 
@@ -62,6 +64,7 @@ const PLATFORM: NavItem[] = [
   { href: "/platform/clients", icon: Building, labelKey: "platformClients", minRole: "super_admin" },
   { href: "/platform/celery", icon: Cpu, labelKey: "platformCelery", minRole: "super_admin" },
   { href: "/platform/system", icon: Activity, labelKey: "platformSystem", minRole: "super_admin" },
+  { href: "/platform/security", icon: ShieldCheck, labelKey: "platformSecurity", minRole: "super_admin" },
 ];
 
 function isActive(pathname: string, href: string): boolean {
