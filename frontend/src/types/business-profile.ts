@@ -27,6 +27,8 @@ export interface BusinessProfile {
   primary_color: string | null;
   secondary_color: string | null;
   logo_url: string | null;
+  /** Hay un logo subido (se descarga de `GET /admin/business-profile/logo`); manda sobre `logo_url`. */
+  logo_uploaded: boolean;
   welcome_message: string | null;
   handoff_message: string | null;
   has_agent: boolean;
@@ -34,7 +36,7 @@ export interface BusinessProfile {
 
 /** Cuerpo de `PUT`: solo viaja lo que cambia; `null` borra un campo. */
 export type BusinessProfileUpdate = Partial<
-  Omit<BusinessProfile, "social_media" | "operating_hours" | "has_agent">
+  Omit<BusinessProfile, "social_media" | "operating_hours" | "has_agent" | "logo_uploaded">
 > & {
   social_media?: Partial<Record<SocialNetwork, string | null>>;
   operating_hours?: Partial<Record<Day, DaySchedule>>;

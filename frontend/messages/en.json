@@ -401,7 +401,7 @@
     "hints": {
       "country": "Two-letter code, e.g. CO",
       "timezone": "IANA name, e.g. America/Bogota",
-      "logo": "An https link to an image. File upload will arrive once storage is configured."
+      "logo": "HTTPS link to an image. If you upload a file this link is no longer used; if you save a new link the file is discarded."
     },
     "hoursHint": "Local business time, 24-hour format.",
     "open": "open",
@@ -438,6 +438,18 @@
       "handle": "Letters, numbers, dot and underscore only",
       "time": "Invalid time (HH:MM)",
       "closeAfterOpen": "Closing must be after opening"
+    },
+    "logo": {
+      "label": "Logo",
+      "alt": "Business logo",
+      "upload": "Upload logo",
+      "replace": "Change logo",
+      "remove": "Remove",
+      "help": "PNG, JPEG or WebP, up to 512 KB.",
+      "badType": "The logo must be PNG, JPEG or WebP.",
+      "tooBig": "The logo cannot exceed 512 KB.",
+      "uploadedOk": "Logo updated",
+      "removedOk": "Logo removed"
     }
   },
   "platform": {

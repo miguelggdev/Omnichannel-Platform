@@ -401,7 +401,7 @@
     "hints": {
       "country": "Codice di due lettere, ad es. CO",
       "timezone": "Nome IANA, ad es. America/Bogota",
-      "logo": "Un link https a un'immagine. Il caricamento di file arriverà quando lo storage sarà configurato."
+      "logo": "Link https a un'immagine. Se carichi un file questo link non viene più usato; se salvi un nuovo link il file viene scartato."
     },
     "hoursHint": "Ora locale dell'attività, formato 24 h.",
     "open": "aperto",
@@ -438,6 +438,18 @@
       "handle": "Solo lettere, numeri, punto e trattino basso",
       "time": "Ora non valida (HH:MM)",
       "closeAfterOpen": "La chiusura deve essere successiva all'apertura"
+    },
+    "logo": {
+      "label": "Logo",
+      "alt": "Logo dell'attività",
+      "upload": "Carica logo",
+      "replace": "Cambia logo",
+      "remove": "Rimuovi",
+      "help": "PNG, JPEG o WebP, fino a 512 KB.",
+      "badType": "Il logo deve essere PNG, JPEG o WebP.",
+      "tooBig": "Il logo non può superare 512 KB.",
+      "uploadedOk": "Logo aggiornato",
+      "removedOk": "Logo rimosso"
     }
   },
   "platform": {

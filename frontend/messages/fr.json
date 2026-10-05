@@ -401,7 +401,7 @@
     "hints": {
       "country": "Code à deux lettres, par ex. CO",
       "timezone": "Nom IANA, par ex. America/Bogota",
-      "logo": "Un lien https vers une image. L'envoi de fichiers viendra quand le stockage sera configuré."
+      "logo": "Lien https vers une image. Si vous téléversez un fichier, ce lien n'est plus utilisé ; si vous enregistrez un nouveau lien, le fichier est supprimé."
     },
     "hoursHint": "Heure locale de l'entreprise, format 24 h.",
     "open": "ouvert",
@@ -438,6 +438,18 @@
       "handle": "Lettres, chiffres, point et tiret bas uniquement",
       "time": "Heure invalide (HH:MM)",
       "closeAfterOpen": "La fermeture doit suivre l'ouverture"
+    },
+    "logo": {
+      "label": "Logo",
+      "alt": "Logo de l'entreprise",
+      "upload": "Téléverser le logo",
+      "replace": "Changer le logo",
+      "remove": "Retirer",
+      "help": "PNG, JPEG ou WebP, jusqu'à 512 Ko.",
+      "badType": "Le logo doit être au format PNG, JPEG ou WebP.",
+      "tooBig": "Le logo ne peut pas dépasser 512 Ko.",
+      "uploadedOk": "Logo mis à jour",
+      "removedOk": "Logo supprimé"
     }
   },
   "platform": {

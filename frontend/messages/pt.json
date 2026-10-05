@@ -401,7 +401,7 @@
     "hints": {
       "country": "Código de duas letras, por exemplo CO",
       "timezone": "Nome IANA, por exemplo America/Bogota",
-      "logo": "Ligação https para uma imagem. O carregamento de ficheiros chegará quando houver armazenamento configurado."
+      "logo": "Ligação https para uma imagem. Se carregar um ficheiro, esta ligação deixa de ser usada; se guardar uma nova ligação, o ficheiro é descartado."
     },
     "hoursHint": "Hora local do negócio, em formato 24 h.",
     "open": "aberto",
@@ -438,6 +438,18 @@
       "handle": "Apenas letras, números, ponto e sublinhado",
       "time": "Hora inválida (HH:MM)",
       "closeAfterOpen": "O fecho deve ser posterior à abertura"
+    },
+    "logo": {
+      "label": "Logótipo",
+      "alt": "Logótipo do negócio",
+      "upload": "Carregar logótipo",
+      "replace": "Alterar logótipo",
+      "remove": "Remover",
+      "help": "PNG, JPEG ou WebP, até 512 KB.",
+      "badType": "O logótipo deve ser PNG, JPEG ou WebP.",
+      "tooBig": "O logótipo não pode exceder 512 KB.",
+      "uploadedOk": "Logótipo atualizado",
+      "removedOk": "Logótipo removido"
     }
   },
   "platform": {
