@@ -2,6 +2,9 @@
 
 GET /api/v1/admin/business-profile   el perfil completo
 PUT /api/v1/admin/business-profile   cambia los campos que se envien
+POST   /api/v1/admin/business-profile/logo   sube el logo (png, jpeg o webp, hasta 512 KB)
+GET    /api/v1/admin/business-profile/logo   descarga el logo subido
+DELETE /api/v1/admin/business-profile/logo   lo quita
 
 Donde vive cada cosa (sin migracion, todo en columnas que ya existen):
 
@@ -11,6 +14,13 @@ Donde vive cada cosa (sin migracion, todo en columnas que ya existen):
 - `welcome_message` y
   `handoff_message`          -> el `agent_configs` activo, que es el que lee el asistente
 
+El logo subido va a Storage (`{client_id}/branding/logo-<id>.<ext>`) y su ruta a
+`theme_config["logo_path"]`. Decisiones: el tipo se decide por los **bytes** (firma del archivo),
+no por el `Content-Type` ni la extension que declara el cliente; **no se admite SVG** (puede
+llevar scripts y se sirve desde nuestro origen); cada subida usa una ruta nueva y borra la
+anterior despues de guardar (Storage rechaza sobrescribir un objeto); la descarga pasa por la API
+(autenticada y con `nosniff`) porque el bucket es privado.
+
 De todo esto el asistente solo **usa** hoy los dos mensajes. El horario, los datos de
 contacto y los colores se guardan para que otras funciones (fuera de horario, el widget, la
 marca del panel) los lean; hasta entonces no cambian el comportamiento de la plataforma.
@@ -18,13 +28,20 @@ marca del panel) los lean; hasta entonces no cambian el comportamiento de la pla
 
 import logging
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Response, UploadFile
 from sqlalchemy import select
 
 from app.core.database import tenant_session
 from app.core.dependencies import require_role
-from app.core.exceptions import CONFLICT, NOT_FOUND, AppException
+from app.core.exceptions import (
+    CONFLICT,
+    DELIVERY_FAILED,
+    NOT_FOUND,
+    VALIDATION_ERROR,
+    AppException,
+)
 from app.models.agent_config import AgentConfig
 from app.models.client import Client
 from app.schemas.business_profile import (
@@ -33,6 +50,12 @@ from app.schemas.business_profile import (
     BusinessProfileUpdate,
     DaySchedule,
     _horario_por_defecto,
+)
+from app.services.storage import (
+    StorageError,
+    delete_from_storage,
+    download_from_storage,
+    upload_to_storage,
 )
 
 if TYPE_CHECKING:
@@ -59,6 +82,10 @@ _CAMPOS_DE_PERFIL = (
 )
 _CAMPOS_DE_TEMA = ("primary_color", "secondary_color", "logo_url")
 _CAMPOS_DE_AGENTE = ("welcome_message", "handoff_message")
+
+LOGO_MAX_BYTES = 512 * 1024
+# Firma del archivo -> (extension, MIME). Solo formatos raster: SVG puede ejecutar scripts.
+_PNG = b"\x89PNG\r\n\x1a\n"
 
 
 async def _agente_activo(session: Any) -> AgentConfig | None:
@@ -88,11 +115,30 @@ def _componer(cliente: Client, agente: AgentConfig | None) -> BusinessProfile:
         social_media=perfil.get("social_media") or {},
         operating_hours=horario,
         has_agent=agente is not None,
+        logo_uploaded=bool(tema.get("logo_path")),
         welcome_message=agente.welcome_message if agente else None,
         handoff_message=agente.handoff_message if agente else None,
         **{campo: perfil.get(campo) for campo in _CAMPOS_DE_PERFIL},
         **{campo: tema.get(campo) for campo in _CAMPOS_DE_TEMA},
     )
+
+
+def detectar_imagen(contenido: bytes) -> tuple[str, str] | None:
+    """Reconoce png, jpeg o webp por su firma, ignorando lo que declare el cliente.
+
+    Args:
+        contenido: Bytes del archivo subido.
+
+    Returns:
+        `(extension, mime)` o `None` si no es uno de los formatos admitidos.
+    """
+    if contenido.startswith(_PNG):
+        return "png", "image/png"
+    if contenido.startswith(b"\xff\xd8\xff"):
+        return "jpg", "image/jpeg"
+    if contenido[:4] == b"RIFF" and contenido[8:12] == b"WEBP":
+        return "webp", "image/webp"
+    return None
 
 
 async def _cargar_cliente(session: Any, client_id: "UUID") -> Client:
@@ -195,6 +241,11 @@ async def update_business_profile(
         for campo in _CAMPOS_DE_TEMA:
             if campo in enviados:
                 tema[campo] = cambios[campo]
+        logo_a_borrar: str | None = None
+        if cambios.get("logo_url") and tema.get("logo_path"):
+            # Una sola fuente de logo: poner una URL externa descarta el archivo subido.
+            logo_a_borrar = tema.pop("logo_path")
+            tema.pop("logo_content_type", None)
         cliente.theme_config = {k: v for k, v in tema.items() if v is not None}
 
         if agente is not None:
@@ -205,10 +256,139 @@ async def update_business_profile(
         await session.flush()
         respuesta = _componer(cliente, agente)
 
+    if logo_a_borrar:
+        await delete_from_storage(logo_a_borrar)
     logger.info(
         "Perfil del negocio %s modificado por %s: campos=%s",
         client_id,
         user.get("user_id"),
         sorted(enviados),
     )
+    return respuesta
+
+
+@router.post("/logo", response_model=BusinessProfile)
+async def upload_logo(
+    file: UploadFile = File(...),
+    user: dict[str, Any] = Depends(require_role(*_ROLES)),
+) -> BusinessProfile:
+    """Sube el logo del negocio y devuelve el perfil actualizado.
+
+    Args:
+        file: Imagen png, jpeg o webp de hasta 512 KB.
+        user: Usuario autenticado; solo admin o super_admin.
+
+    Returns:
+        El perfil, con `logo_uploaded=true`.
+
+    Raises:
+        AppException: 413 si pesa mas de 512 KB; 415 si no es png, jpeg ni webp; 400 si esta
+            vacio; 502 si Storage falla.
+    """
+    contenido = await file.read(LOGO_MAX_BYTES + 1)
+    if not contenido:
+        raise AppException(status_code=400, error_code=VALIDATION_ERROR, message="Archivo vacío")
+    if len(contenido) > LOGO_MAX_BYTES:
+        raise AppException(
+            status_code=413,
+            error_code=VALIDATION_ERROR,
+            message=f"El logo no puede pesar más de {LOGO_MAX_BYTES // 1024} KB",
+        )
+    tipo = detectar_imagen(contenido)
+    if tipo is None:
+        raise AppException(
+            status_code=415,
+            error_code=VALIDATION_ERROR,
+            message="El logo debe ser una imagen PNG, JPEG o WebP",
+        )
+    extension, mime = tipo
+
+    client_id: UUID = user["client_id"]
+    ruta = f"{client_id}/branding/logo-{uuid4().hex[:12]}.{extension}"
+    try:
+        await upload_to_storage(ruta, contenido, mime)
+    except StorageError as exc:
+        raise AppException(
+            status_code=502, error_code=DELIVERY_FAILED, message="No se pudo guardar el logo"
+        ) from exc
+
+    anterior: str | None = None
+    try:
+        async with tenant_session(client_id) as session:
+            cliente = await _cargar_cliente(session, client_id)
+            agente = await _agente_activo(session)
+            tema = dict(cliente.theme_config or {})
+            anterior = tema.get("logo_path")
+            tema["logo_path"] = ruta
+            tema["logo_content_type"] = mime
+            # Una sola fuente de logo: el archivo subido sustituye a la URL externa.
+            tema.pop("logo_url", None)
+            cliente.theme_config = tema
+            await session.flush()
+            respuesta = _componer(cliente, agente)
+    except Exception:
+        # El archivo ya esta en Storage pero nada lo referencia: no se deja huerfano.
+        await delete_from_storage(ruta)
+        raise
+
+    if anterior:
+        await delete_from_storage(anterior)
+    logger.info("Logo del negocio %s subido por %s", client_id, user.get("user_id"))
+    return respuesta
+
+
+@router.get("/logo")
+async def get_logo(user: dict[str, Any] = Depends(require_role(*_ROLES))) -> Response:
+    """Descarga el logo subido.
+
+    Args:
+        user: Usuario autenticado; solo admin o super_admin.
+
+    Returns:
+        Los bytes de la imagen, con su tipo y sin dejar que el navegador adivine otro.
+
+    Raises:
+        AppException: 404 si no hay logo subido; 502 si Storage falla.
+    """
+    client_id: UUID = user["client_id"]
+    async with tenant_session(client_id) as session:
+        tema = dict((await _cargar_cliente(session, client_id)).theme_config or {})
+    ruta = tema.get("logo_path")
+    if not ruta:
+        raise AppException(status_code=404, error_code=NOT_FOUND, message="No hay logo subido")
+    try:
+        contenido = await download_from_storage(ruta)
+    except StorageError as exc:
+        raise AppException(
+            status_code=502, error_code=DELIVERY_FAILED, message="No se pudo leer el logo"
+        ) from exc
+    return Response(
+        content=contenido,
+        media_type=tema.get("logo_content_type", "application/octet-stream"),
+        headers={"Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.delete("/logo", response_model=BusinessProfile)
+async def delete_logo(user: dict[str, Any] = Depends(require_role(*_ROLES))) -> BusinessProfile:
+    """Quita el logo subido.
+
+    Args:
+        user: Usuario autenticado; solo admin o super_admin.
+
+    Returns:
+        El perfil actualizado (sin error si no habia logo).
+    """
+    client_id: UUID = user["client_id"]
+    async with tenant_session(client_id) as session:
+        cliente = await _cargar_cliente(session, client_id)
+        agente = await _agente_activo(session)
+        tema = dict(cliente.theme_config or {})
+        ruta = tema.pop("logo_path", None)
+        tema.pop("logo_content_type", None)
+        cliente.theme_config = tema
+        await session.flush()
+        respuesta = _componer(cliente, agente)
+    if ruta:
+        await delete_from_storage(ruta)
     return respuesta

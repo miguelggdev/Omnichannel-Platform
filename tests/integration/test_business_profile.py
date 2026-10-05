@@ -6,6 +6,8 @@ acabe en su columna (`clients.name`, `theme_config`, `settings`, `agent_configs`
 JSONB conserve lo que no se envia y que RLS impida tocar el negocio de otro tenant.
 """
 
+import copy
+import uuid
 from typing import Any
 
 import pytest
@@ -238,3 +240,185 @@ async def test_un_tenant_no_toca_el_negocio_de_otro(
 
     assert pb["business_name"] != "Solo de A"
     assert pb["city"] is None
+
+
+# ── logo subido ─────────────────────────────────────────────────────────────────────────────
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"logo-uno" * 10
+JPG = b"\xff\xd8\xff\xe0" + b"logo-dos" * 10
+LOGO = f"{URL}/logo"
+
+
+@pytest.fixture
+def storage(monkeypatch: pytest.MonkeyPatch) -> dict[str, bytes]:
+    """Storage en memoria: lo que hay en el 'bucket' tras cada operacion."""
+    objetos: dict[str, bytes] = {}
+
+    async def subir(ruta: str, contenido: bytes, content_type: str) -> str:
+        if ruta in objetos:  # Storage real rechaza sobrescribir
+            raise RuntimeError("ya existe")
+        objetos[ruta] = contenido
+        return ruta
+
+    async def bajar(ruta: str) -> bytes:
+        return objetos[ruta]
+
+    async def borrar(ruta: str) -> bool:
+        return objetos.pop(ruta, None) is not None
+
+    base = "app.api.v1.business_profile"
+    monkeypatch.setattr(f"{base}.upload_to_storage", subir)
+    monkeypatch.setattr(f"{base}.download_from_storage", bajar)
+    monkeypatch.setattr(f"{base}.delete_from_storage", borrar)
+    return objetos
+
+
+def _archivo(contenido: bytes, nombre: str = "logo.png", mime: str = "image/png") -> dict[str, Any]:
+    return {"file": (nombre, contenido, mime)}
+
+
+async def test_subir_logo_lo_guarda_bajo_el_prefijo_del_tenant_y_se_descarga(
+    escenario: Escenario, storage: dict[str, bytes]
+) -> None:
+    async with _cliente(escenario, role="admin") as c:
+        r = await c.post(LOGO, files=_archivo(PNG))
+        assert r.status_code == 200, r.text
+        assert r.json()["logo_uploaded"] is True
+
+        (ruta,) = storage
+        assert ruta.startswith(f"{escenario.client_id}/branding/logo-")
+        assert ruta.endswith(".png")
+        fila = await _fila(escenario, "SELECT theme_config AS t FROM clients WHERE id = :cid")
+        assert fila["t"]["logo_path"] == ruta
+        assert fila["t"]["logo_content_type"] == "image/png"
+
+        d = await c.get(LOGO)
+        assert d.status_code == 200
+        assert d.content == PNG
+        assert d.headers["content-type"] == "image/png"
+        assert d.headers["x-content-type-options"] == "nosniff"
+
+
+async def test_reemplazar_el_logo_borra_el_anterior(
+    escenario: Escenario, storage: dict[str, bytes]
+) -> None:
+    async with _cliente(escenario, role="admin") as c:
+        await c.post(LOGO, files=_archivo(PNG))
+        (primera,) = storage
+        r = await c.post(LOGO, files=_archivo(JPG, "x.jpg", "image/jpeg"))
+        assert r.status_code == 200
+        assert len(storage) == 1
+        assert primera not in storage
+        (segunda,) = storage
+        assert segunda.endswith(".jpg")
+        assert (await c.get(LOGO)).content == JPG
+
+
+async def test_el_tipo_lo_decide_el_contenido_no_el_content_type(
+    escenario: Escenario, storage: dict[str, bytes]
+) -> None:
+    async with _cliente(escenario, role="admin") as c:
+        html = await c.post(
+            LOGO, files=_archivo(b"<html><script>alert(1)</script></html>", "logo.png", "image/png")
+        )
+        svg = await c.post(
+            LOGO, files=_archivo(b"<svg><script>1</script></svg>", "logo.svg", "image/svg+xml")
+        )
+        vacio = await c.post(LOGO, files=_archivo(b""))
+    assert (html.status_code, svg.status_code, vacio.status_code) == (415, 415, 400)
+    assert storage == {}
+
+
+async def test_un_logo_de_mas_de_512_kb_es_413_y_no_llega_a_storage(
+    escenario: Escenario, storage: dict[str, bytes]
+) -> None:
+    async with _cliente(escenario, role="admin") as c:
+        r = await c.post(LOGO, files=_archivo(PNG + b"\x00" * (512 * 1024)))
+        justo = await c.post(LOGO, files=_archivo(PNG + b"\x00" * (512 * 1024 - len(PNG))))
+    assert r.status_code == 413
+    assert justo.status_code == 200
+    assert len(storage) == 1
+
+
+async def test_poner_una_url_externa_descarta_el_archivo_subido(
+    escenario: Escenario, storage: dict[str, bytes]
+) -> None:
+    async with _cliente(escenario, role="admin") as c:
+        await c.post(LOGO, files=_archivo(PNG))
+        r = await c.put(URL, json={"logo_url": "https://cdn.example.com/logo.png"})
+        assert r.status_code == 200, r.text
+        assert r.json()["logo_uploaded"] is False
+        assert r.json()["logo_url"] == "https://cdn.example.com/logo.png"
+        assert storage == {}
+        assert (await c.get(LOGO)).status_code == 404
+
+
+async def test_subir_un_logo_sustituye_a_la_url_externa(
+    escenario: Escenario, storage: dict[str, bytes]
+) -> None:
+    async with _cliente(escenario, role="admin") as c:
+        await c.put(URL, json={"logo_url": "https://cdn.example.com/logo.png"})
+        r = await c.post(LOGO, files=_archivo(PNG))
+    assert r.json()["logo_url"] is None
+    assert r.json()["logo_uploaded"] is True
+
+
+async def test_otro_campo_del_perfil_no_borra_el_logo_subido(
+    escenario: Escenario, storage: dict[str, bytes]
+) -> None:
+    async with _cliente(escenario, role="admin") as c:
+        await c.post(LOGO, files=_archivo(PNG))
+        r = await c.put(URL, json={"primary_color": "#112233"})
+        assert r.json()["logo_uploaded"] is True
+        assert (await c.get(LOGO)).content == PNG
+
+
+async def test_quitar_el_logo_lo_borra_de_storage_y_es_idempotente(
+    escenario: Escenario, storage: dict[str, bytes]
+) -> None:
+    async with _cliente(escenario, role="admin") as c:
+        await c.post(LOGO, files=_archivo(PNG))
+        r = await c.delete(LOGO)
+        assert r.status_code == 200
+        assert r.json()["logo_uploaded"] is False
+        assert storage == {}
+        assert (await c.delete(LOGO)).status_code == 200
+        assert (await c.get(LOGO)).status_code == 404
+
+
+async def test_cada_tenant_solo_ve_su_logo(
+    dos_tenants: tuple[Escenario, Escenario], storage: dict[str, bytes]
+) -> None:
+    a, b = dos_tenants
+    async with _cliente(a, role="admin") as ca, _cliente(b, role="admin") as cb:
+        await ca.post(LOGO, files=_archivo(PNG))
+        assert (await cb.get(LOGO)).status_code == 404
+        assert (await cb.get(URL)).json()["logo_uploaded"] is False
+        await cb.post(LOGO, files=_archivo(JPG, "b.jpg", "image/jpeg"))
+        assert (await ca.get(LOGO)).content == PNG
+        assert (await cb.get(LOGO)).content == JPG
+        rutas = sorted(storage)
+        assert rutas[0].startswith(str(min(a.client_id, b.client_id)))  # un prefijo por tenant
+
+
+@pytest.mark.parametrize("role", ["supervisor", "agent", "medical"])
+async def test_solo_admin_toca_el_logo(
+    escenario: Escenario, storage: dict[str, bytes], role: str
+) -> None:
+    async with _cliente(escenario, role=role) as c:
+        assert (await c.post(LOGO, files=_archivo(PNG))).status_code == 403
+        assert (await c.get(LOGO)).status_code == 403
+        assert (await c.delete(LOGO)).status_code == 403
+    assert storage == {}
+
+
+async def test_si_falla_guardar_la_referencia_no_queda_un_archivo_huerfano(
+    escenario: Escenario, storage: dict[str, bytes]
+) -> None:
+    # Token de un tenant que no existe: la subida a Storage ocurre antes de descubrirlo.
+    fantasma = copy.copy(escenario)
+    fantasma.client_id = uuid.uuid4()
+    async with _cliente(fantasma, role="admin") as c:
+        r = await c.post(LOGO, files=_archivo(PNG))
+    assert r.status_code == 404
+    assert storage == {}
