@@ -59,7 +59,8 @@
     "platform": "Plataforma",
     "platformClients": "Clientes",
     "platformCelery": "Celery e Redis",
-    "platformSystem": "Sistema"
+    "platformSystem": "Sistema",
+    "platformSecurity": "Segurança"
   },
   "roles": {
     "super_admin": "Super administrador",
@@ -544,6 +545,63 @@
       "ok": "A funcionar",
       "down": "Com problemas",
       "latency": "Latência: {ms} ms"
+    },
+    "security": {
+      "title": "Segurança",
+      "subtitle": "Isolamento entre tenants, papel da base de dados e configuração.",
+      "refresh": "Atualizar",
+      "summary": "{fails} falha(s) e {warns} aviso(s) · ambiente {env}",
+      "status": {
+        "ok": "Correto",
+        "warn": "Rever",
+        "fail": "Corrigir"
+      },
+      "checks": {
+        "environment": {
+          "label": "Ambiente",
+          "help": "Não é produção: confirme que é o esperado."
+        },
+        "jwt_lifetime": {
+          "label": "Duração do token de acesso",
+          "help": "É longa: um token roubado vale por mais tempo. Recomendam-se 60 minutos ou menos."
+        },
+        "cors": {
+          "label": "Origens permitidas (CORS)",
+          "help": "Há um curinga ou uma origem local em produção. Limite CORS_ORIGINS aos seus domínios."
+        },
+        "webhook_secrets": {
+          "label": "Segredos de webhooks",
+          "help": "Faltam segredos dos canais listados abaixo: sem eles não é possível validar quem envia os webhooks."
+        },
+        "onboarding_proxy_hops": {
+          "label": "IP do cliente no registo público",
+          "help": "Com TRUSTED_PROXY_HOPS=0 atrás de um proxy, todos partilham o mesmo IP e o limite não distingue ninguém."
+        },
+        "onboarding_smtp": {
+          "label": "E-mail de verificação",
+          "help": "O registo público está ativo mas o SMTP não está configurado: as ligações não serão enviadas."
+        },
+        "onboarding_disabled": {
+          "label": "Registo público",
+          "help": "O registo público está desativado."
+        },
+        "rls_tables": {
+          "label": "RLS nas tabelas com tenant",
+          "help": "Há tabelas com client_id sem RLS ativada e forçada. Corrija a migração."
+        },
+        "db_role_rls": {
+          "label": "Papel da base de dados sujeito a RLS",
+          "help": "O papel com que a API corre ignora a RLS (superuser ou BYPASSRLS): o isolamento entre tenants não se aplica. Use um papel sem esses privilégios."
+        }
+      },
+      "rls": {
+        "title": "Row Level Security por tabela",
+        "description": "{count} tabelas com isolamento por tenant.",
+        "unprotected": "Sem proteção completa: {tables}",
+        "forced": "Forçada",
+        "notForced": "Sem FORCE",
+        "off": "Desativada"
+      }
     }
   },
   "onboarding": {

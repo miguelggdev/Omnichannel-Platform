@@ -59,7 +59,8 @@
     "platform": "Plattform",
     "platformClients": "Kunden",
     "platformCelery": "Celery & Redis",
-    "platformSystem": "System"
+    "platformSystem": "System",
+    "platformSecurity": "Sicherheit"
   },
   "roles": {
     "super_admin": "Super-Admin",
@@ -544,6 +545,63 @@
       "ok": "Funktioniert",
       "down": "Probleme",
       "latency": "Latenz: {ms} ms"
+    },
+    "security": {
+      "title": "Sicherheit",
+      "subtitle": "Mandantentrennung, Datenbankrolle und Konfiguration.",
+      "refresh": "Aktualisieren",
+      "summary": "{fails} Fehler und {warns} Warnung(en) · Umgebung {env}",
+      "status": {
+        "ok": "In Ordnung",
+        "warn": "Prüfen",
+        "fail": "Beheben"
+      },
+      "checks": {
+        "environment": {
+          "label": "Umgebung",
+          "help": "Keine Produktion: Prüfen Sie, ob das beabsichtigt ist."
+        },
+        "jwt_lifetime": {
+          "label": "Gültigkeit des Zugriffstokens",
+          "help": "Sie ist lang: Ein gestohlenes Token bleibt länger gültig. Empfohlen sind höchstens 60 Minuten."
+        },
+        "cors": {
+          "label": "Erlaubte Ursprünge (CORS)",
+          "help": "In der Produktion gibt es einen Platzhalter oder einen lokalen Ursprung. Beschränken Sie CORS_ORIGINS auf Ihre Domains."
+        },
+        "webhook_secrets": {
+          "label": "Webhook-Geheimnisse",
+          "help": "Für die unten genannten Kanäle fehlen Geheimnisse: Ohne sie lassen sich Webhook-Absender nicht prüfen."
+        },
+        "onboarding_proxy_hops": {
+          "label": "Client-IP bei öffentlicher Registrierung",
+          "help": "Mit TRUSTED_PROXY_HOPS=0 hinter einem Proxy teilen alle dieselbe IP und das Limit kann niemanden unterscheiden."
+        },
+        "onboarding_smtp": {
+          "label": "Bestätigungs-E-Mail",
+          "help": "Die öffentliche Registrierung ist aktiv, aber SMTP ist nicht konfiguriert: Links werden nicht versendet."
+        },
+        "onboarding_disabled": {
+          "label": "Öffentliche Registrierung",
+          "help": "Die öffentliche Registrierung ist deaktiviert."
+        },
+        "rls_tables": {
+          "label": "RLS bei Mandantentabellen",
+          "help": "Einige Tabellen mit client_id haben keine aktivierte und erzwungene RLS. Korrigieren Sie die Migration."
+        },
+        "db_role_rls": {
+          "label": "Datenbankrolle unterliegt RLS",
+          "help": "Die Rolle, mit der die API läuft, umgeht RLS (Superuser oder BYPASSRLS): Die Mandantentrennung greift nicht. Verwenden Sie eine Rolle ohne diese Rechte."
+        }
+      },
+      "rls": {
+        "title": "Row Level Security pro Tabelle",
+        "description": "{count} Tabellen mit Mandantentrennung.",
+        "unprotected": "Nicht vollständig geschützt: {tables}",
+        "forced": "Erzwungen",
+        "notForced": "Ohne FORCE",
+        "off": "Deaktiviert"
+      }
     }
   },
   "onboarding": {

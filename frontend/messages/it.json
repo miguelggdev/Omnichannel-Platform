@@ -59,7 +59,8 @@
     "platform": "Piattaforma",
     "platformClients": "Clienti",
     "platformCelery": "Celery e Redis",
-    "platformSystem": "Sistema"
+    "platformSystem": "Sistema",
+    "platformSecurity": "Sicurezza"
   },
   "roles": {
     "super_admin": "Super amministratore",
@@ -544,6 +545,63 @@
       "ok": "Funzionante",
       "down": "Con problemi",
       "latency": "Latenza: {ms} ms"
+    },
+    "security": {
+      "title": "Sicurezza",
+      "subtitle": "Isolamento tra tenant, ruolo del database e configurazione.",
+      "refresh": "Aggiorna",
+      "summary": "{fails} errore/i e {warns} avviso/i · ambiente {env}",
+      "status": {
+        "ok": "Corretto",
+        "warn": "Da rivedere",
+        "fail": "Da correggere"
+      },
+      "checks": {
+        "environment": {
+          "label": "Ambiente",
+          "help": "Non è produzione: verifica che sia voluto."
+        },
+        "jwt_lifetime": {
+          "label": "Durata del token di accesso",
+          "help": "È lunga: un token rubato resta valido più a lungo. Si consigliano 60 minuti o meno."
+        },
+        "cors": {
+          "label": "Origini consentite (CORS)",
+          "help": "In produzione c’è un carattere jolly o un’origine locale. Limita CORS_ORIGINS ai tuoi domini."
+        },
+        "webhook_secrets": {
+          "label": "Segreti dei webhook",
+          "help": "Mancano i segreti dei canali elencati sotto: senza di essi non si può verificare chi invia i webhook."
+        },
+        "onboarding_proxy_hops": {
+          "label": "IP del client nella registrazione pubblica",
+          "help": "Con TRUSTED_PROXY_HOPS=0 dietro un proxy, tutti condividono lo stesso IP e il limite non distingue nessuno."
+        },
+        "onboarding_smtp": {
+          "label": "Email di verifica",
+          "help": "La registrazione pubblica è attiva ma SMTP non è configurato: i link non verranno inviati."
+        },
+        "onboarding_disabled": {
+          "label": "Registrazione pubblica",
+          "help": "La registrazione pubblica è disattivata."
+        },
+        "rls_tables": {
+          "label": "RLS sulle tabelle con tenant",
+          "help": "Alcune tabelle con client_id non hanno RLS abilitata e forzata. Correggi la migrazione."
+        },
+        "db_role_rls": {
+          "label": "Ruolo del database soggetto a RLS",
+          "help": "Il ruolo con cui gira l’API ignora la RLS (superuser o BYPASSRLS): l’isolamento tra tenant non è applicato. Usa un ruolo senza questi privilegi."
+        }
+      },
+      "rls": {
+        "title": "Row Level Security per tabella",
+        "description": "{count} tabelle con isolamento per tenant.",
+        "unprotected": "Non protette del tutto: {tables}",
+        "forced": "Forzata",
+        "notForced": "Senza FORCE",
+        "off": "Disattivata"
+      }
     }
   },
   "onboarding": {
