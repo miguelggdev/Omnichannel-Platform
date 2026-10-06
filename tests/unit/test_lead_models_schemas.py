@@ -14,6 +14,7 @@ from app.models.lead import (
     LEAD_TEMPERATURES,
     Lead,
     _sincronizar_indices_ciegos,
+    canonicalizar_linkedin,
     normalizar_telefono_de_lead,
 )
 from app.models.lead_source import LEAD_SOURCE_TYPES
@@ -213,3 +214,50 @@ class TestSchemasDeEtapasYFuentes:
         assert c.utm_source == "google"
         with pytest.raises(ValidationError):
             LeadCapture(first_name="solo nombre")
+
+
+class TestCanonizarLinkedin:
+    @pytest.mark.parametrize(
+        ("original", "esperado"),
+        [
+            ("HTTP://LinkedIn.com/in/Ana/?trk=x#y", "https://linkedin.com/in/ana"),
+            ("https://www.linkedin.com/in/ana///", "https://www.linkedin.com/in/ana"),
+            ("  https://linkedin.com/in/ana  ", "https://linkedin.com/in/ana"),
+            ("https://linkedin.com/in/ana?a=b", "https://linkedin.com/in/ana"),
+            ("", None),
+            ("   ", None),
+            (None, None),
+        ],
+    )
+    def test_canonizar(self, original: str | None, esperado: str | None) -> None:
+        assert canonicalizar_linkedin(original) == esperado
+
+    def test_el_listener_la_canoniza_al_escribir(self) -> None:
+        lead = _sincronizar(
+            Lead(client_id=TENANT_A, linkedin_url="HTTP://LinkedIn.com/in/Ana/?x=1")
+        )
+        assert lead.linkedin_url == "https://linkedin.com/in/ana"
+        assert _sincronizar(Lead(client_id=TENANT_A, linkedin_url="  ")).linkedin_url is None
+
+
+class TestInstanteMonotono:
+    def test_nunca_se_repite_ni_retrocede_aunque_el_reloj_coincida(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import datetime as dt
+
+        from app.services import lead_activity
+
+        fijo = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+
+        class RelojParado(dt.datetime):
+            @classmethod
+            def now(cls, tz: dt.tzinfo | None = None) -> "RelojParado":  # type: ignore[override]
+                return cls(2026, 1, 1, tzinfo=tz)
+
+        monkeypatch.setattr(lead_activity, "datetime", RelojParado)
+        monkeypatch.setattr(lead_activity, "_ultimo_instante", fijo - dt.timedelta(seconds=1))
+        instantes = [lead_activity._instante_monotono() for _ in range(5)]
+        assert instantes == sorted(set(instantes))
+        assert instantes[0] == fijo
+        assert instantes[4] == fijo + dt.timedelta(microseconds=4)

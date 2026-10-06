@@ -136,7 +136,7 @@ class TestImportar:
         por_fila = {e["row"]: e["error"] for e in cuerpo["errors"]}
         assert por_fila == {
             3: "email no es valido",
-            4: "ya existe un lead con ese email o telefono",
+            4: "ya existe un lead con ese email, telefono o LinkedIn",
             5: "repetida en el archivo",
             6: "phone no es valido",
             7: "falta email, telefono o LinkedIn",
@@ -242,10 +242,10 @@ class TestImportar:
     ) -> None:
         await crear_lead(crm.client_id, email="x@example.com", first_name="Original")
 
-        async def ciega(*_a: Any, **_k: Any) -> tuple[set[str], set[str]]:
-            return set(), set()
+        async def ciega(*_a: Any, **_k: Any) -> tuple[set[str], set[str], set[str]]:
+            return set(), set(), set()
 
-        monkeypatch.setattr("app.api.v1.leads._hashes_existentes", ciega)
+        monkeypatch.setattr("app.services.lead_batch._existentes", ciega)
         async with _cliente(crm, "admin") as c:
             r = await c.post(
                 IMPORTAR, files=_archivo("email\nx@example.com\ny@example.com\nz@example.com\n")

@@ -432,3 +432,16 @@ class LeadImportResponse(BaseModel):
     ignored_columns: list[str]
     dry_run: bool
     source_id: UUID | None
+
+
+class LeadActivityResponse(BaseModel):
+    """Una entrada del historial de un lead. La metadata lleva ids y slugs, no datos personales."""
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: UUID
+    activity_type: str
+    user_id: UUID | None
+    description: str | None
+    metadata: dict[str, Any] = Field(validation_alias="metadata_")
+    created_at: datetime

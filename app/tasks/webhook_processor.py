@@ -47,6 +47,7 @@ from app.models.message import Message
 from app.schemas.message import MessageTypeEnum, NormalizedMessage
 from app.services.contact_request import respuesta_del_flujo_de_telefono
 from app.services.dedup import get_redis, is_duplicate_persisted, persist_dedup
+from app.services.lead_activity import registrar_mensaje_entrante
 from app.services.phone_unification import telefono_verificado, unificar_por_telefono
 
 if TYPE_CHECKING:
@@ -454,6 +455,18 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
         )
         conversation.last_message_at = timestamp
         conversation_status = conversation.status
+
+        # Si quien escribe es un lead (`contacts.lead_id`, ya cargado con el contacto: sin
+        # consulta extra para el caso comun), su actividad cuenta. Nunca puede costar el mensaje.
+        if contact.lead_id is not None:
+            await registrar_mensaje_entrante(
+                session,
+                client_id=client_id,
+                lead_id=contact.lead_id,
+                channel=message_channel,
+                conversation_id=conversation.id,
+                instante=timestamp,
+            )
 
         await persist_dedup(client_id, message_channel, external_id, session=session)
 

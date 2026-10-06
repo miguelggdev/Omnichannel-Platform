@@ -165,3 +165,165 @@ class TestLimites:
     def test_demasiado_grande(self) -> None:
         with pytest.raises(CsvError, match="MB"):
             parsear_csv(b"email\n" + b"a" * (2 * 1024 * 1024 + 1))
+
+
+# ── Excel ─────────────────────────────────────────────────────────────────────────────────────
+
+import io  # noqa: E402
+import time  # noqa: E402
+import zipfile  # noqa: E402
+
+from openpyxl import Workbook  # noqa: E402
+
+from app.services.lead_import import (  # noqa: E402
+    MAX_COLUMNAS,
+    es_xlsx,
+    parsear_archivo,
+    parsear_xlsx,
+)
+
+
+def _xlsx(filas: list[list[object]], hoja2: list[list[object]] | None = None) -> bytes:
+    libro = Workbook()
+    hoja = libro.active
+    assert hoja is not None
+    for fila in filas:
+        hoja.append(fila)
+    if hoja2:
+        otra = libro.create_sheet("Otra")
+        for fila in hoja2:
+            otra.append(fila)
+    salida = io.BytesIO()
+    libro.save(salida)
+    return salida.getvalue()
+
+
+def _zip(entradas: dict[str, bytes]) -> bytes:
+    salida = io.BytesIO()
+    with zipfile.ZipFile(salida, "w", zipfile.ZIP_DEFLATED) as z:
+        for nombre, datos in entradas.items():
+            z.writestr(nombre, datos)
+    return salida.getvalue()
+
+
+class TestExcel:
+    def test_lee_la_primera_hoja_con_las_mismas_reglas_que_un_csv(self) -> None:
+        contenido = _xlsx(
+            [
+                ["Nombre", "Correo", "Celular", "Empresa", "Notas"],
+                ["Ana", "ana@example.com", 573001112233.0, "ACME", "x"],
+                ["Beto", "mal", None, None, None],
+            ],
+            hoja2=[["email"], ["otra-hoja@example.com"]],
+        )
+        r = parsear_xlsx(contenido)
+        assert r.columnas_ignoradas == ["Notas"]
+        assert r.filas[0].datos == {
+            "first_name": "Ana",
+            "email": "ana@example.com",
+            "phone": "573001112233",  # el numero de Excel (float) vuelve a ser texto sin ".0"
+            "company_name": "ACME",
+        }
+        assert r.filas[1].error == "email no es valido"
+        assert len(r.filas) == 2  # la segunda hoja no se lee
+
+    def test_un_texto_con_formula_es_solo_texto_y_una_formula_sin_valor_guardado_queda_vacia(
+        self,
+    ) -> None:
+        contenido = _xlsx(
+            [
+                ["email", "empresa", "cargo"],
+                ["a@example.com", "=cmd|' /C calc'!A0", "=1+1"],
+            ]
+        )
+        (fila,) = parsear_xlsx(contenido).filas
+        # openpyxl guarda "=..." como formula: sin valor cacheado no hay nada que leer, y nunca
+        # se evalua. Lo importante: no se ejecuta ni se interpreta nada.
+        assert fila.datos == {"email": "a@example.com"}
+
+    def test_fechas_y_booleanos_no_rompen(self) -> None:
+        import datetime
+
+        contenido = _xlsx(
+            [["email", "empresa", "cargo"], ["a@example.com", datetime.date(2026, 1, 2), True]]
+        )
+        (fila,) = parsear_xlsx(contenido).filas
+        assert (
+            fila.datos["company_name"] == "2026-01-02T00:00:00"
+        )  # Excel guarda las fechas como datetime
+        assert fila.datos["job_title"] == "True"
+
+    def test_se_detecta_por_los_bytes_y_no_por_el_nombre(self) -> None:
+        assert es_xlsx(_xlsx([["email"], ["a@example.com"]]))
+        assert not es_xlsx(b"email\na@example.com\n")
+        # Un CSV con extension .xlsx sigue siendo CSV, y un Excel entra aunque se llame .csv.
+        assert parsear_archivo(b"email\na@example.com\n").filas[0].datos == {
+            "email": "a@example.com"
+        }
+        assert parsear_archivo(_xlsx([["email"], ["b@example.com"]])).filas[0].datos == {
+            "email": "b@example.com"
+        }
+
+    def test_una_hoja_con_formato_hasta_el_final_no_se_lee_entera(self) -> None:
+        libro = Workbook()
+        hoja = libro.active
+        assert hoja is not None
+        hoja.append(["email"])
+        hoja.append(["a@example.com"])
+        hoja["A1048576"] = "x"  # la ultima fila posible de Excel
+        salida = io.BytesIO()
+        libro.save(salida)
+        inicio = time.monotonic()
+        r = parsear_xlsx(salida.getvalue())
+        assert time.monotonic() - inicio < 10
+        assert [f.datos for f in r.filas] == [{"email": "a@example.com"}]
+
+    def test_solo_se_leen_las_primeras_columnas(self) -> None:
+        fila = ["email"] + [f"c{i}" for i in range(MAX_COLUMNAS + 40)]
+        datos = ["a@example.com"] + ["v"] * (MAX_COLUMNAS + 40)
+        r = parsear_xlsx(_xlsx([fila, datos]))
+        assert len(r.columnas_ignoradas) == MAX_COLUMNAS - 1
+
+    def test_demasiadas_filas(self) -> None:
+        filas: list[list[object]] = [["email"]] + [
+            [f"u{i}@example.com"] for i in range(MAX_FILAS + 1)
+        ]
+        with pytest.raises(CsvError, match="filas"):
+            parsear_xlsx(_xlsx(filas))
+
+
+class TestExcelMalicioso:
+    def test_una_bomba_de_descompresion_se_rechaza_antes_de_abrirla(self) -> None:
+        bomba = _zip({"xl/workbook.xml": b"<x/>", "xl/relleno.bin": b"\x00" * (25 * 1024 * 1024)})
+        assert len(bomba) < 100 * 1024  # pesa poco comprimida
+        with pytest.raises(CsvError, match="descomprimirse"):
+            parsear_xlsx(bomba)
+
+    def test_macros_se_rechazan(self) -> None:
+        con_macros = _zip({"xl/workbook.xml": b"<x/>", "xl/vbaProject.bin": b"MZ"})
+        with pytest.raises(CsvError, match="macros"):
+            parsear_xlsx(con_macros)
+
+    def test_demasiadas_partes(self) -> None:
+        muchas = _zip({"xl/workbook.xml": b"<x/>", **{f"xl/p{i}.xml": b"x" for i in range(300)}})
+        with pytest.raises(CsvError, match="demasiadas partes"):
+            parsear_xlsx(muchas)
+
+    @pytest.mark.parametrize(
+        "contenido",
+        [b"PK\x03\x04basura-que-no-es-un-zip", _zip({"hola.txt": b"no soy un excel"})],
+    )
+    def test_un_zip_que_no_es_un_excel(self, contenido: bytes) -> None:
+        with pytest.raises(CsvError, match="Excel"):
+            parsear_xlsx(contenido)
+
+    def test_un_workbook_roto_dentro_de_un_zip_valido_es_un_error_limpio(self) -> None:
+        roto = _zip({"xl/workbook.xml": b"<no es xml valido", "[Content_Types].xml": b"<x/>"})
+        with pytest.raises(CsvError):
+            parsear_xlsx(roto)
+
+    def test_hoja_vacia_y_demasiado_grande(self) -> None:
+        with pytest.raises(CsvError):
+            parsear_xlsx(_xlsx([]))
+        with pytest.raises(CsvError, match="MB"):
+            parsear_xlsx(b"PK\x03\x04" + b"a" * (2 * 1024 * 1024 + 1))

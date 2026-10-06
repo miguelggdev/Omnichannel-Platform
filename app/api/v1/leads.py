@@ -6,7 +6,7 @@ GET    /api/v1/leads/kanban             leads agrupados por etapa, con totales
 GET    /api/v1/leads/{id}               detalle
 PUT    /api/v1/leads/{id}               edita los campos que se envien
 DELETE /api/v1/leads/{id}               soft delete (NO es una supresion RGPD: ver admin.py)
-POST   /api/v1/leads/import             importa un CSV (hasta 5000 filas, 2 MB; `dry_run` solo valida)
+POST   /api/v1/leads/import             importa un CSV o .xlsx (5000 filas, 2 MB; `dry_run` solo valida)
 PATCH  /api/v1/leads/{id}/stage         mueve de etapa (ganado/perdido/descalificado cambian el estado)
 PUT    /api/v1/leads/{id}/contact       enlaza con un contacto existente
 POST   /api/v1/leads/{id}/contact       crea un contacto a partir del lead y lo enlaza
@@ -28,7 +28,7 @@ import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Literal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy import func, or_, select
@@ -40,13 +40,26 @@ from app.core.dependencies import require_leads_module
 from app.core.encryption import blind_index
 from app.core.exceptions import DUPLICATE, NOT_FOUND, VALIDATION_ERROR, AppException
 from app.models.contact import Contact
-from app.models.lead import Lead, normalizar_telefono_de_lead
+from app.models.lead import Lead, canonicalizar_linkedin, normalizar_telefono_de_lead
+from app.models.lead_activity import (
+    ACTIVITY_ASSIGNED,
+    ACTIVITY_CONTACT_CREATED,
+    ACTIVITY_CONTACT_LINKED,
+    ACTIVITY_CONTACT_UNLINKED,
+    ACTIVITY_CREATED,
+    ACTIVITY_DELETED,
+    ACTIVITY_IMPORTED,
+    ACTIVITY_STAGE_CHANGED,
+    ACTIVITY_UNASSIGNED,
+    ACTIVITY_UPDATED,
+)
 from app.models.lead_pipeline_stage import LeadPipelineStage
 from app.models.lead_source import LeadSource
 from app.models.user import User
 from app.schemas.common import PaginatedResponse
 from app.schemas.lead import (
     KanbanColumn,
+    LeadActivityResponse,
     LeadContactLink,
     LeadCreate,
     LeadImportError,
@@ -56,6 +69,8 @@ from app.schemas.lead import (
     LeadUpdate,
     StageResponse,
 )
+from app.services.lead_activity import listar_actividades, registrar_actividad
+from app.services.lead_batch import insertar_lote
 from app.services.lead_contact_sync import (
     ContactoYaVinculadoError,
     contacto_inequivoco,
@@ -68,8 +83,7 @@ from app.services.lead_import import (
     MAX_BYTES,
     MAX_ERRORES_INFORMADOS,
     CsvError,
-    FilaImportada,
-    parsear_csv,
+    parsear_archivo,
 )
 from app.services.lead_pipeline import DISQUALIFIED_SLUG, FIRST_STAGE_SLUG
 
@@ -209,10 +223,14 @@ async def _comprobar_duplicado(
     *,
     email: str | None,
     phone: str | None,
+    linkedin: str | None = None,
     excluir: UUID | None = None,
 ) -> None:
-    """409 si otro lead no borrado del tenant ya tiene ese email o ese telefono."""
+    """409 si otro lead no borrado del tenant ya tiene ese email, telefono o LinkedIn."""
     comprobaciones = []
+    url = canonicalizar_linkedin(linkedin)
+    if url:
+        comprobaciones.append(("linkedin", Lead.linkedin_url == url))
     if email:
         comprobaciones.append(("email", Lead.email_hash == blind_index(email, client_id)))
     digitos = normalizar_telefono_de_lead(phone)
@@ -240,6 +258,7 @@ def _duplicado_por_carrera(exc: IntegrityError) -> AppException | None:
     for indice, campo in (
         ("uq_leads_client_email_hash", "email"),
         ("uq_leads_client_phone_hash", "telefono"),
+        ("uq_leads_client_linkedin", "linkedin"),
     ):
         if indice in texto:
             return AppException(
@@ -259,6 +278,11 @@ async def _responder(session: AsyncSession, lead: Lead) -> LeadResponse:
     """
     await session.refresh(lead)
     return LeadResponse.model_validate(lead)
+
+
+def _uid(user: dict[str, Any]) -> UUID:
+    """Id del usuario autenticado como UUID (el middleware lo deja a veces como texto)."""
+    return UUID(str(user["user_id"]))
 
 
 def _ahora() -> datetime:
@@ -537,57 +561,31 @@ async def _fuente_de_importacion(session: AsyncSession, client_id: UUID) -> Lead
     return fuente
 
 
-def _claves(client_id: UUID, datos: dict[str, Any]) -> tuple[str | None, str | None]:
-    """`(email_hash, phone_hash)` de una fila, para deduplicar sin descifrar nada."""
-    email = datos.get("email")
-    digitos = normalizar_telefono_de_lead(datos.get("phone"))
-    return (
-        blind_index(email, client_id) if email else None,
-        blind_index(digitos, client_id) if digitos else None,
-    )
-
-
-async def _hashes_existentes(
-    session: AsyncSession, client_id: UUID, emails: set[str], telefonos: set[str]
-) -> tuple[set[str], set[str]]:
-    """Cuales de esos hashes ya tiene un lead no borrado del tenant (por lotes)."""
-    ya_email: set[str] = set()
-    ya_tel: set[str] = set()
-    for campo, hashes, destino in (
-        (Lead.email_hash, sorted(emails), ya_email),
-        (Lead.phone_hash, sorted(telefonos), ya_tel),
-    ):
-        for i in range(0, len(hashes), _LOTE):
-            trozo = hashes[i : i + _LOTE]
-            filas = await session.execute(
-                select(campo).where(
-                    Lead.client_id == client_id, Lead.deleted_at.is_(None), campo.in_(trozo)
-                )
-            )
-            destino.update(f for f in filas.scalars() if f)
-    return ya_email, ya_tel
-
-
 @router.post("/import", response_model=LeadImportResponse)
 async def import_leads(
-    file: UploadFile = File(..., description="CSV con cabeceras (email, nombre, empresa...)"),
+    file: UploadFile = File(
+        ..., description="CSV o .xlsx con cabeceras (email, nombre, empresa...)"
+    ),
     source_id: UUID | None = Form(default=None),
     stage_id: UUID | None = Form(default=None),
     assigned_user_id: UUID | None = Form(default=None),
     dry_run: bool = Form(default=False),
     user: dict[str, Any] = Depends(require_leads_module(*_DELETE_ROLES)),
 ) -> LeadImportResponse:
-    """Importa leads desde un CSV; las filas buenas entran y las malas se informan.
+    """Importa leads desde un CSV o un `.xlsx`; las filas buenas entran y las malas se informan.
 
-    Una fila **duplicada** (el email o telefono ya existe entre los leads no borrados, o se repite
-    antes en el archivo) se omite sin actualizar el lead existente. Los leads importados no se
+    El formato se decide por los bytes del archivo, no por su nombre. De un Excel se lee la primera
+    hoja y los valores guardados (las formulas no se evaluan); con macros se rechaza.
+
+    Una fila **duplicada** (el email, telefono o LinkedIn ya existe entre los leads no borrados, o
+    se repite antes en el archivo) se omite sin actualizar el lead existente. Los leads importados no se
     enlazan a contactos automaticamente (seria una consulta por fila): se enlazan despues con
     `PUT /leads/{id}/contact`. Cada fila queda con `enrichment_data["import"]` (lote y fecha).
 
     Con `dry_run=true` se valida todo y se informa, sin crear nada ni la fuente de importacion.
 
     Args:
-        file: El CSV (hasta 2 MB y 5000 filas).
+        file: El CSV o .xlsx (hasta 2 MB y 5000 filas).
         source_id: Fuente a asociar; si falta, la fuente `import` del negocio (se crea sola).
         stage_id: Etapa inicial; si falta, `new` o la primera.
         assigned_user_id: Usuario al que se asignan todos.
@@ -608,7 +606,7 @@ async def import_leads(
             status_code=413, error_code=VALIDATION_ERROR, message="El archivo supera 2 MB"
         )
     try:
-        parseado = parsear_csv(contenido)
+        parseado = parsear_archivo(contenido)
     except CsvError as exc:
         raise AppException(status_code=400, error_code=VALIDATION_ERROR, message=str(exc)) from exc
 
@@ -628,75 +626,25 @@ async def import_leads(
             if stage_id
             else await _etapa_inicial(session, client_id)
         )
-        claves = {f.numero: _claves(client_id, f.datos) for f in validas}
-        ya_email, ya_tel = await _hashes_existentes(
+        fuente_id = source_id
+        if not dry_run and fuente_id is None and validas:
+            fuente_id = (await _fuente_de_importacion(session, client_id)).id
+        resultado = await insertar_lote(
             session,
             client_id,
-            {k[0] for k in claves.values() if k[0]},
-            {k[1] for k in claves.values() if k[1]},
+            validas,
+            etapa_id=etapa.id,
+            source_id=fuente_id,
+            assigned_user_id=assigned_user_id,
+            user_id=_uid(user),
+            tipo_actividad=ACTIVITY_IMPORTED,
+            clave_lote="import",
+            ahora=_ahora(),
+            dry_run=dry_run,
         )
-        vistos_email: set[str] = set()
-        vistos_tel: set[str] = set()
-        nuevas: list[FilaImportada] = []
-        duplicadas = 0
-        for f in validas:
-            email_h, tel_h = claves[f.numero]
-            motivo = None
-            if (email_h and email_h in ya_email) or (tel_h and tel_h in ya_tel):
-                motivo = "ya existe un lead con ese email o telefono"
-            elif (email_h and email_h in vistos_email) or (tel_h and tel_h in vistos_tel):
-                motivo = "repetida en el archivo"
-            if motivo:
-                duplicadas += 1
-                errores.append(LeadImportError(row=f.numero, error=motivo))
-                continue
-            if email_h:
-                vistos_email.add(email_h)
-            if tel_h:
-                vistos_tel.add(tel_h)
-            nuevas.append(f)
-
-        fuente_id = source_id
-        if not dry_run and nuevas:
-            if fuente_id is None:
-                fuente_id = (await _fuente_de_importacion(session, client_id)).id
-            lote = {"batch_id": str(uuid4()), "imported_at": _ahora().isoformat()}
-            ahora = _ahora()
-
-            def construir(f: FilaImportada) -> Lead:
-                return Lead(
-                    client_id=client_id,
-                    source_id=fuente_id,
-                    pipeline_stage_id=etapa.id,
-                    assigned_user_id=assigned_user_id,
-                    last_activity_at=ahora,
-                    enrichment_data={"import": lote},
-                    **f.datos,
-                )
-
-            creadas = len(nuevas)
-            try:
-                async with session.begin_nested():
-                    session.add_all(construir(f) for f in nuevas)
-                    await session.flush()
-            except IntegrityError:
-                # Una carrera con otro alta: se repite fila a fila para no perder las buenas.
-                creadas = 0
-                for f in nuevas:
-                    try:
-                        async with session.begin_nested():
-                            session.add(construir(f))
-                            await session.flush()
-                        creadas += 1
-                    except IntegrityError:
-                        duplicadas += 1
-                        errores.append(
-                            LeadImportError(
-                                row=f.numero, error="ya existe un lead con ese email o telefono"
-                            )
-                        )
-        else:
-            creadas = len(nuevas)
+        creadas = resultado.creadas
+        duplicadas = resultado.duplicadas
+        errores.extend(LeadImportError(row=n, error=m) for n, m in resultado.rechazos)
 
     errores.sort(key=lambda e: e.row)
     logger.info(
@@ -757,7 +705,9 @@ async def create_lead(
                 if data.pipeline_stage_id
                 else await _etapa_inicial(session, client_id)
             )
-            await _comprobar_duplicado(session, client_id, email=data.email, phone=data.phone)
+            await _comprobar_duplicado(
+                session, client_id, email=data.email, phone=data.phone, linkedin=data.linkedin_url
+            )
 
             lead = Lead(
                 client_id=client_id,
@@ -767,6 +717,15 @@ async def create_lead(
             )
             session.add(lead)
             await session.flush()
+            registrar_actividad(
+                session,
+                client_id=client_id,
+                lead_id=lead.id,
+                tipo=ACTIVITY_CREATED,
+                user_id=_uid(user),
+                stage=etapa.slug,
+                source_id=data.source_id,
+            )
 
             contacto_id = await contacto_inequivoco(session, client_id, data.email, data.phone)
             if contacto_id is not None:
@@ -778,6 +737,14 @@ async def create_lead(
                     )
                 ).scalar_one()
                 await vincular(session, lead, contacto)
+                registrar_actividad(
+                    session,
+                    client_id=client_id,
+                    lead_id=lead.id,
+                    tipo=ACTIVITY_CONTACT_LINKED,
+                    contact_id=contacto.id,
+                    automatic=True,
+                )
             respuesta = await _responder(session, lead)
     except IntegrityError as exc:
         if (conflicto := _duplicado_por_carrera(exc)) is not None:
@@ -857,15 +824,40 @@ async def update_lead(
                 client_id,
                 email=nuevo_email if "email" in enviados else None,
                 phone=nuevo_phone if "phone" in enviados else None,
+                linkedin=nuevo_linkedin if "linkedin_url" in enviados else None,
                 excluir=lead.id,
             )
 
-            for campo in enviados:
+            usuario_antes = lead.assigned_user_id
+            cambiados: list[str] = []
+            for campo in sorted(enviados):
                 valor = getattr(data, campo)
                 if valor is None and campo in ("currency", "temperature"):
                     continue  # NOT NULL con valor por defecto: `null` no los borra
+                if campo != "assigned_user_id" and getattr(lead, campo) != valor:
+                    cambiados.append(campo)
                 setattr(lead, campo, valor)
             await session.flush()
+            if lead.assigned_user_id != usuario_antes:
+                registrar_actividad(
+                    session,
+                    client_id=client_id,
+                    lead_id=lead.id,
+                    tipo=ACTIVITY_ASSIGNED if lead.assigned_user_id else ACTIVITY_UNASSIGNED,
+                    user_id=_uid(user),
+                    from_user=usuario_antes,
+                    to_user=lead.assigned_user_id,
+                )
+            if cambiados:
+                # Solo los NOMBRES de los campos: el valor de un email o un nombre no va al historial.
+                registrar_actividad(
+                    session,
+                    client_id=client_id,
+                    lead_id=lead.id,
+                    tipo=ACTIVITY_UPDATED,
+                    user_id=_uid(user),
+                    fields=cambiados,
+                )
             respuesta = await _responder(session, lead)
     except IntegrityError as exc:
         if (conflicto := _duplicado_por_carrera(exc)) is not None:
@@ -906,6 +898,9 @@ async def delete_lead(
                 contacto.lead_id = None
                 contacto.is_lead = False
         lead.deleted_at = _ahora()
+        registrar_actividad(
+            session, client_id=client_id, lead_id=lead.id, tipo=ACTIVITY_DELETED, user_id=_uid(user)
+        )
     logger.info("Lead %s borrado (soft) por %s (tenant %s)", lead_id, user["user_id"], client_id)
 
 
@@ -951,6 +946,14 @@ async def move_stage(
             )
 
         ahora = _ahora()
+        slug_anterior = (
+            await session.execute(
+                select(LeadPipelineStage.slug).where(
+                    LeadPipelineStage.id == lead.pipeline_stage_id,
+                    LeadPipelineStage.client_id == client_id,
+                )
+            )
+        ).scalar_one_or_none()
         lead.pipeline_stage_id = etapa.id
         lead.last_activity_at = ahora
         if estado is not None:
@@ -965,6 +968,18 @@ async def move_stage(
             lead.disqualified_at = None
             lead.disqualified_reason = None
         await session.flush()
+        # El motivo de una descalificacion es texto libre (puede nombrar a la persona): vive en
+        # `lead.disqualified_reason` y no en el historial.
+        registrar_actividad(
+            session,
+            client_id=client_id,
+            lead_id=lead.id,
+            tipo=ACTIVITY_STAGE_CHANGED,
+            user_id=_uid(user),
+            from_stage=slug_anterior,
+            to_stage=etapa.slug,
+            status=lead.status,
+        )
         return await _responder(session, lead)
 
 
@@ -1007,6 +1022,14 @@ async def link_contact(
             )
         try:
             await vincular(session, lead, contacto)
+            registrar_actividad(
+                session,
+                client_id=client_id,
+                lead_id=lead.id,
+                tipo=ACTIVITY_CONTACT_LINKED,
+                user_id=_uid(user),
+                contact_id=contacto.id,
+            )
         except ContactoYaVinculadoError as exc:
             raise AppException(
                 status_code=409,
@@ -1048,7 +1071,15 @@ async def create_contact_from_lead(
                 error_code=DUPLICATE,
                 message="Ya existe un contacto con ese email o telefono: enlazalo en vez de crear otro",
             )
-        await crear_contacto_desde_lead(session, lead)
+        contacto_nuevo = await crear_contacto_desde_lead(session, lead)
+        registrar_actividad(
+            session,
+            client_id=client_id,
+            lead_id=lead.id,
+            tipo=ACTIVITY_CONTACT_CREATED,
+            user_id=_uid(user),
+            contact_id=contacto_nuevo.id,
+        )
         return await _responder(session, lead)
 
 
@@ -1072,5 +1103,56 @@ async def unlink_contact(
     client_id: UUID = user["client_id"]
     async with tenant_session(client_id) as session:
         lead = await _lead_o_404(session, lead_id, client_id)
-        await desvincular(session, lead)
+        contacto_antes = lead.contact_id
+        if await desvincular(session, lead):
+            registrar_actividad(
+                session,
+                client_id=client_id,
+                lead_id=lead.id,
+                tipo=ACTIVITY_CONTACT_UNLINKED,
+                user_id=_uid(user),
+                contact_id=contacto_antes,
+            )
         return await _responder(session, lead)
+
+
+# ── Historial ────────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/{lead_id}/activities", response_model=PaginatedResponse[LeadActivityResponse])
+async def lead_activities(
+    lead_id: UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    user: dict[str, Any] = Depends(require_leads_module(*_READ_ROLES)),
+) -> PaginatedResponse[LeadActivityResponse]:
+    """Historial del lead, de lo mas reciente a lo mas antiguo.
+
+    La metadata lleva ids, slugs y nombres de campo, nunca datos personales
+    (`app/services/lead_activity.py`).
+
+    Args:
+        lead_id: Lead.
+        page: Pagina, desde 1.
+        page_size: Tamano de pagina, hasta 100.
+        user: Usuario autenticado.
+
+    Returns:
+        Una pagina del historial.
+
+    Raises:
+        AppException: 404 si el lead no existe en este tenant o esta borrado.
+    """
+    client_id: UUID = user["client_id"]
+    async with tenant_session(client_id) as session:
+        await _lead_o_404(session, lead_id, client_id)
+        actividades, total = await listar_actividades(
+            session, client_id, lead_id, page=page, page_size=page_size
+        )
+        return PaginatedResponse[LeadActivityResponse](
+            items=[LeadActivityResponse.model_validate(a) for a in actividades],
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=(total + page_size - 1) // page_size,
+        )
