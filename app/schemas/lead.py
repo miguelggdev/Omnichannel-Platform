@@ -386,3 +386,9 @@ class LeadModuleUpdated(BaseModel):
     client_id: UUID
     enabled: bool
     stages_created: int
+
+
+class LeadContactLink(BaseModel):
+    """Cuerpo de `PUT /leads/{id}/contact`: el contacto con el que se enlaza."""
+
+    contact_id: UUID
