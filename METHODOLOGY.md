@@ -443,7 +443,7 @@ El stub se reemplaza por el import real en cuanto Dev A pushee el modelo. Claude
 ---
 
 ### Sprint 16 — Fase 5: Lead Management, cimientos
-> Este sprint no estaba en la matriz original (ver PROGRESS.md). Reparto propuesto en la sesion 55.
+> Este sprint no estaba en la matriz original (ver PROGRESS.md). Reparto propuesto en la sesion 55; la sesion 56 hizo tambien el slice de Dev B (ADR-083), salvo el webhook de Phantombuster.
 
 | Dev | Tareas | Archivos |
 |---|---|---|
