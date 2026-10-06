@@ -398,3 +398,37 @@ class LeadContactLink(BaseModel):
     """Cuerpo de `PUT /leads/{id}/contact`: el contacto con el que se enlaza."""
 
     contact_id: UUID
+
+
+class LeadImportError(BaseModel):
+    """Una fila rechazada. El mensaje nombra el campo, no repite el dato."""
+
+    row: int
+    error: str
+
+
+class LeadImportResponse(BaseModel):
+    """Resultado de `POST /leads/import`.
+
+    Attributes:
+        total_rows: Filas de datos del archivo (sin la cabecera ni las en blanco).
+        imported: Leads creados (con `dry_run`, los que se habrian creado).
+        duplicates: Filas omitidas porque el email o telefono ya existe o se repite en el archivo.
+        invalid: Filas con un dato no valido.
+        errors: Las primeras 100 filas rechazadas (invalidas y duplicadas) y por que.
+        errors_truncated: Hubo mas de 100.
+        ignored_columns: Cabeceras que no corresponden a ningun campo del lead.
+        dry_run: Si solo se valido, sin crear nada.
+        source_id: Fuente a la que quedaron asociados los leads (`None` en un `dry_run`
+            que habria creado la de importacion).
+    """
+
+    total_rows: int
+    imported: int
+    duplicates: int
+    invalid: int
+    errors: list[LeadImportError]
+    errors_truncated: bool
+    ignored_columns: list[str]
+    dry_run: bool
+    source_id: UUID | None

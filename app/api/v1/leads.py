@@ -6,12 +6,11 @@ GET    /api/v1/leads/kanban             leads agrupados por etapa, con totales
 GET    /api/v1/leads/{id}               detalle
 PUT    /api/v1/leads/{id}               edita los campos que se envien
 DELETE /api/v1/leads/{id}               soft delete (NO es una supresion RGPD: ver admin.py)
+POST   /api/v1/leads/import             importa un CSV (hasta 5000 filas, 2 MB; `dry_run` solo valida)
 PATCH  /api/v1/leads/{id}/stage         mueve de etapa (ganado/perdido/descalificado cambian el estado)
 PUT    /api/v1/leads/{id}/contact       enlaza con un contacto existente
 POST   /api/v1/leads/{id}/contact       crea un contacto a partir del lead y lo enlaza
 DELETE /api/v1/leads/{id}/contact       suelta el enlace
-
-(`POST /leads/import` esta en `lead_import.py`.)
 
 Decisiones:
 
@@ -29,9 +28,9 @@ import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,6 +49,8 @@ from app.schemas.lead import (
     KanbanColumn,
     LeadContactLink,
     LeadCreate,
+    LeadImportError,
+    LeadImportResponse,
     LeadResponse,
     LeadStageMove,
     LeadUpdate,
@@ -62,6 +63,13 @@ from app.services.lead_contact_sync import (
     crear_contacto_desde_lead,
     desvincular,
     vincular,
+)
+from app.services.lead_import import (
+    MAX_BYTES,
+    MAX_ERRORES_INFORMADOS,
+    CsvError,
+    FilaImportada,
+    parsear_csv,
 )
 from app.services.lead_pipeline import DISQUALIFIED_SLUG, FIRST_STAGE_SLUG
 
@@ -502,6 +510,216 @@ async def list_leads(
             page_size=page_size,
             total_pages=(total + page_size - 1) // page_size,
         )
+
+
+# ── Importacion CSV (ruta fija: antes de /{lead_id}) ──────────────────────────────────────────
+
+_NOMBRE_FUENTE_IMPORTACION = "Importación CSV"
+_LOTE = 1000
+
+
+async def _fuente_de_importacion(session: AsyncSession, client_id: UUID) -> LeadSource:
+    """La fuente `import` del tenant; se crea la primera vez (para que `leads_count` la refleje)."""
+    fuente: LeadSource | None = (
+        await session.execute(
+            select(LeadSource)
+            .where(LeadSource.client_id == client_id, LeadSource.source_type == "import")
+            .order_by(LeadSource.created_at)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if fuente is None:
+        fuente = LeadSource(
+            client_id=client_id, name=_NOMBRE_FUENTE_IMPORTACION, source_type="import"
+        )
+        session.add(fuente)
+        await session.flush()
+    return fuente
+
+
+def _claves(client_id: UUID, datos: dict[str, Any]) -> tuple[str | None, str | None]:
+    """`(email_hash, phone_hash)` de una fila, para deduplicar sin descifrar nada."""
+    email = datos.get("email")
+    digitos = normalizar_telefono_de_lead(datos.get("phone"))
+    return (
+        blind_index(email, client_id) if email else None,
+        blind_index(digitos, client_id) if digitos else None,
+    )
+
+
+async def _hashes_existentes(
+    session: AsyncSession, client_id: UUID, emails: set[str], telefonos: set[str]
+) -> tuple[set[str], set[str]]:
+    """Cuales de esos hashes ya tiene un lead no borrado del tenant (por lotes)."""
+    ya_email: set[str] = set()
+    ya_tel: set[str] = set()
+    for campo, hashes, destino in (
+        (Lead.email_hash, sorted(emails), ya_email),
+        (Lead.phone_hash, sorted(telefonos), ya_tel),
+    ):
+        for i in range(0, len(hashes), _LOTE):
+            trozo = hashes[i : i + _LOTE]
+            filas = await session.execute(
+                select(campo).where(
+                    Lead.client_id == client_id, Lead.deleted_at.is_(None), campo.in_(trozo)
+                )
+            )
+            destino.update(f for f in filas.scalars() if f)
+    return ya_email, ya_tel
+
+
+@router.post("/import", response_model=LeadImportResponse)
+async def import_leads(
+    file: UploadFile = File(..., description="CSV con cabeceras (email, nombre, empresa...)"),
+    source_id: UUID | None = Form(default=None),
+    stage_id: UUID | None = Form(default=None),
+    assigned_user_id: UUID | None = Form(default=None),
+    dry_run: bool = Form(default=False),
+    user: dict[str, Any] = Depends(require_leads_module(*_DELETE_ROLES)),
+) -> LeadImportResponse:
+    """Importa leads desde un CSV; las filas buenas entran y las malas se informan.
+
+    Una fila **duplicada** (el email o telefono ya existe entre los leads no borrados, o se repite
+    antes en el archivo) se omite sin actualizar el lead existente. Los leads importados no se
+    enlazan a contactos automaticamente (seria una consulta por fila): se enlazan despues con
+    `PUT /leads/{id}/contact`. Cada fila queda con `enrichment_data["import"]` (lote y fecha).
+
+    Con `dry_run=true` se valida todo y se informa, sin crear nada ni la fuente de importacion.
+
+    Args:
+        file: El CSV (hasta 2 MB y 5000 filas).
+        source_id: Fuente a asociar; si falta, la fuente `import` del negocio (se crea sola).
+        stage_id: Etapa inicial; si falta, `new` o la primera.
+        assigned_user_id: Usuario al que se asignan todos.
+        dry_run: Solo validar.
+        user: Usuario autenticado; admin, supervisor o super_admin.
+
+    Returns:
+        Cuantas filas entraron, cuantas eran duplicadas o invalidas y por que.
+
+    Raises:
+        AppException: 413 si el archivo pesa mas de 2 MB; 400 si no es un CSV utilizable o la
+            fuente, etapa o usuario no existen; 409 si el negocio no tiene pipeline.
+    """
+    client_id: UUID = user["client_id"]
+    contenido = await file.read(MAX_BYTES + 1)
+    if len(contenido) > MAX_BYTES:
+        raise AppException(
+            status_code=413, error_code=VALIDATION_ERROR, message="El archivo supera 2 MB"
+        )
+    try:
+        parseado = parsear_csv(contenido)
+    except CsvError as exc:
+        raise AppException(status_code=400, error_code=VALIDATION_ERROR, message=str(exc)) from exc
+
+    errores: list[LeadImportError] = []
+    invalidas = sum(1 for f in parseado.filas if f.error)
+    validas = [f for f in parseado.filas if not f.error]
+    for f in parseado.filas:
+        if f.error:
+            errores.append(LeadImportError(row=f.numero, error=f.error))
+
+    async with tenant_session(client_id) as session:
+        await _validar_referencias(
+            session, client_id, source_id=source_id, assigned_user_id=assigned_user_id
+        )
+        etapa = (
+            await _etapa_o_400(session, stage_id, client_id)
+            if stage_id
+            else await _etapa_inicial(session, client_id)
+        )
+        claves = {f.numero: _claves(client_id, f.datos) for f in validas}
+        ya_email, ya_tel = await _hashes_existentes(
+            session,
+            client_id,
+            {k[0] for k in claves.values() if k[0]},
+            {k[1] for k in claves.values() if k[1]},
+        )
+        vistos_email: set[str] = set()
+        vistos_tel: set[str] = set()
+        nuevas: list[FilaImportada] = []
+        duplicadas = 0
+        for f in validas:
+            email_h, tel_h = claves[f.numero]
+            motivo = None
+            if (email_h and email_h in ya_email) or (tel_h and tel_h in ya_tel):
+                motivo = "ya existe un lead con ese email o telefono"
+            elif (email_h and email_h in vistos_email) or (tel_h and tel_h in vistos_tel):
+                motivo = "repetida en el archivo"
+            if motivo:
+                duplicadas += 1
+                errores.append(LeadImportError(row=f.numero, error=motivo))
+                continue
+            if email_h:
+                vistos_email.add(email_h)
+            if tel_h:
+                vistos_tel.add(tel_h)
+            nuevas.append(f)
+
+        fuente_id = source_id
+        if not dry_run and nuevas:
+            if fuente_id is None:
+                fuente_id = (await _fuente_de_importacion(session, client_id)).id
+            lote = {"batch_id": str(uuid4()), "imported_at": _ahora().isoformat()}
+            ahora = _ahora()
+
+            def construir(f: FilaImportada) -> Lead:
+                return Lead(
+                    client_id=client_id,
+                    source_id=fuente_id,
+                    pipeline_stage_id=etapa.id,
+                    assigned_user_id=assigned_user_id,
+                    last_activity_at=ahora,
+                    enrichment_data={"import": lote},
+                    **f.datos,
+                )
+
+            creadas = len(nuevas)
+            try:
+                async with session.begin_nested():
+                    session.add_all(construir(f) for f in nuevas)
+                    await session.flush()
+            except IntegrityError:
+                # Una carrera con otro alta: se repite fila a fila para no perder las buenas.
+                creadas = 0
+                for f in nuevas:
+                    try:
+                        async with session.begin_nested():
+                            session.add(construir(f))
+                            await session.flush()
+                        creadas += 1
+                    except IntegrityError:
+                        duplicadas += 1
+                        errores.append(
+                            LeadImportError(
+                                row=f.numero, error="ya existe un lead con ese email o telefono"
+                            )
+                        )
+        else:
+            creadas = len(nuevas)
+
+    errores.sort(key=lambda e: e.row)
+    logger.info(
+        "Importacion CSV (tenant %s, por %s): %s filas, %s importadas, %s duplicadas, %s invalidas%s",
+        client_id,
+        user["user_id"],
+        len(parseado.filas),
+        creadas,
+        duplicadas,
+        invalidas,
+        " (dry run)" if dry_run else "",
+    )
+    return LeadImportResponse(
+        total_rows=len(parseado.filas),
+        imported=creadas,
+        duplicates=duplicadas,
+        invalid=invalidas,
+        errors=errores[:MAX_ERRORES_INFORMADOS],
+        errors_truncated=len(errores) > MAX_ERRORES_INFORMADOS,
+        ignored_columns=parseado.columnas_ignoradas,
+        dry_run=dry_run,
+        source_id=fuente_id,
+    )
 
 
 # ── Alta, detalle, edicion y borrado ─────────────────────────────────────────────────────────
