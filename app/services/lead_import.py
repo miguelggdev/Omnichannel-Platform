@@ -24,6 +24,8 @@ import csv
 import io
 import re
 import unicodedata
+import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -187,6 +189,23 @@ def parsear_csv(contenido: bytes) -> CsvParseado:
     except StopIteration as exc:
         raise CsvError("El archivo esta vacio") from exc
 
+    return _procesar(cabeceras, lector)
+
+
+def _procesar(cabeceras: list[str], registros: Iterable[list[str]]) -> CsvParseado:
+    """Mapea las cabeceras y valida cada registro. Comun a CSV y a Excel.
+
+    Args:
+        cabeceras: Primera fila del archivo.
+        registros: Resto de filas, ya como listas de texto.
+
+    Returns:
+        Las filas (validas o con error) y las columnas ignoradas.
+
+    Raises:
+        CsvError: Si no hay cabeceras reconocibles ni columna de contacto, hay demasiadas filas
+            o ninguna fila de datos.
+    """
     mapa: dict[int, str] = {}
     ignoradas: list[str] = []
     for i, cab in enumerate(cabeceras):
@@ -202,7 +221,7 @@ def parsear_csv(contenido: bytes) -> CsvParseado:
         raise CsvError("Falta una columna de contacto: email, telefono o LinkedIn")
 
     filas: list[FilaImportada] = []
-    for numero, registro in enumerate(lector, start=2):
+    for numero, registro in enumerate(registros, start=2):
         if not any(c.strip() for c in registro):
             continue  # fila en blanco
         if len(filas) >= MAX_FILAS:
@@ -235,3 +254,123 @@ def parsear_csv(contenido: bytes) -> CsvParseado:
     if not filas:
         raise CsvError("El archivo no tiene filas de datos")
     return CsvParseado(filas=filas, columnas_ignoradas=ignoradas)
+
+
+# ── Excel (.xlsx) ────────────────────────────────────────────────────────────────────────────
+#
+# Un `.xlsx` es un zip: se vigila lo que un zip puede hacer antes de abrirlo. Limites de
+# descompresion (bomba de descompresion), sin macros, solo la primera hoja, y se leen los valores
+# **cacheados** (`data_only=True`): una celda con formula devuelve su ultimo resultado, nunca se
+# evalua nada. Una celda de texto que empiece por `=` es solo texto.
+
+MAX_DESCOMPRIMIDO = 20 * 1024 * 1024
+MAX_ENTRADAS_ZIP = 200
+MAX_COLUMNAS = 60
+_FIRMA_ZIP = b"PK\x03\x04"
+
+
+def es_xlsx(contenido: bytes) -> bool:
+    """Si el archivo es un zip (firma `PK\\x03\\x04`), que es como empieza un `.xlsx`.
+
+    Se decide por los bytes y no por el nombre ni el `Content-Type`, que declara el cliente.
+
+    Args:
+        contenido: Bytes del archivo.
+
+    Returns:
+        `True` si empieza como un zip.
+    """
+    return contenido.startswith(_FIRMA_ZIP)
+
+
+def _texto_de_celda(valor: object) -> str:
+    """Una celda de Excel como texto: `573001112233.0` pasa a `573001112233`."""
+    if valor is None:
+        return ""
+    if isinstance(valor, bool):
+        return str(valor)
+    if isinstance(valor, float) and valor.is_integer():
+        return str(int(valor))
+    if hasattr(valor, "isoformat"):
+        return str(valor.isoformat())
+    return str(valor).strip()
+
+
+def _revisar_zip(contenido: bytes) -> None:
+    """Rechaza un zip que se descomprimiria demasiado, trae macros o tiene demasiadas entradas."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(contenido)) as z:
+            entradas = z.infolist()
+    except zipfile.BadZipFile as exc:
+        raise CsvError("El archivo no es un Excel (.xlsx) valido") from exc
+    if len(entradas) > MAX_ENTRADAS_ZIP:
+        raise CsvError("El archivo Excel tiene demasiadas partes")
+    if sum(e.file_size for e in entradas) > MAX_DESCOMPRIMIDO:
+        raise CsvError("El archivo Excel ocupa demasiado al descomprimirse")
+    if any(e.filename.lower().endswith("vbaproject.bin") for e in entradas):
+        raise CsvError("El archivo Excel contiene macros: guardalo como .xlsx sin macros")
+    if not any(e.filename == "xl/workbook.xml" for e in entradas):
+        raise CsvError("El archivo no es un Excel (.xlsx) valido")
+
+
+def parsear_xlsx(contenido: bytes) -> CsvParseado:
+    """Lee la primera hoja de un `.xlsx` con las mismas reglas que un CSV.
+
+    Args:
+        contenido: Bytes del archivo.
+
+    Returns:
+        Las filas (validas o con error) y las columnas ignoradas.
+
+    Raises:
+        CsvError: Si no es un Excel valido, trae macros, se descomprime demasiado, esta vacio o
+            incumple los limites de filas y columnas.
+    """
+    if len(contenido) > MAX_BYTES:
+        raise CsvError(f"El archivo supera {MAX_BYTES // (1024 * 1024)} MB")
+    _revisar_zip(contenido)
+    from openpyxl import load_workbook
+
+    try:
+        libro = load_workbook(io.BytesIO(contenido), read_only=True, data_only=True)
+    except Exception as exc:  # openpyxl lanza tipos muy variados ante un archivo malformado
+        raise CsvError("No se pudo leer el archivo Excel") from exc
+    try:
+        hoja = libro.worksheets[0] if libro.worksheets else None
+        if hoja is None:
+            raise CsvError("El archivo Excel no tiene hojas")
+        filas = hoja.iter_rows(values_only=True, max_col=MAX_COLUMNAS)
+        try:
+            cabeceras = [_texto_de_celda(c) for c in next(filas)]
+        except StopIteration as exc:
+            raise CsvError("El archivo esta vacio") from exc
+
+        def registros() -> Iterable[list[str]]:
+            consecutivas_en_blanco = 0
+            for fila in filas:
+                valores = [_texto_de_celda(c) for c in fila]
+                # Una hoja con "formato hasta la fila 1.048.576" se lee entera; se corta en
+                # cuanto hay mas filas vacias seguidas de las que cabria en un archivo real.
+                consecutivas_en_blanco = 0 if any(valores) else consecutivas_en_blanco + 1
+                if consecutivas_en_blanco > 1000:
+                    return
+                yield valores
+
+        return _procesar(cabeceras, registros())
+    finally:
+        libro.close()
+
+
+def parsear_archivo(contenido: bytes) -> CsvParseado:
+    """Lee un CSV o un `.xlsx`, decidiendo por los bytes del archivo.
+
+    Args:
+        contenido: Bytes del archivo subido.
+
+    Returns:
+        Las filas (validas o con error) y las columnas ignoradas.
+
+    Raises:
+        CsvError: Si el archivo no se puede importar (ver `parsear_csv` y `parsear_xlsx`).
+    """
+    return parsear_xlsx(contenido) if es_xlsx(contenido) else parsear_csv(contenido)

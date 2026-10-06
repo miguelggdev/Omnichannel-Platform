@@ -23,6 +23,7 @@ from app.models.document_chunk import DocumentChunk
 from app.models.internal_note import InternalNote
 from app.models.invoice import Invoice
 from app.models.lead import Lead
+from app.models.lead_activity import LeadActivity
 from app.models.lead_pipeline_stage import LeadPipelineStage
 from app.models.lead_source import LeadSource
 from app.models.message import Message
@@ -64,6 +65,7 @@ __all__ = [
     "InternalNote",
     "Invoice",
     "Lead",
+    "LeadActivity",
     "LeadPipelineStage",
     "LeadSource",
     "Message",

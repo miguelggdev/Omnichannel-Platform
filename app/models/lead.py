@@ -65,6 +65,30 @@ def normalizar_telefono_de_lead(valor: str | None) -> str | None:
     return _NO_DIGITOS.sub("", valor) or valor.strip().lower()
 
 
+_PARAMETROS_Y_FRAGMENTO = re.compile(r"[?#].*$")
+_BARRAS_FINALES = re.compile(r"/+$")
+
+
+def canonicalizar_linkedin(valor: str | None) -> str | None:
+    """Forma canonica de una URL de LinkedIn: https, minusculas, sin parametros ni `/` final.
+
+    `HTTP://LinkedIn.com/in/Ana/?trk=x#y` y `https://linkedin.com/in/ana` son el mismo perfil.
+    Debe hacer lo mismo que `CANONICA_SQL` de la migracion 026.
+
+    Args:
+        valor: URL tal como llego.
+
+    Returns:
+        La URL canonica, o `None` si no habia nada.
+    """
+    if valor is None or not valor.strip():
+        return None
+    limpio = _BARRAS_FINALES.sub("", _PARAMETROS_Y_FRAGMENTO.sub("", valor.strip())).lower()
+    if limpio.startswith("http://"):
+        limpio = "https://" + limpio[7:]
+    return limpio or None
+
+
 class Lead(TenantBaseModel):
     """Un lead del tenant.
 
@@ -116,6 +140,13 @@ class Lead(TenantBaseModel):
             "email_hash",
             unique=True,
             postgresql_where=text("email_hash IS NOT NULL AND deleted_at IS NULL"),
+        ),
+        Index(
+            "uq_leads_client_linkedin",
+            "client_id",
+            "linkedin_url",
+            unique=True,
+            postgresql_where=text("linkedin_url IS NOT NULL AND deleted_at IS NULL"),
         ),
         Index(
             "uq_leads_client_phone_hash",
@@ -183,7 +214,7 @@ class Lead(TenantBaseModel):
 @event.listens_for(Lead, "before_insert")
 @event.listens_for(Lead, "before_update")
 def _sincronizar_indices_ciegos(_mapper: Any, _connection: Any, target: Lead) -> None:
-    """Recalcula `email_hash` y `phone_hash` a partir de los valores antes de escribir.
+    """Recalcula `email_hash` y `phone_hash` y canoniza `linkedin_url` antes de escribir.
 
     Cubre el ORM, que es por donde pasa todo el codigo de la aplicacion. Un `UPDATE` masivo con
     `sqlalchemy.update()` **no** dispara este evento: si alguna vez hace falta uno sobre estas
@@ -194,6 +225,7 @@ def _sincronizar_indices_ciegos(_mapper: Any, _connection: Any, target: Lead) ->
         _connection: Conexion en curso (no se usa).
         target: Fila que esta a punto de escribirse.
     """
+    target.linkedin_url = canonicalizar_linkedin(target.linkedin_url)
     target.email_hash = blind_index(target.email, target.client_id) if target.email else None
     telefono = normalizar_telefono_de_lead(target.phone)
     target.phone_hash = blind_index(telefono, target.client_id) if telefono else None

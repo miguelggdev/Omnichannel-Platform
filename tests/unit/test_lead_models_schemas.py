@@ -14,6 +14,7 @@ from app.models.lead import (
     LEAD_TEMPERATURES,
     Lead,
     _sincronizar_indices_ciegos,
+    canonicalizar_linkedin,
     normalizar_telefono_de_lead,
 )
 from app.models.lead_source import LEAD_SOURCE_TYPES
@@ -213,3 +214,27 @@ class TestSchemasDeEtapasYFuentes:
         assert c.utm_source == "google"
         with pytest.raises(ValidationError):
             LeadCapture(first_name="solo nombre")
+
+
+class TestCanonizarLinkedin:
+    @pytest.mark.parametrize(
+        ("original", "esperado"),
+        [
+            ("HTTP://LinkedIn.com/in/Ana/?trk=x#y", "https://linkedin.com/in/ana"),
+            ("https://www.linkedin.com/in/ana///", "https://www.linkedin.com/in/ana"),
+            ("  https://linkedin.com/in/ana  ", "https://linkedin.com/in/ana"),
+            ("https://linkedin.com/in/ana?a=b", "https://linkedin.com/in/ana"),
+            ("", None),
+            ("   ", None),
+            (None, None),
+        ],
+    )
+    def test_canonizar(self, original: str | None, esperado: str | None) -> None:
+        assert canonicalizar_linkedin(original) == esperado
+
+    def test_el_listener_la_canoniza_al_escribir(self) -> None:
+        lead = _sincronizar(
+            Lead(client_id=TENANT_A, linkedin_url="HTTP://LinkedIn.com/in/Ana/?x=1")
+        )
+        assert lead.linkedin_url == "https://linkedin.com/in/ana"
+        assert _sincronizar(Lead(client_id=TENANT_A, linkedin_url="  ")).linkedin_url is None

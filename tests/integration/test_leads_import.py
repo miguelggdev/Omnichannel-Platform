@@ -136,7 +136,7 @@ class TestImportar:
         por_fila = {e["row"]: e["error"] for e in cuerpo["errors"]}
         assert por_fila == {
             3: "email no es valido",
-            4: "ya existe un lead con ese email o telefono",
+            4: "ya existe un lead con ese email, telefono o LinkedIn",
             5: "repetida en el archivo",
             6: "phone no es valido",
             7: "falta email, telefono o LinkedIn",

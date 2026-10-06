@@ -33,10 +33,12 @@ from app.core.database import AsyncSessionLocal, tenant_session
 from app.core.encryption import blind_index
 from app.core.exceptions import NOT_FOUND, VALIDATION_ERROR, AppException
 from app.core.rate_limit import client_ip, hit
-from app.models.lead import Lead, normalizar_telefono_de_lead
+from app.models.lead import Lead, canonicalizar_linkedin, normalizar_telefono_de_lead
+from app.models.lead_activity import ACTIVITY_CAPTURED, ACTIVITY_RECAPTURED
 from app.models.lead_pipeline_stage import LeadPipelineStage
 from app.models.lead_source import LeadSource
 from app.schemas.lead import LeadCapture
+from app.services.lead_activity import registrar_actividad
 from app.services.lead_pipeline import FIRST_STAGE_SLUG, hash_capture_token
 
 logger = logging.getLogger(__name__)
@@ -132,34 +134,48 @@ async def capture_lead(source_token: str, data: LeadCapture, request: Request) -
             ahora = datetime.now(timezone.utc)
             if existente is not None:
                 existente.last_activity_at = ahora
+                registrar_actividad(
+                    session,
+                    client_id=client_id,
+                    lead_id=existente.id,
+                    tipo=ACTIVITY_RECAPTURED,
+                    source_id=origen.id,
+                )
                 return _RESPUESTA
 
             etapa = await _etapa_inicial(session, client_id)
             utm = {**origen.utm_tracking, **{k: getattr(data, k) for k in _UTM if getattr(data, k)}}
-            session.add(
-                Lead(
-                    client_id=client_id,
-                    source_id=origen.id,
-                    pipeline_stage_id=etapa,
-                    first_name=data.first_name,
-                    last_name=data.last_name,
-                    email=data.email,
-                    phone=data.phone,
-                    linkedin_url=data.linkedin_url,
-                    company_name=data.company_name,
-                    company_domain=data.company_domain,
-                    company_size=data.company_size,
-                    industry=data.industry,
-                    job_title=data.job_title,
-                    last_activity_at=ahora,
-                    enrichment_data={
-                        "capture": {
-                            "captured_at": ahora.isoformat(),
-                            "consent": data.consent,
-                            "utm": utm,
-                        }
-                    },
-                )
+            lead = Lead(
+                client_id=client_id,
+                source_id=origen.id,
+                pipeline_stage_id=etapa,
+                first_name=data.first_name,
+                last_name=data.last_name,
+                email=data.email,
+                phone=data.phone,
+                linkedin_url=data.linkedin_url,
+                company_name=data.company_name,
+                company_domain=data.company_domain,
+                company_size=data.company_size,
+                industry=data.industry,
+                job_title=data.job_title,
+                last_activity_at=ahora,
+                enrichment_data={
+                    "capture": {
+                        "captured_at": ahora.isoformat(),
+                        "consent": data.consent,
+                        "utm": utm,
+                    }
+                },
+            )
+            session.add(lead)
+            await session.flush()
+            registrar_actividad(
+                session,
+                client_id=client_id,
+                lead_id=lead.id,
+                tipo=ACTIVITY_CAPTURED,
+                source_id=origen.id,
             )
     except IntegrityError:
         # Dos capturas del mismo email a la vez: la segunda es un duplicado y se trata como tal.
@@ -168,13 +184,16 @@ async def capture_lead(source_token: str, data: LeadCapture, request: Request) -
 
 
 async def _lead_existente(session: Any, client_id: UUID, data: LeadCapture) -> Lead | None:
-    """Un lead no borrado del tenant con el mismo email o telefono, si lo hay."""
+    """Un lead no borrado del tenant con el mismo email, telefono o LinkedIn, si lo hay."""
     condiciones = []
     if data.email:
         condiciones.append(Lead.email_hash == blind_index(str(data.email), client_id))
     digitos = normalizar_telefono_de_lead(data.phone)
     if digitos:
         condiciones.append(Lead.phone_hash == blind_index(digitos, client_id))
+    url = canonicalizar_linkedin(data.linkedin_url)
+    if url:
+        condiciones.append(Lead.linkedin_url == url)
     for condicion in condiciones:
         lead: Lead | None = (
             await session.execute(
