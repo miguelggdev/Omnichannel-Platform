@@ -515,6 +515,13 @@ _NO_PURGADAS = {
     "campaigns",
     "clinical_records",
     "config_history",
+    # Leads (Sprint 16, ADR-082): ni se clonan (son datos de negocio con PII) ni se purgan, porque
+    # nada de un sandbox los crea: no tiene usuarios, y `capture_lookup_source()` excluye los
+    # tenants sandbox. REVISAR en los Sprints 17-18: si un agente crea leads desde una
+    # conversacion, `leads` pasa a `_TABLAS_DE_PRUEBA` para que el reset los borre.
+    "lead_pipeline_stages",
+    "lead_sources",
+    "leads",
     "patient_consents",
     "service_types",
     "tags",
