@@ -1,4 +1,8 @@
-"""Captura publica de leads: `POST /api/v1/capture/{source_token}` (Sprint 16, ADR-083).
+"""Captura publica de leads (Sprint 16, ADR-083 y ADR-084).
+
+    POST /api/v1/capture/{source_token}                formulario web: un lead
+    POST /api/v1/capture/{source_token}/phantombuster  webhook de Phantombuster: hasta 500 perfiles
+
 
 Es el unico endpoint de leads sin JWT: lo llama el formulario web de un cliente. La
 autenticacion es el token de la fuente (en la URL). Para que no sea un grifo abierto:
@@ -19,6 +23,7 @@ nueva actividad en `last_activity_at`. Los UTM de la visita (o los que defina la
 consentimiento quedan en `enrichment_data["capture"]`, que la anonimizacion RGPD vacia.
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -39,7 +44,10 @@ from app.models.lead_pipeline_stage import LeadPipelineStage
 from app.models.lead_source import LeadSource
 from app.schemas.lead import LeadCapture
 from app.services.lead_activity import registrar_actividad
+from app.services.lead_batch import insertar_lote
+from app.services.lead_import import FilaImportada, campos_de_objeto, validar_campos
 from app.services.lead_pipeline import FIRST_STAGE_SLUG, hash_capture_token
+from app.services.phantombuster import MAX_PERFILES, extraer_perfiles
 
 logger = logging.getLogger(__name__)
 
@@ -228,3 +236,127 @@ async def _etapa_inicial(session: Any, client_id: UUID) -> UUID | None:
         return None
     elegida = next((e for e in etapas if e.slug == FIRST_STAGE_SLUG), etapas[0])
     return UUID(str(elegida.id))
+
+
+MAX_BODY_BYTES_LOTE = 1024 * 1024
+
+
+@router.post("/{source_token}/phantombuster", status_code=status.HTTP_202_ACCEPTED)
+async def capture_phantombuster(source_token: str, request: Request) -> dict[str, Any]:
+    """Recibe el webhook de Phantombuster y crea un lead por cada perfil nuevo.
+
+    Solo acepta fuentes de tipo `linkedin`. La lectura del payload es tolerante y **no sigue
+    enlaces** (ver `app/services/phantombuster.py`). Los perfiles se mapean con los mismos alias
+    que las cabeceras del CSV (`profileUrl`, `fullName`, `company`, `title`...) y se deduplican
+    contra la base y entre si por email, telefono y URL de LinkedIn: los reintentos de
+    Phantombuster no duplican a nadie.
+
+    Los datos son perfiles publicos recogidos por el cliente, **sin consentimiento de la persona**:
+    quedan marcados (`enrichment_data["capture"]["consent"] = false`, `origin = phantombuster`)
+    para que el negocio pueda tratarlos como corresponde.
+
+    Args:
+        source_token: Token de la fuente (va en la URL, como en la captura normal).
+        request: Peticion: se limita por IP y fuente y se acota el cuerpo (1 MB).
+
+    Returns:
+        `{"status": "received", "received", "created", "duplicates", "invalid"}`; con
+        `"note": "links_only"` si el resultado solo traia enlaces a archivos.
+
+    Raises:
+        AppException: 413 si el cuerpo supera 1 MB; 422 si no es JSON; 429/503 por los limites;
+            404 si el token no es de una fuente `linkedin` utilizable.
+    """
+    declarado = request.headers.get("content-length")
+    if declarado is not None and declarado.isdigit() and int(declarado) > MAX_BODY_BYTES_LOTE:
+        raise AppException(
+            status_code=413, error_code=VALIDATION_ERROR, message="Cuerpo demasiado grande"
+        )
+    ajustes = get_settings()
+    await hit(f"capture-ip:{client_ip(request)}", ajustes.CAPTURE_MAX_PER_IP_PER_MINUTE, 60)
+    token_hash = hash_capture_token(source_token)
+    await hit(f"capture-src:{token_hash[:16]}", ajustes.CAPTURE_MAX_PER_SOURCE_PER_MINUTE, 60)
+
+    fuente = await _resolver_fuente(token_hash)
+    if fuente is None or fuente.source_type != "linkedin":
+        raise _no_encontrada()
+    client_id: UUID = fuente.client_id
+
+    cuerpo = await request.body()
+    if len(cuerpo) > MAX_BODY_BYTES_LOTE:
+        raise AppException(
+            status_code=413, error_code=VALIDATION_ERROR, message="Cuerpo demasiado grande"
+        )
+    try:
+        payload = json.loads(cuerpo)
+    except ValueError as exc:
+        raise AppException(
+            status_code=422, error_code=VALIDATION_ERROR, message="El cuerpo no es JSON"
+        ) from exc
+
+    extraccion = extraer_perfiles(payload)
+    respuesta: dict[str, Any] = {
+        "status": "received",
+        "received": extraccion.recibidos,
+        "created": 0,
+        "duplicates": 0,
+        "invalid": 0,
+    }
+    if extraccion.solo_enlaces:
+        respuesta["note"] = "links_only"
+    if not extraccion.perfiles:
+        logger.info(
+            "Phantombuster sin perfiles (fuente %s): %s", fuente.source_id, extraccion.motivo
+        )
+        return respuesta
+
+    filas: list[FilaImportada] = []
+    invalidos = 0
+    for n, perfil in enumerate(extraccion.perfiles, start=1):
+        fila = validar_campos(campos_de_objeto(perfil), n)
+        if fila.error:
+            invalidos += 1
+        else:
+            filas.append(fila)
+    respuesta["invalid"] = invalidos
+    if extraccion.recibidos > MAX_PERFILES:
+        respuesta["note"] = "truncated"
+
+    async with tenant_session(client_id) as session:
+        origen: LeadSource | None = (
+            await session.execute(
+                select(LeadSource).where(
+                    LeadSource.id == fuente.source_id, LeadSource.client_id == client_id
+                )
+            )
+        ).scalar_one_or_none()
+        if origen is None or not origen.is_active:
+            raise _no_encontrada()
+        resultado = await insertar_lote(
+            session,
+            client_id,
+            filas,
+            etapa_id=await _etapa_inicial(session, client_id),
+            source_id=origen.id,
+            assigned_user_id=None,
+            user_id=None,
+            tipo_actividad=ACTIVITY_CAPTURED,
+            clave_lote="capture",
+            ahora=datetime.now(timezone.utc),
+            extra_enrichment={
+                "origin": "phantombuster",
+                "consent": False,
+                "utm": origen.utm_tracking,
+            },
+        )
+    respuesta["created"] = resultado.creadas
+    respuesta["duplicates"] = resultado.duplicadas
+    logger.info(
+        "Phantombuster (fuente %s): %s recibidos, %s creados, %s duplicados, %s invalidos",
+        fuente.source_id,
+        extraccion.recibidos,
+        resultado.creadas,
+        resultado.duplicadas,
+        invalidos,
+    )
+    return respuesta

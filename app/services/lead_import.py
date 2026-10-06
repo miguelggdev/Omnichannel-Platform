@@ -192,6 +192,63 @@ def parsear_csv(contenido: bytes) -> CsvParseado:
     return _procesar(cabeceras, lector)
 
 
+def validar_campos(crudo: dict[str, str], numero: int) -> FilaImportada:
+    """Normaliza y valida los campos de un registro con las reglas de `POST /leads`.
+
+    Args:
+        crudo: Campos canonicos (`email`, `first_name`, `full_name`...) como texto.
+        numero: Numero de fila o de elemento, para el informe de errores.
+
+    Returns:
+        La fila validada, o con el error (que nombra el campo y no repite el dato).
+    """
+    crudo = dict(crudo)
+    completo = crudo.pop("full_name", None)
+    if completo and "first_name" not in crudo:
+        nombre, apellido = _dividir_nombre(completo)
+        if nombre:
+            crudo["first_name"] = nombre
+        if apellido and "last_name" not in crudo:
+            crudo["last_name"] = apellido
+    if "linkedin_url" in crudo:
+        crudo["linkedin_url"] = normalizar_linkedin(crudo["linkedin_url"])
+    try:
+        lead = LeadCreate.model_validate(crudo)
+    except ValidationError as exc:
+        return FilaImportada(numero=numero, error=_mensaje_de_error(exc))
+    # Solo lo que venia en el registro (el modelo anade valores por defecto que no son suyos);
+    # ya validado y normalizado por el schema (p. ej. el telefono recortado).
+    datos = {k: v for k, v in lead.model_dump(exclude_none=True).items() if k in crudo}
+    if "email" in datos:
+        datos["email"] = str(datos["email"])
+    return FilaImportada(numero=numero, datos=datos)
+
+
+def campos_de_objeto(objeto: dict[str, Any]) -> dict[str, str]:
+    """Mapea las claves de un objeto JSON (p. ej. un perfil de Phantombuster) a campos del lead.
+
+    Usa los mismos alias que las cabeceras del CSV (`profileUrl`, `fullName`, `title`,
+    `company`...). Solo se toman valores escalares (texto o numero): un objeto anidado se ignora.
+    Si dos claves apuntan al mismo campo gana la primera.
+
+    Args:
+        objeto: Un registro JSON.
+
+    Returns:
+        Campos canonicos con su valor como texto.
+    """
+    campos: dict[str, str] = {}
+    for clave, valor in objeto.items():
+        campo = _ALIAS.get(normalizar_cabecera(str(clave)))
+        if campo is None or campo in campos or isinstance(valor, bool):
+            continue
+        if isinstance(valor, (str, int, float)):
+            texto = _texto_de_celda(valor)
+            if texto:
+                campos[campo] = texto
+    return campos
+
+
 def _procesar(cabeceras: list[str], registros: Iterable[list[str]]) -> CsvParseado:
     """Mapea las cabeceras y valida cada registro. Comun a CSV y a Excel.
 
@@ -231,26 +288,7 @@ def _procesar(cabeceras: list[str], registros: Iterable[list[str]]) -> CsvParsea
             valor = registro[i].strip() if i < len(registro) else ""
             if valor:
                 crudo[campo] = valor
-        completo = crudo.pop("full_name", None)
-        if completo and "first_name" not in crudo:
-            nombre, apellido = _dividir_nombre(completo)
-            if nombre:
-                crudo["first_name"] = nombre
-            if apellido and "last_name" not in crudo:
-                crudo["last_name"] = apellido
-        if "linkedin_url" in crudo:
-            crudo["linkedin_url"] = normalizar_linkedin(crudo["linkedin_url"])
-        try:
-            lead = LeadCreate.model_validate(crudo)
-        except ValidationError as exc:
-            filas.append(FilaImportada(numero=numero, error=_mensaje_de_error(exc)))
-            continue
-        # Solo lo que venia en el archivo (el modelo anade valores por defecto que no son del CSV);
-        # ya validado y normalizado por el schema (p. ej. el telefono recortado).
-        datos = {k: v for k, v in lead.model_dump(exclude_none=True).items() if k in crudo}
-        if "email" in datos:
-            datos["email"] = str(datos["email"])
-        filas.append(FilaImportada(numero=numero, datos=datos))
+        filas.append(validar_campos(crudo, numero))
     if not filas:
         raise CsvError("El archivo no tiene filas de datos")
     return CsvParseado(filas=filas, columnas_ignoradas=ignoradas)
