@@ -7,13 +7,18 @@ Asi el historial no necesita anonimizarse cuando se anonimiza el lead y no filtr
 borro. `registrar_actividad` lo comprueba: rechaza claves que suenan a dato personal.
 """
 
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.lead_activity import LeadActivity
+from app.models.lead import Lead
+from app.models.lead_activity import ACTIVITY_INBOUND_MESSAGE, LeadActivity
+
+logger = logging.getLogger(__name__)
 
 #: Claves de metadata que nunca se aceptan: serian datos personales en el historial.
 _CLAVES_PROHIBIDAS = frozenset(
@@ -105,3 +110,75 @@ async def listar_actividades(
         )
     ).scalars()
     return list(filas), int(total)
+
+
+#: Cada cuanto, como maximo, un lead anota un `inbound_message` en su historial. Cada mensaje
+#: sí actualiza `last_activity_at`, pero una conversacion de 40 mensajes no debe ser 40 filas.
+INBOUND_ACTIVITY_MIN_INTERVAL = timedelta(minutes=30)
+
+
+async def registrar_mensaje_entrante(
+    session: AsyncSession,
+    *,
+    client_id: UUID,
+    lead_id: UUID,
+    channel: str,
+    conversation_id: UUID,
+    instante: datetime,
+) -> None:
+    """Anota que el contacto de un lead escribio: sube `last_activity_at` y deja rastro acotado.
+
+    Corre dentro de la transaccion que guarda el mensaje, pero **aislada en un SAVEPOINT y sin
+    propagar errores**: un fallo aqui (el lead desaparecio, una carrera) no puede costar el
+    mensaje del cliente. `last_activity_at` solo avanza, nunca retrocede (un mensaje reprocesado
+    con una fecha vieja no atrasa al lead).
+
+    Args:
+        session: Sesion de la transaccion del mensaje, con el tenant fijado.
+        client_id: Tenant.
+        lead_id: Lead enlazado al contacto (`contacts.lead_id`).
+        channel: Canal del mensaje.
+        conversation_id: Conversacion.
+        instante: Momento del mensaje.
+    """
+    try:
+        async with session.begin_nested():
+            lead = (
+                await session.execute(
+                    select(Lead)
+                    .where(
+                        Lead.id == lead_id, Lead.client_id == client_id, Lead.deleted_at.is_(None)
+                    )
+                    .with_for_update(skip_locked=True)
+                )
+            ).scalar_one_or_none()
+            if lead is None:
+                return
+            if lead.last_activity_at is None or lead.last_activity_at < instante:
+                lead.last_activity_at = instante
+            ultima = (
+                await session.execute(
+                    select(func.max(LeadActivity.created_at)).where(
+                        LeadActivity.client_id == client_id,
+                        LeadActivity.lead_id == lead_id,
+                        LeadActivity.activity_type == ACTIVITY_INBOUND_MESSAGE,
+                    )
+                )
+            ).scalar_one()
+            # El tope se mide con el reloj de proceso (`created_at` es de la base), no con la fecha del
+            # mensaje, que viene del proveedor y puede ser antigua si el mensaje se reprocesa.
+            if (
+                ultima is None
+                or datetime.now(timezone.utc) - ultima >= INBOUND_ACTIVITY_MIN_INTERVAL
+            ):
+                registrar_actividad(
+                    session,
+                    client_id=client_id,
+                    lead_id=lead_id,
+                    tipo=ACTIVITY_INBOUND_MESSAGE,
+                    channel=channel,
+                    conversation_id=conversation_id,
+                )
+            await session.flush()
+    except Exception:
+        logger.exception("No se pudo registrar el mensaje entrante del lead %s", lead_id)
