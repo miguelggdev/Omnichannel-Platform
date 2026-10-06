@@ -210,6 +210,11 @@ class Settings(BaseSettings):
     ONBOARDING_FREE_TOKEN_BUDGET: int = 50_000
     EMAIL_VERIFICATION_TTL_HOURS: int = 24
 
+    # Captura publica de leads (`POST /capture/{token}`, Sprint 16): limites por minuto.
+    # El de IP corta antes de tocar la base, incluso con tokens que no existen.
+    CAPTURE_MAX_PER_IP_PER_MINUTE: int = 20
+    CAPTURE_MAX_PER_SOURCE_PER_MINUTE: int = 120
+
     # Observabilidad (Sprint 8)
     # Vacio = tracing deshabilitado. Es el valor por defecto a proposito: sin
     # collector escuchando, el exporter OTLP reintenta en background y ensucia

@@ -304,6 +304,8 @@ class SourceResponse(BaseModel):
     utm_tracking: dict[str, Any]
     is_active: bool
     capture_enabled: bool = False
+    #: Leads no borrados que llegaron por esta fuente.
+    leads_count: int = 0
     created_at: datetime
 
 
@@ -324,12 +326,18 @@ class LeadCapture(_DatosDeLead):
         utm_source: Parametros UTM de la visita, si los hay.
         website: Campo trampa (honeypot): oculto para personas, los bots lo rellenan. Si trae
             algo, la captura se descarta en silencio.
+        consent: Autorizacion de tratamiento de datos. La fuente la exige salvo que su
+            `config["require_consent"]` sea `false`.
     """
 
     utm_source: str | None = Field(default=None, max_length=100)
     utm_medium: str | None = Field(default=None, max_length=100)
     utm_campaign: str | None = Field(default=None, max_length=150)
     website: str | None = Field(default=None, max_length=200)
+    consent: bool = Field(
+        default=False,
+        description="La persona acepto el tratamiento de sus datos (Ley 1581 / RGPD).",
+    )
 
     @model_validator(mode="after")
     def _alguna_forma_de_contacto(self) -> Self:
@@ -352,3 +360,75 @@ class KanbanColumn(BaseModel):
     leads: list[LeadResponse]
     total: int
     total_value: Decimal
+
+
+class LeadModuleStatus(BaseModel):
+    """Estado del modulo de leads del tenant.
+
+    Attributes:
+        enabled: Si el tenant tiene el modulo activo.
+        stages: Cuantas etapas tiene su pipeline.
+    """
+
+    enabled: bool
+    stages: int
+
+
+class LeadModuleUpdate(BaseModel):
+    """Cuerpo de `PUT /platform/clients/{id}/lead-management`."""
+
+    enabled: bool
+
+
+class LeadModuleUpdated(BaseModel):
+    """Resultado de activar o desactivar el modulo.
+
+    Attributes:
+        client_id: Tenant modificado.
+        enabled: Estado final.
+        stages_created: Etapas por defecto que se crearon (0 si ya tenia pipeline o se apago).
+    """
+
+    client_id: UUID
+    enabled: bool
+    stages_created: int
+
+
+class LeadContactLink(BaseModel):
+    """Cuerpo de `PUT /leads/{id}/contact`: el contacto con el que se enlaza."""
+
+    contact_id: UUID
+
+
+class LeadImportError(BaseModel):
+    """Una fila rechazada. El mensaje nombra el campo, no repite el dato."""
+
+    row: int
+    error: str
+
+
+class LeadImportResponse(BaseModel):
+    """Resultado de `POST /leads/import`.
+
+    Attributes:
+        total_rows: Filas de datos del archivo (sin la cabecera ni las en blanco).
+        imported: Leads creados (con `dry_run`, los que se habrian creado).
+        duplicates: Filas omitidas porque el email o telefono ya existe o se repite en el archivo.
+        invalid: Filas con un dato no valido.
+        errors: Las primeras 100 filas rechazadas (invalidas y duplicadas) y por que.
+        errors_truncated: Hubo mas de 100.
+        ignored_columns: Cabeceras que no corresponden a ningun campo del lead.
+        dry_run: Si solo se valido, sin crear nada.
+        source_id: Fuente a la que quedaron asociados los leads (`None` en un `dry_run`
+            que habria creado la de importacion).
+    """
+
+    total_rows: int
+    imported: int
+    duplicates: int
+    invalid: int
+    errors: list[LeadImportError]
+    errors_truncated: bool
+    ignored_columns: list[str]
+    dry_run: bool
+    source_id: UUID | None

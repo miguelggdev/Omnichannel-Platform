@@ -21,12 +21,18 @@ from app.api.v1.analytics import router as analytics_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.business_profile import router as business_profile_router
 from app.api.v1.campaigns import router as campaigns_router
+from app.api.v1.capture import router as capture_router
 from app.api.v1.clinical import router as clinical_router
 from app.api.v1.contacts import router as contacts_router
 from app.api.v1.conversations import router as conversations_router
 from app.api.v1.csat import router as csat_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.feature_flags import router as feature_flags_router
+from app.api.v1.lead_module import platform_router as lead_module_platform_router
+from app.api.v1.lead_module import router as lead_module_router
+from app.api.v1.lead_sources import router as lead_sources_router
+from app.api.v1.lead_stages import router as lead_stages_router
+from app.api.v1.leads import router as leads_router
 from app.api.v1.marketing_settings import router as marketing_settings_router
 from app.api.v1.notes import router as notes_router
 from app.api.v1.onboarding import router as onboarding_router
@@ -55,6 +61,7 @@ from app.core.logging import setup_logging
 from app.core.telemetry import instrument_fastapi, setup_telemetry, shutdown_telemetry
 from app.middleware.audit import AuditContextMiddleware
 from app.middleware.observability import ObservabilityMiddleware
+from app.middleware.public_capture_cors import PublicCaptureCORSMiddleware
 from app.middleware.tenant_context import TenantContextMiddleware
 
 # Se importa por su efecto: registra `_on_conversation_resolved` como handler
@@ -165,6 +172,9 @@ def create_app() -> FastAPI:
     # envuelve tambien a TenantContextMiddleware, de modo que un 401 por JWT
     # invalido tambien queda medido y logueado con su trace_id.
     app.add_middleware(ObservabilityMiddleware)
+    # Lo ultimo registrado es lo primero que ejecuta: va por fuera del CORSMiddleware global
+    # para que el preflight de la captura publica no lo rechace ese (ver su docstring).
+    app.add_middleware(PublicCaptureCORSMiddleware)
 
     # ── Exception handlers ──
     app.add_exception_handler(AppException, app_exception_handler)  # type: ignore[arg-type]
@@ -175,6 +185,14 @@ def create_app() -> FastAPI:
     app.include_router(metrics_router, prefix="/internal", tags=["internal"])
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
     app.include_router(onboarding_router, prefix="/api/v1/onboarding", tags=["onboarding"])
+    app.include_router(lead_module_router, prefix="/api/v1/lead-management", tags=["leads"])
+    app.include_router(
+        lead_module_platform_router, prefix="/api/v1/platform", tags=["platform", "leads"]
+    )
+    app.include_router(leads_router, prefix="/api/v1/leads", tags=["leads"])
+    app.include_router(capture_router, prefix="/api/v1/capture", tags=["leads"])
+    app.include_router(lead_stages_router, prefix="/api/v1/lead-pipeline-stages", tags=["leads"])
+    app.include_router(lead_sources_router, prefix="/api/v1/lead-sources", tags=["leads"])
     # Los webhooks NO pasan por TenantContextMiddleware: se autentican por firma
     # HMAC. El prefijo debe coincidir con WEBHOOK_PATHS_PREFIX del middleware.
     app.include_router(webhooks_router, prefix="/api/v1/webhooks", tags=["webhooks"])
