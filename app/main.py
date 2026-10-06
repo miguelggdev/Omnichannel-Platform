@@ -21,6 +21,7 @@ from app.api.v1.analytics import router as analytics_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.business_profile import router as business_profile_router
 from app.api.v1.campaigns import router as campaigns_router
+from app.api.v1.capture import router as capture_router
 from app.api.v1.clinical import router as clinical_router
 from app.api.v1.contacts import router as contacts_router
 from app.api.v1.conversations import router as conversations_router
@@ -60,6 +61,7 @@ from app.core.logging import setup_logging
 from app.core.telemetry import instrument_fastapi, setup_telemetry, shutdown_telemetry
 from app.middleware.audit import AuditContextMiddleware
 from app.middleware.observability import ObservabilityMiddleware
+from app.middleware.public_capture_cors import PublicCaptureCORSMiddleware
 from app.middleware.tenant_context import TenantContextMiddleware
 
 # Se importa por su efecto: registra `_on_conversation_resolved` como handler
@@ -170,6 +172,9 @@ def create_app() -> FastAPI:
     # envuelve tambien a TenantContextMiddleware, de modo que un 401 por JWT
     # invalido tambien queda medido y logueado con su trace_id.
     app.add_middleware(ObservabilityMiddleware)
+    # Lo ultimo registrado es lo primero que ejecuta: va por fuera del CORSMiddleware global
+    # para que el preflight de la captura publica no lo rechace ese (ver su docstring).
+    app.add_middleware(PublicCaptureCORSMiddleware)
 
     # ── Exception handlers ──
     app.add_exception_handler(AppException, app_exception_handler)  # type: ignore[arg-type]
@@ -185,6 +190,7 @@ def create_app() -> FastAPI:
         lead_module_platform_router, prefix="/api/v1/platform", tags=["platform", "leads"]
     )
     app.include_router(leads_router, prefix="/api/v1/leads", tags=["leads"])
+    app.include_router(capture_router, prefix="/api/v1/capture", tags=["leads"])
     app.include_router(lead_stages_router, prefix="/api/v1/lead-pipeline-stages", tags=["leads"])
     app.include_router(lead_sources_router, prefix="/api/v1/lead-sources", tags=["leads"])
     # Los webhooks NO pasan por TenantContextMiddleware: se autentican por firma

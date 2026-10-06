@@ -326,12 +326,18 @@ class LeadCapture(_DatosDeLead):
         utm_source: Parametros UTM de la visita, si los hay.
         website: Campo trampa (honeypot): oculto para personas, los bots lo rellenan. Si trae
             algo, la captura se descarta en silencio.
+        consent: Autorizacion de tratamiento de datos. La fuente la exige salvo que su
+            `config["require_consent"]` sea `false`.
     """
 
     utm_source: str | None = Field(default=None, max_length=100)
     utm_medium: str | None = Field(default=None, max_length=100)
     utm_campaign: str | None = Field(default=None, max_length=150)
     website: str | None = Field(default=None, max_length=200)
+    consent: bool = Field(
+        default=False,
+        description="La persona acepto el tratamiento de sus datos (Ley 1581 / RGPD).",
+    )
 
     @model_validator(mode="after")
     def _alguna_forma_de_contacto(self) -> Self:

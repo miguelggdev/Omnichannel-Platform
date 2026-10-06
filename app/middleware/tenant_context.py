@@ -55,6 +55,9 @@ WEBHOOK_PATHS_PREFIX = "/api/v1/webhooks/"
 # Webhooks de Twilio Voice (Sprint 13): firmados con `X-Twilio-Signature`. Solo
 # este prefijo; el resto de `/api/v1/voice` (llamadas salientes, listado) va con JWT.
 VOICE_WEBHOOK_PATHS_PREFIX = "/api/v1/voice/twilio/"
+# Captura publica de leads (Sprint 16): la autenticacion es el token de la fuente, que va en
+# la URL; quien rellena un formulario web no tiene JWT.
+CAPTURE_PATHS_PREFIX = "/api/v1/capture/"
 
 
 class TenantContextMiddleware(BaseHTTPMiddleware):
@@ -84,7 +87,7 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
 
         # Rutas públicas: no requieren JWT
         if path in PUBLIC_PATHS or path.startswith(
-            (WEBHOOK_PATHS_PREFIX, VOICE_WEBHOOK_PATHS_PREFIX)
+            (WEBHOOK_PATHS_PREFIX, VOICE_WEBHOOK_PATHS_PREFIX, CAPTURE_PATHS_PREFIX)
         ):
             return await call_next(request)
 
