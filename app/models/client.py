@@ -28,6 +28,8 @@ class Client(Base):
         admin_assistant_enabled: Si el Admin Assistant está habilitado.
         admin_assistant_voice_enabled: Si la voz del Admin Assistant está activa.
         lead_management_enabled: Si el módulo de leads está activo (ADR-021).
+        icp_config: Perfil de cliente ideal para el FIT score (Sprint 17).
+        lead_scoring_weights: Pesos `fit`/`behavioral`/`ai` del score total (suman 100).
         theme_config: Configuración de tema visual (ADR-025).
         suspension_date: Fecha programada de suspensión por falta de pago.
         payment_alert_config: Config de alertas de pago escalonadas (ADR-015).
@@ -67,6 +69,13 @@ class Client(Base):
 
     # Lead Management (ADR-021)
     lead_management_enabled: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    # Perfil de cliente ideal y pesos del score total (Sprint 16, migracion 025).
+    icp_config: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}", nullable=False)
+    lead_scoring_weights: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        server_default='{"fit": 40, "behavioral": 30, "ai": 30}',
+        nullable=False,
+    )
 
     # Theme (ADR-025)
     theme_config: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}")
