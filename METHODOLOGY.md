@@ -442,6 +442,22 @@ El stub se reemplaza por el import real en cuanto Dev A pushee el modelo. Claude
 
 ---
 
+### Sprint 16 — Fase 5: Lead Management, cimientos
+> Este sprint no estaba en la matriz original (ver PROGRESS.md). Reparto propuesto en la sesion 55.
+
+| Dev | Tareas | Archivos |
+|---|---|---|
+| **A** | Migracion 025 (tablas #27-29, columnas de `clients`/`contacts`, `capture_lookup_source()`) | `migrations/versions/025_lead_management.py` |
+| **A** | Modelos `Lead`, `LeadPipelineStage`, `LeadSource` + schemas | `app/models/lead*.py`, `app/schemas/lead.py` |
+| **A** | `compute_total_score`, `ensure_default_stages`, token de captura | `app/services/lead_scoring.py`, `app/services/lead_pipeline.py` |
+| **B** | API CRUD de leads (filtros, paginacion, orden), mover de etapa, soft delete | `app/api/v1/leads.py` |
+| **B** | API de etapas y de fuentes (token de captura se muestra una vez) | `app/api/v1/lead_pipeline_stages.py`, `app/api/v1/lead_sources.py` |
+| **B** | `POST /capture/{token}` publico con limite por IP (reusar `app/core/rate_limit.py`) y honeypot | `app/api/v1/capture.py` |
+| **B** | Importacion CSV, Kanban, sincronizacion lead <-> contacto | `app/services/lead_import.py`, `app/api/v1/leads.py` |
+| **B** | **RGPD:** exportar y anonimizar los leads de un contacto (`admin.py`) antes de exponer la API | `app/api/v1/admin.py` |
+
+---
+
 ## 7. Quality Gates
 
 ### Gate 1: Pre-Commit (automático en cada loop)
