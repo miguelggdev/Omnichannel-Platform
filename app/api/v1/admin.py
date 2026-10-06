@@ -55,12 +55,14 @@ from app.models.contact_identifier import ContactIdentifier
 from app.models.contact_tag import ContactTag
 from app.models.conversation import Conversation
 from app.models.internal_note import InternalNote
+from app.models.lead import Lead
 from app.models.message import Message
 from app.models.satisfaction_survey import SatisfactionSurvey
 from app.models.tag import Tag
 from app.models.user import User
 from app.schemas.csat import CsatSummaryResponse
 from app.schemas.user import UserCreate, UserListResponse, UserResponse, UserUpdate
+from app.services.lead_privacy import anonimizar_lead, lead_a_dict, lead_esta_anonimizado
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +212,18 @@ async def export_contact_data(
             for mensaje in mensajes:
                 mensajes_por_conversacion[mensaje.conversation_id].append(mensaje)
 
+        leads = (
+            (
+                await session.execute(
+                    select(Lead)
+                    .where(Lead.client_id == client_id, Lead.contact_id == contact_id)
+                    .order_by(Lead.created_at.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+
         return {
             "export_date": datetime.now(timezone.utc).isoformat(),
             "contact": {
@@ -234,6 +248,8 @@ async def export_contact_data(
                 for i in identificadores
             ],
             "tags": [fila.name for fila in etiquetas],
+            # Incluye los leads con soft delete: borrar un lead no lo quita de la base.
+            "leads": [lead_a_dict(lead) for lead in leads],
             "notes": [
                 {
                     "id": str(n.id),
@@ -569,6 +585,19 @@ async def gdpr_delete_contact(
         for nota in notas:
             nota.content = CONTENIDO_ANONIMIZADO
 
+        # Los leads vinculados guardan nombre, email y telefono del mismo titular (Sprint 16).
+        leads = (
+            (
+                await session.execute(
+                    select(Lead).where(Lead.client_id == client_id, Lead.contact_id == contact_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for lead in leads:
+            anonimizar_lead(lead)
+
         if conversaciones:
             # El asunto es texto libre de un agente y puede llevar datos del
             # contacto; el export RGPD ya lo entrega, asi que la supresion
@@ -607,7 +636,77 @@ async def gdpr_delete_contact(
         "identifiers_anonymized": len(identificadores),
         "messages_anonymized": mensajes_anonimizados,
         "notes_anonymized": len(notas),
+        "leads_anonymized": len(leads),
     }
+
+
+# ─── RGPD de leads (Sprint 16) ────────────────────────────────────────────────
+
+
+async def _lead_o_404(session: AsyncSession, lead_id: UUID, client_id: UUID) -> Lead:
+    """Busca un lead del tenant, **borrado o no** (la supresion debe alcanzar a ambos)."""
+    lead: Lead | None = (
+        await session.execute(select(Lead).where(Lead.id == lead_id, Lead.client_id == client_id))
+    ).scalar_one_or_none()
+    if lead is None:
+        raise AppException(status_code=404, error_code=NOT_FOUND, message="Lead no encontrado")
+    return lead
+
+
+@router.get("/leads/{lead_id}/export")
+async def export_lead_data(
+    lead_id: UUID,
+    user: dict[str, Any] = Depends(require_role(*_GDPR_ROLES)),
+) -> dict[str, Any]:
+    """Exporta en JSON todo lo que la plataforma guarda sobre un lead (derecho de acceso).
+
+    Args:
+        lead_id: Lead a exportar (tambien si tiene soft delete).
+        user: Usuario autenticado; solo admin y super_admin.
+
+    Returns:
+        Fecha del export y los datos del lead.
+
+    Raises:
+        AppException: 404 si no existe para este tenant.
+    """
+    client_id: UUID = user["client_id"]
+    async with tenant_session(client_id) as session:
+        lead = await _lead_o_404(session, lead_id, client_id)
+        return {"export_date": datetime.now(timezone.utc).isoformat(), "lead": lead_a_dict(lead)}
+
+
+@router.delete("/leads/{lead_id}/gdpr-delete")
+async def gdpr_delete_lead(
+    lead_id: UUID,
+    user: dict[str, Any] = Depends(require_role(*_GDPR_ROLES)),
+) -> dict[str, Any]:
+    """Anonimiza los datos personales de un lead (derecho de supresion).
+
+    El `DELETE /leads/{id}` normal es un soft delete y deja los datos en la base; esto es la
+    supresion de verdad. Ver `app/services/lead_privacy.py` para que se quita y que se
+    conserva. Repetirla responde 400.
+
+    Args:
+        lead_id: Lead a anonimizar (tambien si tiene soft delete).
+        user: Usuario autenticado; solo admin y super_admin.
+
+    Returns:
+        Confirmacion con el id del lead.
+
+    Raises:
+        AppException: 404 si no existe; 400 si ya estaba anonimizado.
+    """
+    client_id: UUID = user["client_id"]
+    async with tenant_session(client_id) as session:
+        lead = await _lead_o_404(session, lead_id, client_id)
+        if lead_esta_anonimizado(lead):
+            raise AppException(
+                status_code=400, error_code=VALIDATION_ERROR, message="El lead ya fue anonimizado"
+            )
+        anonimizar_lead(lead)
+    logger.info("RGPD: lead %s anonimizado por %s (tenant %s)", lead_id, user["user_id"], client_id)
+    return {"status": "success", "message": "Datos del lead anonimizados", "lead_id": str(lead_id)}
 
 
 # ─── CSAT (Sprint 11, Dev B) ──────────────────────────────────────────────────
