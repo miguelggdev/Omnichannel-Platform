@@ -6,10 +6,11 @@ historial, y el historial no vuelve a exponer lo que se borro. `description` que
 corto sin datos de la persona.
 """
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID as _UUID
 
-from sqlalchemy import ForeignKey, Index, String, Text, desc
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, desc, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -58,4 +59,8 @@ class LeadActivity(TenantBaseModel):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, server_default="{}", nullable=False
+    )
+    # `clock_timestamp()`, no `now()`: los hechos de una misma peticion necesitan orden entre si.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
     )

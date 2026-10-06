@@ -238,3 +238,26 @@ class TestCanonizarLinkedin:
         )
         assert lead.linkedin_url == "https://linkedin.com/in/ana"
         assert _sincronizar(Lead(client_id=TENANT_A, linkedin_url="  ")).linkedin_url is None
+
+
+class TestInstanteMonotono:
+    def test_nunca_se_repite_ni_retrocede_aunque_el_reloj_coincida(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import datetime as dt
+
+        from app.services import lead_activity
+
+        fijo = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+
+        class RelojParado(dt.datetime):
+            @classmethod
+            def now(cls, tz: dt.tzinfo | None = None) -> "RelojParado":  # type: ignore[override]
+                return cls(2026, 1, 1, tzinfo=tz)
+
+        monkeypatch.setattr(lead_activity, "datetime", RelojParado)
+        monkeypatch.setattr(lead_activity, "_ultimo_instante", fijo - dt.timedelta(seconds=1))
+        instantes = [lead_activity._instante_monotono() for _ in range(5)]
+        assert instantes == sorted(set(instantes))
+        assert instantes[0] == fijo
+        assert instantes[4] == fijo + dt.timedelta(microseconds=4)

@@ -40,6 +40,25 @@ _CLAVES_PROHIBIDAS = frozenset(
 )
 
 
+_ultimo_instante = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _instante_monotono() -> datetime:
+    """Un instante estrictamente creciente dentro del proceso.
+
+    Los hechos de una misma peticion se escriben en una sola transaccion y, a veces, en un solo
+    `INSERT` de varias filas: ni `now()` (hora de inicio de la transaccion) ni `clock_timestamp()`
+    (el orden de evaluacion dentro de un multi-VALUES no esta garantizado) dan un orden fiable.
+    Asignarlo al registrar, y empujar 1 microsegundo si coincide con el anterior, si.
+    """
+    global _ultimo_instante
+    ahora = datetime.now(timezone.utc)
+    if ahora <= _ultimo_instante:
+        ahora = _ultimo_instante + timedelta(microseconds=1)
+    _ultimo_instante = ahora
+    return ahora
+
+
 def registrar_actividad(
     session: AsyncSession,
     *,
@@ -75,6 +94,7 @@ def registrar_actividad(
         lead_id=lead_id,
         user_id=user_id,
         activity_type=tipo,
+        created_at=_instante_monotono(),
         metadata_={k: (str(v) if isinstance(v, UUID) else v) for k, v in metadata.items()},
     )
     session.add(actividad)

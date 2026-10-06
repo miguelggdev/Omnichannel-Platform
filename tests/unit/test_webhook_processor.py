@@ -518,7 +518,11 @@ class TestEventosDelMensajeEntrante:
     ) -> None:
         """Un contacto y una conversacion que ya existian no son hechos nuevos."""
         contacto = SimpleNamespace(
-            id=uuid.uuid4(), display_name="Alguien", merged_into_id=None, metadata_={}
+            id=uuid.uuid4(),
+            display_name="Alguien",
+            merged_into_id=None,
+            metadata_={},
+            lead_id=None,  # como el modelo real: un contacto que no es lead
         )
         # `_find_or_create_contact` busca primero el identificador (indice
         # ciego) y despues el contacto al que apunta.

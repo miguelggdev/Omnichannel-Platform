@@ -242,10 +242,10 @@ class TestImportar:
     ) -> None:
         await crear_lead(crm.client_id, email="x@example.com", first_name="Original")
 
-        async def ciega(*_a: Any, **_k: Any) -> tuple[set[str], set[str]]:
-            return set(), set()
+        async def ciega(*_a: Any, **_k: Any) -> tuple[set[str], set[str], set[str]]:
+            return set(), set(), set()
 
-        monkeypatch.setattr("app.api.v1.leads._hashes_existentes", ciega)
+        monkeypatch.setattr("app.services.lead_batch._existentes", ciega)
         async with _cliente(crm, "admin") as c:
             r = await c.post(
                 IMPORTAR, files=_archivo("email\nx@example.com\ny@example.com\nz@example.com\n")
