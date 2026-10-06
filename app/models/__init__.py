@@ -22,6 +22,9 @@ from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.models.internal_note import InternalNote
 from app.models.invoice import Invoice
+from app.models.lead import Lead
+from app.models.lead_pipeline_stage import LeadPipelineStage
+from app.models.lead_source import LeadSource
 from app.models.message import Message
 from app.models.outgoing_webhook_log import OutgoingWebhookLog
 from app.models.pending_response import PendingResponse
@@ -60,6 +63,9 @@ __all__ = [
     "InstantiationStatus",
     "InternalNote",
     "Invoice",
+    "Lead",
+    "LeadPipelineStage",
+    "LeadSource",
     "Message",
     "OutgoingWebhookLog",
     "PatientConsent",

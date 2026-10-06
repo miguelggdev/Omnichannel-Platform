@@ -27,6 +27,8 @@ class Contact(TenantBaseModel):
             ya fueron anonimizados (la fila se conserva por integridad
             referencial y para las estadisticas agregadas).
         gdpr_deleted_at: Cuando se ejecuto esa anonimizacion.
+        lead_id: Lead vinculado (Sprint 16); `ON DELETE SET NULL`.
+        is_lead: Si el contacto es (o fue) un lead.
     """
 
     __tablename__ = "contacts"
@@ -43,6 +45,14 @@ class Contact(TenantBaseModel):
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, server_default="{}")
     is_gdpr_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     gdpr_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # `use_alter`: contacts y leads se referencian entre si; la FK de este lado se anade aparte.
+    lead_id: Mapped[_UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("leads.id", ondelete="SET NULL", name="fk_contacts_lead_id", use_alter=True),
+        nullable=True,
+        index=True,
+    )
+    is_lead: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
