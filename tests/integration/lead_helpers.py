@@ -73,3 +73,12 @@ async def fila_cruda(client_id: uuid.UUID, lead_id: uuid.UUID) -> Any:
                 {"i": str(lead_id)},
             )
         ).one()
+
+
+async def activar_modulo(client_id: uuid.UUID, activo: bool = True) -> None:
+    """Enciende (o apaga) `lead_management_enabled` directamente en la base."""
+    async with tenant_session(client_id) as s:
+        await s.execute(
+            text("UPDATE clients SET lead_management_enabled = :a WHERE id = :c"),
+            {"a": activo, "c": str(client_id)},
+        )

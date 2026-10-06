@@ -27,6 +27,10 @@ from app.api.v1.conversations import router as conversations_router
 from app.api.v1.csat import router as csat_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.feature_flags import router as feature_flags_router
+from app.api.v1.lead_module import platform_router as lead_module_platform_router
+from app.api.v1.lead_module import router as lead_module_router
+from app.api.v1.lead_sources import router as lead_sources_router
+from app.api.v1.lead_stages import router as lead_stages_router
 from app.api.v1.marketing_settings import router as marketing_settings_router
 from app.api.v1.notes import router as notes_router
 from app.api.v1.onboarding import router as onboarding_router
@@ -175,6 +179,12 @@ def create_app() -> FastAPI:
     app.include_router(metrics_router, prefix="/internal", tags=["internal"])
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
     app.include_router(onboarding_router, prefix="/api/v1/onboarding", tags=["onboarding"])
+    app.include_router(lead_module_router, prefix="/api/v1/lead-management", tags=["leads"])
+    app.include_router(
+        lead_module_platform_router, prefix="/api/v1/platform", tags=["platform", "leads"]
+    )
+    app.include_router(lead_stages_router, prefix="/api/v1/lead-pipeline-stages", tags=["leads"])
+    app.include_router(lead_sources_router, prefix="/api/v1/lead-sources", tags=["leads"])
     # Los webhooks NO pasan por TenantContextMiddleware: se autentican por firma
     # HMAC. El prefijo debe coincidir con WEBHOOK_PATHS_PREFIX del middleware.
     app.include_router(webhooks_router, prefix="/api/v1/webhooks", tags=["webhooks"])

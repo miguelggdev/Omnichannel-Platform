@@ -304,6 +304,8 @@ class SourceResponse(BaseModel):
     utm_tracking: dict[str, Any]
     is_active: bool
     capture_enabled: bool = False
+    #: Leads no borrados que llegaron por esta fuente.
+    leads_count: int = 0
     created_at: datetime
 
 
@@ -352,3 +354,35 @@ class KanbanColumn(BaseModel):
     leads: list[LeadResponse]
     total: int
     total_value: Decimal
+
+
+class LeadModuleStatus(BaseModel):
+    """Estado del modulo de leads del tenant.
+
+    Attributes:
+        enabled: Si el tenant tiene el modulo activo.
+        stages: Cuantas etapas tiene su pipeline.
+    """
+
+    enabled: bool
+    stages: int
+
+
+class LeadModuleUpdate(BaseModel):
+    """Cuerpo de `PUT /platform/clients/{id}/lead-management`."""
+
+    enabled: bool
+
+
+class LeadModuleUpdated(BaseModel):
+    """Resultado de activar o desactivar el modulo.
+
+    Attributes:
+        client_id: Tenant modificado.
+        enabled: Estado final.
+        stages_created: Etapas por defecto que se crearon (0 si ya tenia pipeline o se apago).
+    """
+
+    client_id: UUID
+    enabled: bool
+    stages_created: int
