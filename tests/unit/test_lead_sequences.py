@@ -17,6 +17,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.models import lead_sequence as modelo
+from app.models.lead import Lead
 from app.schemas.lead_sequence import (
     Branch,
     ConditionStep,
@@ -56,6 +57,7 @@ from app.services.lead_sequences import (
     DatosDisparo,
     SecuenciaError,
     cumple_disparador,
+    motivo_para_no_inscribir,
     pausar,
     reanudar,
     registrar_avance,
@@ -201,6 +203,45 @@ class TestGrafo:
     def test_bucle_con_espera_vale(self) -> None:
         cond = ConditionStep(check="no_reply", if_true=Branch(action="goto", goto_position=1))
         validar_grafo([MSG, ESPERA, cond])
+
+    def test_bucle_que_se_salta_la_espera_con_un_goto_adelante(self) -> None:
+        # 1 -> 3 salta la espera del paso 2; 4 -> 1 cierra el bucle: mensajes sin parar.
+        pasos = [
+            ConditionStep(check="no_reply", if_true=Branch(action="goto", goto_position=3)),
+            ESPERA,
+            MSG,
+            ConditionStep(check="no_reply", if_true=Branch(action="goto", goto_position=1)),
+        ]
+        with pytest.raises(ValueError, match="bucle"):
+            validar_grafo(pasos)
+
+    def test_bucle_cuya_unica_salida_sin_espera_es_exit_vale(self) -> None:
+        pasos = [
+            MSG,
+            ConditionStep(check="replied", if_true=Branch(action="exit")),
+            ESPERA,
+            ConditionStep(check="no_reply", if_true=Branch(action="goto", goto_position=1)),
+        ]
+        validar_grafo(pasos)
+
+    def test_bucle_por_la_rama_continue(self) -> None:
+        # 1 sigue (continue) a 2, que vuelve a 1: ninguna espera en medio.
+        pasos = [
+            ConditionStep(check="replied", if_true=Branch(action="goto", goto_position=3)),
+            ConditionStep(check="no_reply", if_true=Branch(action="goto", goto_position=1)),
+            MSG,
+        ]
+        with pytest.raises(ValueError, match="bucle"):
+            validar_grafo(pasos)
+
+    def test_bucle_solo_de_condiciones(self) -> None:
+        pasos = [
+            MSG,
+            ConditionStep(check="replied", if_false=Branch(action="goto", goto_position=3)),
+            ConditionStep(check="replied", if_false=Branch(action="goto", goto_position=2)),
+        ]
+        with pytest.raises(ValueError, match="bucle"):
+            validar_grafo(pasos)
 
     def test_bucle_con_espera_fuera_del_tramo_no_vale(self) -> None:
         cond = ConditionStep(check="no_reply", if_true=Branch(action="goto", goto_position=2))
@@ -394,7 +435,15 @@ class TestRenderizar:
 
     def test_variable_vacia_limpia_espacios(self) -> None:
         assert renderizar_plantilla("Hola {{first_name}}, ¿que tal?", {}) == "Hola, ¿que tal?"
-        assert renderizar_plantilla("Hola  {{first_name}}  !", {"first_name": None}) == "Hola!"
+        assert renderizar_plantilla("{{first_name}} hola", {}) == "hola"
+
+    def test_no_reescribe_el_texto_del_tenant(self) -> None:
+        texto = "Bonjour {{first_name}} ! Des questions ? Rendez-vous a 10 : 30."
+        assert renderizar_plantilla(texto, {"first_name": "Marie"}) == (
+            "Bonjour Marie ! Des questions ? Rendez-vous a 10 : 30."
+        )
+        assert renderizar_plantilla("Bonjour {{first_name}} !", {}) == "Bonjour !"
+        assert renderizar_plantilla("A  B {{first_name}}", {"first_name": "C"}) == "A  B C"
 
     def test_no_interpreta_format(self) -> None:
         texto = "{0.__class__} {first_name} {{first_name}}"
@@ -583,7 +632,9 @@ AHORA = datetime(2026, 10, 5, 15, 0, tzinfo=timezone.utc)
 class TestRegistrarAvance:
     def test_mensaje_avanza_y_toca_ya(self) -> None:
         ins, sesion = _inscripcion(), MagicMock()
-        registrar_avance(sesion, ins, Decision(SendMessage(1, MSG, "email"), 2, 3), ahora=AHORA)
+        registrar_avance(
+            sesion, ins, Decision(SendMessage(1, MSG, "email"), 2, 3), ahora=AHORA, ventana=None
+        )
         assert (ins.current_step, ins.steps_executed) == (2, 3)
         assert ins.next_step_at == AHORA
         assert ins.last_step_at == AHORA
@@ -592,25 +643,34 @@ class TestRegistrarAvance:
     def test_espera_necesita_instante(self) -> None:
         ins = _inscripcion()
         with pytest.raises(ValueError, match="next_step_at"):
-            registrar_avance(MagicMock(), ins, Decision(Wait(1, ESPERA), 2, 1), ahora=AHORA)
+            registrar_avance(
+                MagicMock(), ins, Decision(Wait(1, ESPERA), 2, 1), ahora=AHORA, ventana=None
+            )
         despues = AHORA + timedelta(days=1)
         ins = _inscripcion()
         registrar_avance(
-            MagicMock(), ins, Decision(Wait(1, ESPERA), 2, 1), ahora=AHORA, next_step_at=despues
+            MagicMock(),
+            ins,
+            Decision(Wait(1, ESPERA), 2, 1),
+            ahora=AHORA,
+            ventana=None,
+            next_step_at=despues,
         )
         assert ins.next_step_at == despues
 
     def test_tarea_que_pausa(self) -> None:
         ins = _inscripcion()
         tarea = TaskStep(title="Llamar", pause_until_done=True)
-        registrar_avance(MagicMock(), ins, Decision(CreateTask(1, tarea), 2, 1), ahora=AHORA)
+        registrar_avance(
+            MagicMock(), ins, Decision(CreateTask(1, tarea), 2, 1), ahora=AHORA, ventana=None
+        )
         assert ins.status == modelo.ENROLLMENT_PAUSED
         assert ins.next_step_at is None
         assert ins.current_step == 2
 
     def test_completa(self) -> None:
         ins, sesion = _inscripcion(current_step=3, steps_executed=4), MagicMock()
-        registrar_avance(sesion, ins, Decision(Complete(), 3, 0), ahora=AHORA)
+        registrar_avance(sesion, ins, Decision(Complete(), 3, 0), ahora=AHORA, ventana=None)
         assert ins.status == modelo.ENROLLMENT_COMPLETED
         assert ins.completed_at == AHORA
         assert ins.next_step_at is None
@@ -618,7 +678,9 @@ class TestRegistrarAvance:
 
     def test_sale(self) -> None:
         ins, sesion = _inscripcion(), MagicMock()
-        registrar_avance(sesion, ins, Decision(Exit(modelo.EXIT_CONDITION), 1, 2), ahora=AHORA)
+        registrar_avance(
+            sesion, ins, Decision(Exit(modelo.EXIT_CONDITION), 1, 2), ahora=AHORA, ventana=None
+        )
         assert ins.status == modelo.ENROLLMENT_EXITED
         assert ins.exit_reason == modelo.EXIT_CONDITION
         assert ins.steps_executed == 2
@@ -629,7 +691,53 @@ class TestRegistrarAvance:
     def test_no_sale_dos_veces(self) -> None:
         ins = _inscripcion(status=modelo.ENROLLMENT_COMPLETED)
         with pytest.raises(SecuenciaError):
-            registrar_avance(MagicMock(), ins, Decision(Exit("manual"), 1, 0), ahora=AHORA)
+            registrar_avance(
+                MagicMock(), ins, Decision(Exit("manual"), 1, 0), ahora=AHORA, ventana=None
+            )
+
+
+class TestAvanceEnHorario:
+    def test_el_siguiente_mensaje_espera_a_que_abra_el_negocio(self) -> None:
+        ins = _inscripcion()
+        noche = _bog(2026, 10, 5, 23, 0)
+        registrar_avance(
+            MagicMock(), ins, Decision(SendMessage(1, MSG, "email"), 2, 1), ahora=noche,
+            ventana=VENTANA,
+        )  # fmt: skip
+        assert ins.next_step_at == _bog(2026, 10, 6, 8, 0)
+
+    def test_en_horario_toca_ya(self) -> None:
+        ins = _inscripcion()
+        dia = _bog(2026, 10, 5, 11, 0)
+        registrar_avance(
+            MagicMock(), ins, Decision(SendMessage(1, MSG, "email"), 2, 1), ahora=dia,
+            ventana=VENTANA,
+        )  # fmt: skip
+        assert ins.next_step_at == dia
+
+    def test_reanudar_de_noche_espera_a_que_abra(self) -> None:
+        ins = _inscripcion(status=modelo.ENROLLMENT_PAUSED)
+        reanudar(ins, ahora=_bog(2026, 10, 5, 23, 0), ventana=VENTANA)
+        assert ins.next_step_at == _bog(2026, 10, 6, 8, 0)
+
+
+class TestMotivoParaNoInscribir:
+    @pytest.mark.parametrize(
+        ("campos", "activa", "motivo"),
+        [
+            ({}, True, None),
+            ({}, False, modelo.EXIT_SEQUENCE_DISABLED),
+            ({"deleted_at": AHORA}, True, modelo.EXIT_LEAD_DELETED),
+            ({"first_name": "[ELIMINADO]"}, True, modelo.EXIT_GDPR),
+            ({"status": "won"}, True, modelo.EXIT_LEAD_CLOSED),
+        ],
+    )
+    def test_misma_regla_que_el_motor(
+        self, campos: dict[str, Any], activa: bool, motivo: str | None
+    ) -> None:
+        lead = Lead(client_id=uuid4(), **{"status": "active", "first_name": "Ana", **campos})
+        secuencia = modelo.LeadSequence(client_id=lead.client_id, name="x", is_active=activa)
+        assert motivo_para_no_inscribir(lead, secuencia) == motivo
 
 
 class TestPausa:
@@ -665,6 +773,23 @@ class TestPlantillasPredefinidas:
             pasos=pasos, current_step=3, steps_executed=2, lead=lead, channel_priority=PRIORIDAD
         )
         assert d.action == Exit(modelo.EXIT_CONDITION)
+
+    def test_solo_variables_que_nunca_faltan(self) -> None:
+        for definicion in PLANTILLAS.values():
+            for paso in definicion.steps:
+                if isinstance(paso, MessageStep):
+                    usadas = variables_de_plantilla(paso.body or "")
+                    usadas |= variables_de_plantilla(paso.subject or "")
+                    assert usadas <= {"first_name", "business_name"}, usadas
+
+    def test_se_leen_bien_sin_datos_del_lead(self) -> None:
+        for definicion in PLANTILLAS.values():
+            for paso in definicion.steps:
+                if isinstance(paso, MessageStep):
+                    texto = renderizar_plantilla(paso.body or "", {"business_name": "Sol"})
+                    assert " ," not in texto
+                    assert "  " not in texto
+                    assert not texto.startswith(",")
 
     def test_nombres_unicos(self) -> None:
         nombres = [d.name for d in PLANTILLAS.values()]

@@ -23,11 +23,13 @@ from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.conversation import Conversation
 from app.models.lead import Lead
-from app.models.lead_activity import ACTIVITY_LINK_CLICKED, LeadActivity
+from app.models.lead_activity import ACTIVITY_EMAIL_REPLIED, ACTIVITY_LINK_CLICKED, LeadActivity
 from app.models.lead_sequence import (
     ENROLLMENT_COMPLETED,
     ENROLLMENT_EXITED,
+    EXIT_NEGATIVE_REPLY,
     EXIT_REPLIED,
+    EXIT_UNSUBSCRIBED,
     LeadSequence,
     LeadSequenceEnrollment,
     LeadSequenceStep,
@@ -152,12 +154,16 @@ async def _cargar(s: Any, modelo: Any, id_: uuid.UUID) -> Any:
 async def _inscribir(
     client_id: uuid.UUID, lead_id: uuid.UUID, sequence_id: uuid.UUID, **kw: Any
 ) -> uuid.UUID:
+    """Inscribe con el primer paso para ya (salvo que se pida otra cosa): los tests no pueden
+    depender de la hora a la que corren. El valor por defecto real se prueba aparte."""
+    ahora = kw.pop("ahora", datetime.now(timezone.utc))
+    kw.setdefault("next_step_at", ahora)
     async with tenant_session(client_id) as s:
         inscripcion = await inscribir(
             s,
             await _cargar(s, Lead, lead_id),
             await _cargar(s, LeadSequence, sequence_id),
-            ahora=kw.pop("ahora", datetime.now(timezone.utc)),
+            ahora=ahora,
             **kw,
         )
         return inscripcion.id
@@ -411,6 +417,89 @@ class TestInscripcion:
 # ─── Disparadores ───────────────────────────────────────────────────────────────────────────
 
 
+class TestProteccionDelLead:
+    """Lo que encontro la revision del PR #66: a quien no quiere mensajes no se le escriben."""
+
+    async def test_la_bienvenida_espera_a_que_abra_el_negocio(self, tenant: uuid.UUID) -> None:
+        secuencia_id, lead_id = await _secuencia(tenant), await _lead(tenant)
+        madrugada = datetime(2026, 10, 6, 8, 0, tzinfo=timezone.utc)  # martes 03:00 en Bogota
+        async with tenant_session(tenant) as s:
+            inscripcion = await inscribir(
+                s,
+                await _cargar(s, Lead, lead_id),
+                await _cargar(s, LeadSequence, secuencia_id),
+                ahora=madrugada,
+            )
+            # 08:00 en Bogota = 13:00 UTC.
+            assert inscripcion.next_step_at == datetime(2026, 10, 6, 13, 0, tzinfo=timezone.utc)
+
+    @pytest.mark.parametrize("motivo", [EXIT_UNSUBSCRIBED, EXIT_NEGATIVE_REPLY])
+    async def test_quien_se_dio_de_baja_no_vuelve_a_entrar(
+        self, tenant: uuid.UUID, motivo: str
+    ) -> None:
+        a, b = await _secuencia(tenant, nombre="A"), await _secuencia(tenant, nombre="B")
+        lead_id = await _lead(tenant)
+        await _inscribir(tenant, lead_id, a)
+        async with tenant_session(tenant) as s:
+            await salir_de_secuencias(
+                s, tenant, [lead_id], motivo, ahora=datetime.now(timezone.utc)
+            )
+        # Ni en la misma, ni en otra, ni a mano.
+        for secuencia in (a, b):
+            with pytest.raises(SecuenciaError) as exc:
+                await _inscribir(tenant, lead_id, secuencia)
+            assert exc.value.code == "opted_out"
+
+    async def test_otro_motivo_de_salida_si_deja_reinscribir_a_mano(
+        self, tenant: uuid.UUID
+    ) -> None:
+        secuencia_id, lead_id = await _secuencia(tenant), await _lead(tenant)
+        await _inscribir(tenant, lead_id, secuencia_id)
+        async with tenant_session(tenant) as s:
+            await salir_de_secuencias(
+                s, tenant, [lead_id], EXIT_REPLIED, ahora=datetime.now(timezone.utc)
+            )
+        await _inscribir(tenant, lead_id, secuencia_id)
+
+    async def test_un_disparador_no_reinscribe_en_una_secuencia_ya_recorrida(
+        self, tenant: uuid.UUID
+    ) -> None:
+        secuencia_id = await _secuencia(
+            tenant, trigger_conditions=TriggerConditions(events=["score_changed"])
+        )
+        lead_id = await _lead(tenant)
+        async with tenant_session(tenant) as s:
+            lead = await _cargar(s, Lead, lead_id)
+            [primera] = await inscribir_por_evento(
+                s, lead, "score_changed", ahora=datetime.now(timezone.utc)
+            )
+            await salir_de_secuencias(
+                s, tenant, [lead_id], EXIT_REPLIED, ahora=datetime.now(timezone.utc)
+            )
+        # Contestar cambia su score: el disparador vuelve a cumplirse, pero no debe reinscribir.
+        async with tenant_session(tenant) as s:
+            lead = await _cargar(s, Lead, lead_id)
+            assert await inscribir_por_evento(
+                s, lead, "score_changed", ahora=datetime.now(timezone.utc)
+            ) == []  # fmt: skip
+        assert primera.sequence_id == secuencia_id
+
+    async def test_un_error_de_fk_no_se_disfraza_de_ya_inscrito(self, tenant: uuid.UUID) -> None:
+        secuencia_id, lead_id = await _secuencia(tenant), await _lead(tenant)
+        with pytest.raises(IntegrityError) as exc:
+            await _inscribir(tenant, lead_id, secuencia_id, user_id=uuid.uuid4())
+        assert not isinstance(exc.value, YaInscritoError)
+
+    async def test_respuesta_de_un_lead_sin_contacto(self, tenant: uuid.UUID) -> None:
+        lead_id = await _lead(tenant, email="ana@example.com")
+        inicio = datetime.now(timezone.utc)
+        async with tenant_session(tenant) as s:
+            registrar_actividad(s, client_id=tenant, lead_id=lead_id, tipo=ACTIVITY_EMAIL_REPLIED)
+        async with tenant_session(tenant) as s:
+            foto = await snapshot_del_lead(s, await _cargar(s, Lead, lead_id), desde=inicio)
+        assert foto.replied is True
+
+
 class TestDisparadores:
     async def test_inscribe_solo_en_las_que_cumplen(self, tenant: uuid.UUID) -> None:
         fuente = await crear_fuente(tenant, source_type="web_form")
@@ -560,10 +649,12 @@ class TestRecorrido:
                     channel_priority=["whatsapp", "email"],
                 )
                 siguiente = None
+                ventana = await ventana_del_tenant(s, tenant)
                 if isinstance(decision.action, Wait):
-                    ventana = await ventana_del_tenant(s, tenant)
                     siguiente = programar_siguiente(ahora, decision.action.step, ventana)
-                registrar_avance(s, inscripcion, decision, ahora=ahora, next_step_at=siguiente)
+                registrar_avance(
+                    s, inscripcion, decision, ahora=ahora, ventana=ventana, next_step_at=siguiente
+                )
                 return decision.action
 
         accion = await turno(t0)
@@ -610,7 +701,7 @@ class TestRecorrido:
                 channel_priority=["whatsapp"],
             )
             assert decision.action == Exit("lead_closed")
-            registrar_avance(s, inscripcion, decision, ahora=ahora)
+            registrar_avance(s, inscripcion, decision, ahora=ahora, ventana=None)
         async with tenant_session(tenant) as s:
             inscripcion = await _cargar(s, LeadSequenceEnrollment, inscripcion_id)
             assert (inscripcion.status, inscripcion.exit_reason) == ("exited", "lead_closed")
