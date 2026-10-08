@@ -16,6 +16,7 @@ import pytest_asyncio
 from sqlalchemy import text
 
 from app.core.database import tenant_session
+from app.models.lead_score import LeadScore
 from tests.integration.lead_helpers import crear_lead, fila_cruda, limpiar_leads
 from tests.integration.test_crm_api import Escenario, _cliente, dos_tenants, escenario  # noqa: F401
 
@@ -201,3 +202,64 @@ class TestLeadSuelto:
             ).scalar_one()
         for dato in ("ada@example.com", "300 111", "linkedin.com/in/ada", "CTO", "Matematica"):
             assert dato not in fila, dato
+
+
+async def _con_score(esc: Escenario, lead_id: uuid.UUID, razonamiento: str) -> None:
+    """Le da al lead una fila de historial de scores con texto (como hara el AI score)."""
+    async with tenant_session(esc.client_id) as s:
+        s.add(
+            LeadScore(
+                client_id=esc.client_id, lead_id=lead_id, score_type="ai", score=80,
+                previous_score=0, trigger="scheduled", factors={"reasoning": razonamiento},
+            )
+        )  # fmt: skip
+
+
+async def _scores_en_base(esc: Escenario, lead_id: uuid.UUID) -> int:
+    async with tenant_session(esc.client_id) as s:
+        return int(
+            (
+                await s.execute(
+                    text("SELECT count(*) FROM lead_scores WHERE lead_id = :i"), {"i": str(lead_id)}
+                )
+            ).scalar_one()
+        )
+
+
+class TestHistorialDeScores:
+    """El historial de scores es perfilado de la persona (Sprint 17): se exporta y se suprime."""
+
+    async def test_el_export_del_contacto_lo_incluye(self, crm: Escenario) -> None:
+        lead = await _lead_completo(crm)
+        await _con_score(crm, lead, "Ada pregunto por precios dos veces")
+        async with _cliente(crm, "admin") as c:
+            r = await c.get(f"{CONTACTO}/{crm.contact_id}/export")
+        [exportado] = r.json()["leads"]
+        assert [s["factors"]["reasoning"] for s in exportado["score_history"]] == [
+            "Ada pregunto por precios dos veces"
+        ]
+
+    async def test_el_export_de_un_lead_suelto_lo_incluye(self, crm: Escenario) -> None:
+        lead = await crear_lead(crm.client_id, email="suelto@example.com")
+        await _con_score(crm, lead, "x")
+        async with _cliente(crm, "admin") as c:
+            r = await c.get(f"{LEAD}/{lead}/export")
+        assert len(r.json()["lead"]["score_history"]) == 1
+        assert r.json()["lead"]["scores"]["ai"] == 0  # los vigentes siguen donde estaban
+
+    async def test_la_supresion_del_contacto_lo_borra(self, crm: Escenario) -> None:
+        lead = await _lead_completo(crm)
+        ajeno = await crear_lead(crm.client_id, email="ajeno@example.com")
+        await _con_score(crm, lead, "x")
+        await _con_score(crm, ajeno, "y")
+        async with _cliente(crm, "admin") as c:
+            assert (await c.delete(f"{CONTACTO}/{crm.contact_id}/gdpr-delete")).status_code == 200
+        assert await _scores_en_base(crm, lead) == 0
+        assert await _scores_en_base(crm, ajeno) == 1
+
+    async def test_la_supresion_de_un_lead_suelto_lo_borra(self, crm: Escenario) -> None:
+        lead = await crear_lead(crm.client_id, email="suelto@example.com", fit_score=70)
+        await _con_score(crm, lead, "x")
+        async with _cliente(crm, "admin") as c:
+            assert (await c.delete(f"{LEAD}/{lead}/gdpr-delete")).status_code == 200
+        assert await _scores_en_base(crm, lead) == 0

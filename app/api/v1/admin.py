@@ -65,6 +65,7 @@ from app.schemas.csat import CsatSummaryResponse
 from app.schemas.user import UserCreate, UserListResponse, UserResponse, UserUpdate
 from app.services.lead_activity import registrar_actividad
 from app.services.lead_privacy import anonimizar_lead, lead_a_dict, lead_esta_anonimizado
+from app.services.lead_score_service import borrar_historial_scores, scores_para_export
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +226,7 @@ async def export_contact_data(
             .scalars()
             .all()
         )
+        scores = await scores_para_export(session, client_id, [lead.id for lead in leads])
 
         return {
             "export_date": datetime.now(timezone.utc).isoformat(),
@@ -250,8 +252,9 @@ async def export_contact_data(
                 for i in identificadores
             ],
             "tags": [fila.name for fila in etiquetas],
-            # Incluye los leads con soft delete: borrar un lead no lo quita de la base.
-            "leads": [lead_a_dict(lead) for lead in leads],
+            # Incluye los leads con soft delete: borrar un lead no lo quita de la base. Y su
+            # historial de scores (Sprint 17): es perfilado de la persona.
+            "leads": [{**lead_a_dict(lead), "score_history": scores[lead.id]} for lead in leads],
             "notes": [
                 {
                     "id": str(n.id),
@@ -607,6 +610,7 @@ async def gdpr_delete_contact(
                 user_id=UUID(str(user["user_id"])),
                 via="contact",
             )
+        await borrar_historial_scores(session, client_id, [lead.id for lead in leads])
 
         if conversaciones:
             # El asunto es texto libre de un agente y puede llevar datos del
@@ -683,7 +687,11 @@ async def export_lead_data(
     client_id: UUID = user["client_id"]
     async with tenant_session(client_id) as session:
         lead = await _lead_o_404(session, lead_id, client_id)
-        return {"export_date": datetime.now(timezone.utc).isoformat(), "lead": lead_a_dict(lead)}
+        scores = await scores_para_export(session, client_id, [lead.id])
+        return {
+            "export_date": datetime.now(timezone.utc).isoformat(),
+            "lead": {**lead_a_dict(lead), "score_history": scores[lead.id]},
+        }
 
 
 @router.delete("/leads/{lead_id}/gdpr-delete")
@@ -723,6 +731,7 @@ async def gdpr_delete_lead(
             user_id=UUID(str(user["user_id"])),
             via="lead",
         )
+        await borrar_historial_scores(session, client_id, [lead.id])
     logger.info("RGPD: lead %s anonimizado por %s (tenant %s)", lead_id, user["user_id"], client_id)
     return {"status": "success", "message": "Datos del lead anonimizados", "lead_id": str(lead_id)}
 
