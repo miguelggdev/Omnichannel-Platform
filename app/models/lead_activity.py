@@ -40,6 +40,10 @@ ACTIVITY_SCORE_CHANGED = "score_changed"
 # comportamiento ya las cuenta.
 ACTIVITY_EMAIL_OPENED = "email_opened"
 ACTIVITY_LINK_CLICKED = "link_clicked"
+# Sprint 18: secuencias de follow-up.
+ACTIVITY_SEQUENCE_ENROLLED = "sequence_enrolled"
+ACTIVITY_SEQUENCE_EXITED = "sequence_exited"
+ACTIVITY_SEQUENCE_COMPLETED = "sequence_completed"
 
 
 class LeadActivity(TenantBaseModel):
