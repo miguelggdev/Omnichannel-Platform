@@ -71,7 +71,9 @@ def _hora(valor: str | None, defecto: str) -> time:
     return time(int(horas), int(minutos))
 
 
-def ventana_desde_perfil(perfil: Mapping[str, Any] | None) -> VentanaEnvio:
+def ventana_desde_perfil(
+    perfil: Mapping[str, Any] | None, client_id: UUID | None = None
+) -> VentanaEnvio:
     """Construye la ventana a partir del perfil del negocio.
 
     Lo invalido se ignora en vez de romper la programacion: zona desconocida -> Bogota; un dia
@@ -80,6 +82,7 @@ def ventana_desde_perfil(perfil: Mapping[str, Any] | None) -> VentanaEnvio:
 
     Args:
         perfil: `clients.settings["business_profile"]`.
+        client_id: Tenant, solo para el log (saber de quien es el perfil roto).
 
     Returns:
         La ventana.
@@ -88,7 +91,11 @@ def ventana_desde_perfil(perfil: Mapping[str, Any] | None) -> VentanaEnvio:
     try:
         tz = ZoneInfo(str(datos.get("timezone") or DEFAULT_TIMEZONE))
     except (ZoneInfoNotFoundError, ValueError):
-        logger.warning("Zona horaria del perfil desconocida; se usa %s", DEFAULT_TIMEZONE)
+        logger.warning(
+            "Zona horaria del perfil desconocida (tenant %s); se usa %s",
+            client_id,
+            DEFAULT_TIMEZONE,
+        )
         tz = ZoneInfo(DEFAULT_TIMEZONE)
 
     guardado = datos.get("operating_hours") or {}
@@ -102,6 +109,9 @@ def ventana_desde_perfil(perfil: Mapping[str, Any] | None) -> VentanaEnvio:
                 else DaySchedule(is_open=dia not in ("saturday", "sunday"))
             )
         except ValueError:
+            logger.warning(
+                "Horario del %s mal guardado (tenant %s); se usa el de defecto", dia, client_id
+            )
             dia_cfg = DaySchedule(is_open=dia not in ("saturday", "sunday"))
         if not dia_cfg.is_open:
             horario[indice] = None
@@ -126,7 +136,7 @@ async def ventana_del_tenant(session: AsyncSession, client_id: UUID) -> VentanaE
         await session.execute(select(Client.settings).where(Client.id == client_id))
     ).scalar_one_or_none()
     perfil = (ajustes or {}).get("business_profile") if isinstance(ajustes, Mapping) else None
-    return ventana_desde_perfil(perfil if isinstance(perfil, Mapping) else None)
+    return ventana_desde_perfil(perfil if isinstance(perfil, Mapping) else None, client_id)
 
 
 def siguiente_apertura(desde: datetime, ventana: VentanaEnvio) -> datetime:

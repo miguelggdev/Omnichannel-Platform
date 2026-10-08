@@ -32,6 +32,8 @@ from app.models.conversation import Conversation
 from app.models.lead import Lead
 from app.models.lead_activity import (
     ACTIVITY_EMAIL_OPENED,
+    ACTIVITY_EMAIL_REPLIED,
+    ACTIVITY_INBOUND_MESSAGE,
     ACTIVITY_LINK_CLICKED,
     ACTIVITY_SEQUENCE_COMPLETED,
     ACTIVITY_SEQUENCE_ENROLLED,
@@ -44,11 +46,8 @@ from app.models.lead_sequence import (
     ENROLLMENT_COMPLETED,
     ENROLLMENT_EXITED,
     ENROLLMENT_PAUSED,
-    EXIT_GDPR,
-    EXIT_LEAD_CLOSED,
-    EXIT_LEAD_DELETED,
-    EXIT_SEQUENCE_DISABLED,
     LIVE_STATUSES,
+    OPT_OUT_EXITS,
     LeadSequence,
     LeadSequenceEnrollment,
     LeadSequenceStep,
@@ -74,6 +73,16 @@ from app.services.lead_sequence_engine import (
     LeadSnapshot,
     Paso,
     Wait,
+    motivo_de_bloqueo,
+)
+from app.services.lead_sequence_timing import VentanaEnvio, siguiente_apertura, ventana_del_tenant
+
+#: Lo que la foto del lead lee de su historial (`lead_activities`).
+_SENALES_EN_HISTORIAL = (
+    ACTIVITY_EMAIL_OPENED,
+    ACTIVITY_LINK_CLICKED,
+    ACTIVITY_EMAIL_REPLIED,
+    ACTIVITY_INBOUND_MESSAGE,
 )
 
 #: Respuestas recientes del lead que se miran para el smart timing.
@@ -174,6 +183,8 @@ async def crear_secuencia(
             session.add(secuencia)
             await session.flush()
     except IntegrityError as exc:
+        if not _viola(exc, "uq_lead_sequence_name"):
+            raise
         raise SecuenciaError("duplicate_name", "Ya existe una secuencia con ese nombre") from exc
     session.add_all(_filas_de_pasos(client_id, secuencia.id, definicion))
     await session.flush()
@@ -248,8 +259,19 @@ async def cargar_pasos(session: AsyncSession, client_id: UUID, sequence_id: UUID
 # ─── Inscripcion y salida ───────────────────────────────────────────────────────────────────
 
 
+def _viola(exc: IntegrityError, restriccion: str) -> bool:
+    """Si el error de integridad es la violacion de esa restriccion concreta.
+
+    Un `IntegrityError` tambien puede ser una FK (un usuario o un lead borrado a la vez) o un
+    CHECK: traducirlo todo a "ya inscrito" o "nombre repetido" esconderia el fallo real.
+    """
+    return restriccion in str(exc.orig)
+
+
 def motivo_para_no_inscribir(lead: Lead, secuencia: LeadSequence) -> str | None:
     """Por que no se puede inscribir a un lead, como codigo `EXIT_*`, o `None` si se puede.
+
+    Delega en `motivo_de_bloqueo` del motor: inscribir y avanzar aplican la misma regla.
 
     Args:
         lead: Lead.
@@ -258,15 +280,37 @@ def motivo_para_no_inscribir(lead: Lead, secuencia: LeadSequence) -> str | None:
     Returns:
         El codigo, o `None`.
     """
-    if not secuencia.is_active:
-        return EXIT_SEQUENCE_DISABLED
-    if lead.deleted_at is not None:
-        return EXIT_LEAD_DELETED
-    if lead_esta_anonimizado(lead):
-        return EXIT_GDPR
-    if lead.status != "active":
-        return EXIT_LEAD_CLOSED
-    return None
+    foto = LeadSnapshot(
+        status=lead.status,
+        deleted=lead.deleted_at is not None,
+        anonymized=lead_esta_anonimizado(lead),
+    )
+    return motivo_de_bloqueo(foto, secuencia.is_active)
+
+
+async def se_dio_de_baja(session: AsyncSession, lead: Lead) -> bool:
+    """Si el lead salio alguna vez de una secuencia pidiendo no recibir mas mensajes.
+
+    Args:
+        session: Sesion con el contexto del tenant fijado.
+        lead: Lead.
+
+    Returns:
+        `True` si tiene alguna inscripcion cerrada con un motivo de `OPT_OUT_EXITS`.
+    """
+    return bool(
+        (
+            await session.execute(
+                select(
+                    exists().where(
+                        LeadSequenceEnrollment.client_id == lead.client_id,
+                        LeadSequenceEnrollment.lead_id == lead.id,
+                        LeadSequenceEnrollment.exit_reason.in_(OPT_OUT_EXITS),
+                    )
+                )
+            )
+        ).scalar_one()
+    )
 
 
 async def inscribir(
@@ -286,13 +330,16 @@ async def inscribir(
         secuencia: Secuencia.
         ahora: Instante de la inscripcion.
         user_id: Quien lo inscribe; `None` si es un disparador automatico.
-        next_step_at: Cuando ejecutar el primer paso (por defecto, `ahora`).
+        next_step_at: Cuando ejecutar el primer paso. Por defecto, la siguiente apertura del
+            negocio desde `ahora`: un lead que llega a las 3 a. m. no recibe la bienvenida a esa
+            hora.
 
     Returns:
         La inscripcion creada.
 
     Raises:
-        SecuenciaError: `cannot_enroll` si el lead o la secuencia no lo permiten.
+        SecuenciaError: `cannot_enroll` si el lead o la secuencia no lo permiten; `opted_out`
+            si el lead pidio no recibir mas mensajes (tambien para una inscripcion a mano).
         YaInscritoError: Si ya tiene una inscripcion viva en ella (tambien en una carrera, por el
             UNIQUE parcial).
     """
@@ -301,6 +348,10 @@ async def inscribir(
     motivo = motivo_para_no_inscribir(lead, secuencia)
     if motivo is not None:
         raise SecuenciaError("cannot_enroll", f"No se puede inscribir al lead ({motivo})")
+    if await se_dio_de_baja(session, lead):
+        raise SecuenciaError("opted_out", "El lead pidio no recibir mas mensajes")
+    if next_step_at is None:
+        next_step_at = siguiente_apertura(ahora, await ventana_del_tenant(session, lead.client_id))
 
     inscripcion = LeadSequenceEnrollment(
         client_id=lead.client_id,
@@ -310,7 +361,7 @@ async def inscribir(
         current_step=1,
         status=ENROLLMENT_ACTIVE,
         steps_executed=0,
-        next_step_at=next_step_at or ahora,
+        next_step_at=next_step_at,
         created_at=ahora,
     )
     try:
@@ -318,6 +369,8 @@ async def inscribir(
             session.add(inscripcion)
             await session.flush()
     except IntegrityError as exc:
+        if not _viola(exc, "uq_lead_enrollment_live"):
+            raise
         raise YaInscritoError() from exc
     registrar_actividad(
         session,
@@ -427,12 +480,16 @@ def pausar(inscripcion: LeadSequenceEnrollment) -> None:
     inscripcion.next_step_at = None
 
 
-def reanudar(inscripcion: LeadSequenceEnrollment, *, ahora: datetime) -> None:
+def reanudar(
+    inscripcion: LeadSequenceEnrollment, *, ahora: datetime, ventana: VentanaEnvio | None = None
+) -> None:
     """Reanuda una inscripcion pausada; su paso actual se ejecuta en el siguiente turno.
 
     Args:
         inscripcion: Inscripcion pausada.
         ahora: Instante actual.
+        ventana: Horario del negocio; con el, el paso se programa para la siguiente apertura
+            (completar una tarea a las 23:00 no debe disparar un mensaje a esa hora).
 
     Raises:
         SecuenciaError: `not_paused` si no esta pausada.
@@ -440,7 +497,7 @@ def reanudar(inscripcion: LeadSequenceEnrollment, *, ahora: datetime) -> None:
     if inscripcion.status != ENROLLMENT_PAUSED:
         raise SecuenciaError("not_paused", "Solo se reanuda una inscripcion pausada")
     inscripcion.status = ENROLLMENT_ACTIVE
-    inscripcion.next_step_at = ahora
+    inscripcion.next_step_at = siguiente_apertura(ahora, ventana) if ventana else ahora
 
 
 # ─── Avance ─────────────────────────────────────────────────────────────────────────────────
@@ -483,6 +540,7 @@ def registrar_avance(
     decision: Decision,
     *,
     ahora: datetime,
+    ventana: VentanaEnvio | None,
     next_step_at: datetime | None = None,
 ) -> None:
     """Aplica a la inscripcion la decision del motor, una vez ejecutada su accion.
@@ -491,13 +549,17 @@ def registrar_avance(
     - `Complete`: termina.
     - `Wait`: avanza y duerme hasta `next_step_at` (obligatorio; ver `programar_siguiente`).
     - `CreateTask` con `pause_until_done`: avanza y queda pausada hasta que se complete la tarea.
-    - Resto (`SendMessage`, `CreateTask`): avanza; el siguiente paso toca en el siguiente turno.
+    - Resto (`SendMessage`, `CreateTask`): avanza; el siguiente paso toca en el siguiente turno,
+      **dentro del horario del negocio** si se pasa `ventana` (dos mensajes seguidos sin `wait`
+      no deben acabar el segundo a medianoche).
 
     Args:
         session: Sesion con el contexto del tenant fijado.
         inscripcion: Inscripcion activa.
         decision: Lo que devolvio `decidir()`.
         ahora: Instante actual.
+        ventana: Horario del negocio (`ventana_del_tenant`). Es obligatorio pasarlo de forma
+            explicita; `None` solo cuando el siguiente paso puede ir a cualquier hora.
         next_step_at: Cuando despertar, para un `Wait`.
 
     Raises:
@@ -531,7 +593,7 @@ def registrar_avance(
         inscripcion.status = ENROLLMENT_PAUSED
         inscripcion.next_step_at = None
     else:
-        inscripcion.next_step_at = ahora
+        inscripcion.next_step_at = siguiente_apertura(ahora, ventana) if ventana else ahora
 
 
 # ─── Foto del lead ──────────────────────────────────────────────────────────────────────────
@@ -617,7 +679,7 @@ async def snapshot_del_lead(session: AsyncSession, lead: Lead, *, desde: datetim
             .where(
                 LeadActivity.client_id == lead.client_id,
                 LeadActivity.lead_id == lead.id,
-                LeadActivity.activity_type.in_((ACTIVITY_EMAIL_OPENED, ACTIVITY_LINK_CLICKED)),
+                LeadActivity.activity_type.in_(_SENALES_EN_HISTORIAL),
                 LeadActivity.created_at >= desde,
             )
             .distinct()
@@ -632,7 +694,9 @@ async def snapshot_del_lead(session: AsyncSession, lead: Lead, *, desde: datetim
         stage_slug=slug,
         total_score=lead.total_score,
         channels=await canales_del_lead(session, lead),
-        replied=contesto,
+        # Un lead sin contacto enlazado (importado, solo email) tambien puede contestar: la
+        # deteccion de respuestas lo anota en su historial.
+        replied=contesto or bool(vistos & {ACTIVITY_EMAIL_REPLIED, ACTIVITY_INBOUND_MESSAGE}),
         email_opened=ACTIVITY_EMAIL_OPENED in vistos,
         link_clicked=ACTIVITY_LINK_CLICKED in vistos,
         assigned_user_id=lead.assigned_user_id,
@@ -676,7 +740,8 @@ def variables_del_lead(
 
     Args:
         lead: Lead.
-        business_name: Nombre del negocio (perfil del tenant).
+        business_name: Nombre del negocio: el del perfil o, si no hay, `clients.name`. Pasarlo
+            siempre: las plantillas predefinidas cuentan con el.
         agent_name: Nombre del agente que firma.
 
     Returns:
@@ -782,8 +847,10 @@ async def inscribir_por_evento(
 ) -> list[LeadSequenceEnrollment]:
     """Inscribe al lead en las secuencias activas cuyo disparador cumple.
 
-    Lo llama Dev B tras crear un lead, cambiarle la etapa o el score. Las que ya lo tienen
-    inscrito, o en las que no puede entrar, se saltan sin error.
+    Lo llama Dev B tras crear un lead, cambiarle la etapa o el score. Se saltan sin error las
+    secuencias en las que no puede entrar y **las que ya recorrio alguna vez**: un disparador
+    automatico no vuelve a meter a nadie en una secuencia de la que salio (p. ej. al contestar,
+    que a su vez cambia su score). Reinscribir es una decision de una persona (`inscribir`).
 
     Args:
         session: Sesion con el contexto del tenant fijado.
@@ -802,8 +869,20 @@ async def inscribir_por_evento(
         )
     ).scalars()
     datos = await datos_de_disparo(session, lead)
+    ya_recorridas = set(
+        (
+            await session.execute(
+                select(LeadSequenceEnrollment.sequence_id).where(
+                    LeadSequenceEnrollment.client_id == lead.client_id,
+                    LeadSequenceEnrollment.lead_id == lead.id,
+                )
+            )
+        ).scalars()
+    )
     nuevas: list[LeadSequenceEnrollment] = []
     for secuencia in secuencias.all():
+        if secuencia.id in ya_recorridas:
+            continue
         try:
             condiciones = TriggerConditions.model_validate(secuencia.trigger_conditions)
         except ValidationError:

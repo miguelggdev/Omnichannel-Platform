@@ -5,6 +5,10 @@ reactivacion. Son `SequenceDefinition` normales: se validan al importar este mod
 una plantilla rompe el arranque y los tests, no el envio de un lunes), y el tenant las guarda con
 `crear_secuencia()` y luego las edita como cualquier otra.
 
+**Solo usan `{{first_name}}` y `{{business_name}}`** (un test lo comprueba). El nombre del negocio
+siempre existe y una frase sin el nombre de la persona sigue leyendose bien ("Hola, ..."); cargo,
+empresa o agente faltan a menudo en leads importados y dejarian frases rotas ("vi que eres en").
+
 Ninguna se dispara sola salvo la de entrantes: inscribir en frio o reactivar a alguien es una
 decision comercial que toma una persona.
 """
@@ -37,7 +41,7 @@ PLANTILLAS: dict[str, SequenceDefinition] = {
             MessageStep(
                 body=(
                     "Hola {{first_name}}, gracias por escribir a {{business_name}}. "
-                    "Soy {{agent_name}}. ¿En que te puedo ayudar?"
+                    "¿En que te podemos ayudar?"
                 ),
                 subject="Gracias por tu interes en {{business_name}}",
             ),
@@ -64,9 +68,9 @@ PLANTILLAS: dict[str, SequenceDefinition] = {
         steps=[
             MessageStep(
                 channel="email",
-                subject="{{company_name}} y {{business_name}}",
+                subject="Una idea de {{business_name}} para tu equipo",
                 body=(
-                    "Hola {{first_name}}, vi que eres {{job_title}} en {{company_name}}. "
+                    "Hola {{first_name}}, te escribo de {{business_name}}. "
                     "Ayudamos a equipos como el tuyo a responder mas rapido a sus clientes. "
                     "¿Te interesa una llamada de 15 minutos?"
                 ),
@@ -75,7 +79,7 @@ PLANTILLAS: dict[str, SequenceDefinition] = {
             ConditionStep(check="replied", if_true=_SALIR),
             MessageStep(
                 channel="email",
-                subject="Re: {{company_name}} y {{business_name}}",
+                subject="Re: Una idea de {{business_name}} para tu equipo",
                 body="Hola {{first_name}}, solo queria asegurarme de que te llego mi mensaje.",
             ),
             WaitStep(amount=4, unit="days", smart_timing=True),

@@ -65,6 +65,9 @@ EXIT_NO_CHANNEL = "no_channel"
 EXIT_SEQUENCE_DISABLED = "sequence_disabled"
 EXIT_STEP_LIMIT = "step_limit"
 EXIT_INVALID_STEP = "invalid_step"
+#: Salidas en las que la persona dijo que no quiere mas mensajes: bloquean volver a inscribirla en
+#: cualquier secuencia del tenant (a mano o por un disparador). Ley 1581 / RGPD.
+OPT_OUT_EXITS: tuple[str, ...] = (EXIT_UNSUBSCRIBED, EXIT_NEGATIVE_REPLY)
 
 
 class LeadSequence(TenantBaseModel):

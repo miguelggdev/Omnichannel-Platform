@@ -44,6 +44,10 @@ ACTIVITY_LINK_CLICKED = "link_clicked"
 ACTIVITY_SEQUENCE_ENROLLED = "sequence_enrolled"
 ACTIVITY_SEQUENCE_EXITED = "sequence_exited"
 ACTIVITY_SEQUENCE_COMPLETED = "sequence_completed"
+#: Respuesta del lead que no llega como mensaje de un contacto (p. ej. un email contestado a un
+#: lead sin contacto enlazado). La anota la deteccion de respuestas (Dev B); las secuencias la
+#: cuentan como `replied`.
+ACTIVITY_EMAIL_REPLIED = "email_replied"
 
 
 class LeadActivity(TenantBaseModel):
