@@ -57,6 +57,7 @@ from app.models.conversation import Conversation
 from app.models.internal_note import InternalNote
 from app.models.lead import Lead
 from app.models.lead_activity import ACTIVITY_ANONYMIZED
+from app.models.lead_sequence import EXIT_GDPR
 from app.models.message import Message
 from app.models.satisfaction_survey import SatisfactionSurvey
 from app.models.tag import Tag
@@ -66,6 +67,7 @@ from app.schemas.user import UserCreate, UserListResponse, UserResponse, UserUpd
 from app.services.lead_activity import registrar_actividad
 from app.services.lead_privacy import anonimizar_lead, lead_a_dict, lead_esta_anonimizado
 from app.services.lead_score_service import borrar_historial_scores, scores_para_export
+from app.services.lead_sequences import inscripciones_para_export, salir_de_secuencias
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +229,9 @@ async def export_contact_data(
             .all()
         )
         scores = await scores_para_export(session, client_id, [lead.id for lead in leads])
+        secuencias = await inscripciones_para_export(
+            session, client_id, [lead.id for lead in leads]
+        )
 
         return {
             "export_date": datetime.now(timezone.utc).isoformat(),
@@ -253,8 +258,16 @@ async def export_contact_data(
             ],
             "tags": [fila.name for fila in etiquetas],
             # Incluye los leads con soft delete: borrar un lead no lo quita de la base. Y su
-            # historial de scores (Sprint 17): es perfilado de la persona.
-            "leads": [{**lead_a_dict(lead), "score_history": scores[lead.id]} for lead in leads],
+            # historial de scores (Sprint 17): es perfilado de la persona. Y las secuencias por
+            # las que paso (Sprint 18): es tratamiento de sus datos para contactarla.
+            "leads": [
+                {
+                    **lead_a_dict(lead),
+                    "score_history": scores[lead.id],
+                    "sequence_enrollments": secuencias[lead.id],
+                }
+                for lead in leads
+            ],
             "notes": [
                 {
                     "id": str(n.id),
@@ -611,6 +624,15 @@ async def gdpr_delete_contact(
                 via="contact",
             )
         await borrar_historial_scores(session, client_id, [lead.id for lead in leads])
+        # Nunca se le escribe a quien pidio la supresion (Sprint 18).
+        await salir_de_secuencias(
+            session,
+            client_id,
+            [lead.id for lead in leads],
+            EXIT_GDPR,
+            ahora=datetime.now(timezone.utc),
+            user_id=UUID(str(user["user_id"])),
+        )
 
         if conversaciones:
             # El asunto es texto libre de un agente y puede llevar datos del
@@ -688,9 +710,14 @@ async def export_lead_data(
     async with tenant_session(client_id) as session:
         lead = await _lead_o_404(session, lead_id, client_id)
         scores = await scores_para_export(session, client_id, [lead.id])
+        secuencias = await inscripciones_para_export(session, client_id, [lead.id])
         return {
             "export_date": datetime.now(timezone.utc).isoformat(),
-            "lead": {**lead_a_dict(lead), "score_history": scores[lead.id]},
+            "lead": {
+                **lead_a_dict(lead),
+                "score_history": scores[lead.id],
+                "sequence_enrollments": secuencias[lead.id],
+            },
         }
 
 
@@ -732,6 +759,14 @@ async def gdpr_delete_lead(
             via="lead",
         )
         await borrar_historial_scores(session, client_id, [lead.id])
+        await salir_de_secuencias(
+            session,
+            client_id,
+            [lead.id],
+            EXIT_GDPR,
+            ahora=datetime.now(timezone.utc),
+            user_id=UUID(str(user["user_id"])),
+        )
     logger.info("RGPD: lead %s anonimizado por %s (tenant %s)", lead_id, user["user_id"], client_id)
     return {"status": "success", "message": "Datos del lead anonimizados", "lead_id": str(lead_id)}
 

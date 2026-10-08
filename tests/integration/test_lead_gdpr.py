@@ -13,10 +13,13 @@ from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.core.database import tenant_session
+from app.models.lead import Lead
 from app.models.lead_score import LeadScore
+from app.schemas.lead_sequence import MessageStep, SequenceDefinition
+from app.services.lead_sequences import crear_secuencia, inscribir
 from tests.integration.lead_helpers import crear_lead, fila_cruda, limpiar_leads
 from tests.integration.test_crm_api import Escenario, _cliente, dos_tenants, escenario  # noqa: F401
 
@@ -263,3 +266,59 @@ class TestHistorialDeScores:
         async with _cliente(crm, "admin") as c:
             assert (await c.delete(f"{LEAD}/{lead}/gdpr-delete")).status_code == 200
         assert await _scores_en_base(crm, lead) == 0
+
+
+async def _inscrito(esc: Escenario, lead_id: uuid.UUID) -> uuid.UUID:
+    """Inscribe al lead en una secuencia nueva y devuelve el id de la inscripcion."""
+    async with tenant_session(esc.client_id) as s:
+        secuencia = await crear_secuencia(
+            s,
+            esc.client_id,
+            SequenceDefinition(name=f"S-{uuid.uuid4().hex[:6]}", steps=[MessageStep(body="Hola")]),
+        )
+        lead = (await s.execute(select(Lead).where(Lead.id == lead_id))).scalar_one()
+        inscripcion = await inscribir(s, lead, secuencia, ahora=datetime.now(timezone.utc))
+        return inscripcion.id
+
+
+async def _estado_inscripcion(esc: Escenario, inscripcion_id: uuid.UUID) -> tuple[str, str | None]:
+    async with tenant_session(esc.client_id) as s:
+        fila = (
+            await s.execute(
+                text("SELECT status, exit_reason FROM lead_sequence_enrollments WHERE id = :i"),
+                {"i": str(inscripcion_id)},
+            )
+        ).one()
+        return fila[0], fila[1]
+
+
+class TestSecuencias:
+    """Sprint 18: a quien pidio la supresion no se le vuelve a escribir; el export lo cuenta."""
+
+    async def test_el_export_incluye_las_secuencias(self, crm: Escenario) -> None:
+        lead = await _lead_completo(crm)
+        await _inscrito(crm, lead)
+        async with _cliente(crm, "admin") as c:
+            r = await c.get(f"{CONTACTO}/{crm.contact_id}/export")
+            suelto = await c.get(f"{LEAD}/{lead}/export")
+        [exportado] = r.json()["leads"]
+        [inscripcion] = exportado["sequence_enrollments"]
+        assert inscripcion["status"] == "active"
+        assert inscripcion["sequence_name"].startswith("S-")
+        assert suelto.json()["lead"]["sequence_enrollments"] == exportado["sequence_enrollments"]
+
+    async def test_la_supresion_del_contacto_lo_saca(self, crm: Escenario) -> None:
+        lead = await _lead_completo(crm)
+        ajeno = await crear_lead(crm.client_id, email="ajeno@example.com")
+        suya, otra = await _inscrito(crm, lead), await _inscrito(crm, ajeno)
+        async with _cliente(crm, "admin") as c:
+            assert (await c.delete(f"{CONTACTO}/{crm.contact_id}/gdpr-delete")).status_code == 200
+        assert await _estado_inscripcion(crm, suya) == ("exited", "gdpr")
+        assert await _estado_inscripcion(crm, otra) == ("active", None)
+
+    async def test_la_supresion_de_un_lead_suelto_lo_saca(self, crm: Escenario) -> None:
+        lead = await crear_lead(crm.client_id, email="suelto@example.com")
+        inscripcion = await _inscrito(crm, lead)
+        async with _cliente(crm, "admin") as c:
+            assert (await c.delete(f"{LEAD}/{lead}/gdpr-delete")).status_code == 200
+        assert await _estado_inscripcion(crm, inscripcion) == ("exited", "gdpr")
