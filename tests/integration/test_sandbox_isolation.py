@@ -523,6 +523,11 @@ _NO_PURGADAS = {
     "lead_activities",
     "lead_pipeline_stages",
     "lead_scores",
+    # Secuencias (Sprint 18): las crea un usuario del panel y un sandbox no tiene usuarios ni
+    # leads; las inscripciones siguen a `leads` (ON DELETE CASCADE).
+    "lead_sequence_enrollments",
+    "lead_sequence_steps",
+    "lead_sequences",
     "lead_sources",
     "leads",
     "patient_consents",
