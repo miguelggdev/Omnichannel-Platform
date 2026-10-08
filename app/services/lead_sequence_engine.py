@@ -185,8 +185,19 @@ def elegir_canal(
 # ─── Decision ───────────────────────────────────────────────────────────────────────────────
 
 
-def _guarda(lead: LeadSnapshot, secuencia_activa: bool) -> str | None:
-    """Motivo para salir antes de mirar ningun paso, o `None`."""
+def motivo_de_bloqueo(lead: LeadSnapshot, secuencia_activa: bool) -> str | None:
+    """Por que no se le puede escribir al lead en esta secuencia, o `None` si se puede.
+
+    Es la unica fuente de esta regla: la usan el motor (antes de cada paso) y la inscripcion
+    (`lead_sequences.motivo_para_no_inscribir`), para que nunca discrepen.
+
+    Args:
+        lead: Foto del lead (basta con `status`, `deleted` y `anonymized`).
+        secuencia_activa: `lead_sequences.is_active`.
+
+    Returns:
+        El codigo `EXIT_*`, o `None`.
+    """
     if not secuencia_activa:
         return EXIT_SEQUENCE_DISABLED
     if lead.deleted:
@@ -220,7 +231,7 @@ def decidir(
     Returns:
         La decision.
     """
-    motivo = _guarda(lead, secuencia_activa)
+    motivo = motivo_de_bloqueo(lead, secuencia_activa)
     if motivo is not None:
         return Decision(Exit(motivo), next_step=current_step, steps_consumed=0)
 
@@ -267,26 +278,31 @@ def decidir(
 
 # ─── Plantillas ─────────────────────────────────────────────────────────────────────────────
 
-_VARIABLE = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
-_ESPACIO_ANTES_DE_PUNTUACION = re.compile(r"[ \t]+([,.;:!?])")
-_ESPACIOS = re.compile(r"[ \t]{2,}")
+#: Una variable con los espacios que la preceden: si queda vacia, se van con ella.
+_VARIABLE = re.compile(r"([ \t]*)\{\{\s*([a-z_]+)\s*\}\}")
 
 
 def renderizar_plantilla(texto: str, variables: Mapping[str, str | None]) -> str:
     """Sustituye `{{variable}}` por su valor.
 
     No usa `str.format`: una plantilla escrita por el tenant con `{0.__class__}` podria leer
-    atributos de los objetos. Aqui solo se reconoce `{{nombre}}` y solo se sustituye por texto.
-    Una variable sin valor desaparece y se limpia el espacio que deja ("Hola {{first_name}}," sin
-    nombre queda "Hola,").
+    atributos de los objetos. Aqui solo se reconoce `{{nombre}}` y solo se sustituye por texto
+    (un valor que contenga `{{...}}` no se vuelve a interpretar).
+
+    Una variable sin valor desaparece **junto con los espacios que la preceden** ("Hola
+    {{first_name}}, ..." sin nombre queda "Hola, ..."). El resto del texto del tenant no se toca:
+    "Bonjour {{first_name}} !" conserva el espacio antes de "!" que pide el frances.
 
     Args:
         texto: Plantilla (ya validada por el schema).
         variables: Valores; los que falten o sean `None` quedan vacios.
 
     Returns:
-        El texto final.
+        El texto final, sin espacios al principio ni al final.
     """
-    resultado = _VARIABLE.sub(lambda m: (variables.get(m.group(1)) or "").strip(), texto)
-    resultado = _ESPACIO_ANTES_DE_PUNTUACION.sub(r"\1", resultado)
-    return _ESPACIOS.sub(" ", resultado).strip()
+
+    def sustituir(m: re.Match[str]) -> str:
+        valor = (variables.get(m.group(2)) or "").strip()
+        return f"{m.group(1)}{valor}" if valor else ""
+
+    return _VARIABLE.sub(sustituir, texto).strip()
