@@ -25,6 +25,7 @@ from app.models.invoice import Invoice
 from app.models.lead import Lead
 from app.models.lead_activity import LeadActivity
 from app.models.lead_pipeline_stage import LeadPipelineStage
+from app.models.lead_score import LeadScore
 from app.models.lead_source import LeadSource
 from app.models.message import Message
 from app.models.outgoing_webhook_log import OutgoingWebhookLog
@@ -67,6 +68,7 @@ __all__ = [
     "Lead",
     "LeadActivity",
     "LeadPipelineStage",
+    "LeadScore",
     "LeadSource",
     "Message",
     "OutgoingWebhookLog",
