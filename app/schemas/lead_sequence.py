@@ -367,13 +367,69 @@ def _saltos(paso: MessageStep | WaitStep | ConditionStep | TaskStep) -> list[int
     ]
 
 
+def _siguientes(posicion: int, paso: MessageStep | WaitStep | ConditionStep | TaskStep) -> set[int]:
+    """Pasos a los que se puede llegar desde `posicion` **sin esperar**.
+
+    Un `wait` no tiene sucesores aqui: corta el camino (lo que viene despues ocurre en otro
+    turno). Una condicion lleva a sus dos ramas; un `exit` no lleva a ninguna parte.
+    """
+    if isinstance(paso, WaitStep):
+        return set()
+    if not isinstance(paso, ConditionStep):
+        return {posicion + 1}
+    destinos: set[int] = set()
+    for rama in (paso.if_true, paso.if_false):
+        if rama.action == "continue":
+            destinos.add(posicion + 1)
+        elif rama.action == "goto" and rama.goto_position is not None:
+            destinos.add(rama.goto_position)
+    return destinos
+
+
+def _paso_en_bucle_sin_espera(
+    pasos: list[MessageStep | WaitStep | ConditionStep | TaskStep],
+) -> int | None:
+    """Un paso que forma parte de un ciclo sin ningun `wait`, o `None` si no hay ninguno.
+
+    Busca ciclos (DFS con tres colores) en el grafo de "lo que se ejecuta en el mismo turno".
+    Mirar solo si hay un `wait` entre el destino y el origen de un salto hacia atras no basta:
+    otro salto hacia delante puede saltarse ese `wait`.
+    """
+    total = len(pasos)
+    estado = [0] * (total + 1)  # 0 sin visitar, 1 en la pila, 2 cerrado
+
+    def visitar(inicio: int) -> int | None:
+        pila = [(inicio, iter(sorted(_siguientes(inicio, pasos[inicio - 1]))))]
+        estado[inicio] = 1
+        while pila:
+            nodo, hijos = pila[-1]
+            hijo = next((h for h in hijos if h <= total), None)
+            if hijo is None:
+                estado[nodo] = 2
+                pila.pop()
+            elif estado[hijo] == 1:
+                return hijo
+            elif estado[hijo] == 0:
+                estado[hijo] = 1
+                pila.append((hijo, iter(sorted(_siguientes(hijo, pasos[hijo - 1])))))
+        return None
+
+    for posicion in range(1, total + 1):
+        if estado[posicion] == 0:
+            encontrado = visitar(posicion)
+            if encontrado is not None:
+                return encontrado
+    return None
+
+
 def validar_grafo(pasos: list[MessageStep | WaitStep | ConditionStep | TaskStep]) -> None:
     """Comprueba que una lista de pasos sea una secuencia ejecutable.
 
     Reglas: al menos un `message` o `task` (si no, la secuencia no hace nada); los `goto` van a
-    una posicion que existe y distinta de la propia; y todo salto hacia atras (o al mismo sitio)
-    encierra un bucle que **debe contener un `wait`**: un bucle sin espera enviaria mensajes sin
-    parar o giraria sin fin.
+    una posicion que existe y distinta de la propia; y **ningun ciclo puede recorrerse sin pasar
+    por un `wait`**: un bucle sin espera enviaria mensajes sin parar o giraria sin fin. Se mira
+    el grafo entero, no solo el tramo entre un salto y su destino (un `goto` hacia delante puede
+    saltarse la espera de ese tramo).
 
     Args:
         pasos: Pasos en orden (posicion = indice + 1).
@@ -390,9 +446,6 @@ def validar_grafo(pasos: list[MessageStep | WaitStep | ConditionStep | TaskStep]
                 raise ValueError(f"El paso {posicion} salta al paso {destino}, que no existe")
             if destino == posicion:
                 raise ValueError(f"El paso {posicion} salta a si mismo")
-            if destino < posicion and not any(
-                isinstance(p, WaitStep) for p in pasos[destino - 1 : posicion]
-            ):
-                raise ValueError(
-                    f"El salto del paso {posicion} al {destino} forma un bucle sin 'wait'"
-                )
+    en_bucle = _paso_en_bucle_sin_espera(pasos)
+    if en_bucle is not None:
+        raise ValueError(f"El paso {en_bucle} esta en un bucle sin 'wait'")
