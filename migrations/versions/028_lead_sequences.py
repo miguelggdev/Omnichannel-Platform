@@ -52,10 +52,12 @@ ENROLLMENT_STATUSES = ("active", "paused", "completed", "exited")
 
 
 def _en(valores: tuple[str, ...]) -> str:
+    """Lista SQL de literales para un `IN (...)`: `('a', 'b')` -> `'a', 'b'`."""
     return ", ".join(f"'{v}'" for v in valores)
 
 
 def _created_at() -> sa.Column[sa.DateTime]:
+    """Columna `created_at` con `now()` por defecto, igual en las tres tablas."""
     return sa.Column(
         "created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
     )
@@ -142,6 +144,11 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "status NOT IN ('completed', 'exited') OR completed_at IS NOT NULL",
             name="ck_lead_enrollment_closed_at",
+        ),
+        # Una inscripcion activa sin `next_step_at` no la recogeria nunca el worker
+        # (`NULL <= now` no es verdadero) y bloquearia para siempre la reinscripcion.
+        sa.CheckConstraint(
+            "status <> 'active' OR next_step_at IS NOT NULL", name="ck_lead_enrollment_due"
         ),
     )
     op.create_index(

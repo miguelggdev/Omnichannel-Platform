@@ -28,6 +28,7 @@ from app.models.lead_sequence import (
     EXIT_NO_CHANNEL,
     EXIT_SEQUENCE_DISABLED,
     EXIT_STEP_LIMIT,
+    EXIT_UNSUBSCRIBED,
 )
 from app.schemas.lead_sequence import (
     Branch,
@@ -51,6 +52,8 @@ class LeadSnapshot:
         status: `leads.status`.
         deleted: Si tiene soft delete.
         anonymized: Si paso por la supresion RGPD.
+        opted_out: Si salio alguna vez de una secuencia pidiendo no recibir mas mensajes
+            (`OPT_OUT_EXITS`): vale para todas sus secuencias, no solo para la que contesto.
         stage_slug: Slug de su etapa.
         total_score: Score total.
         channels: Canales por los que se le puede escribir.
@@ -63,6 +66,7 @@ class LeadSnapshot:
     status: str = "active"
     deleted: bool = False
     anonymized: bool = False
+    opted_out: bool = False
     stage_slug: str | None = None
     total_score: int = 0
     channels: frozenset[str] = frozenset()
@@ -192,7 +196,7 @@ def motivo_de_bloqueo(lead: LeadSnapshot, secuencia_activa: bool) -> str | None:
     (`lead_sequences.motivo_para_no_inscribir`), para que nunca discrepen.
 
     Args:
-        lead: Foto del lead (basta con `status`, `deleted` y `anonymized`).
+        lead: Foto del lead (basta con `status`, `deleted`, `anonymized` y `opted_out`).
         secuencia_activa: `lead_sequences.is_active`.
 
     Returns:
@@ -204,6 +208,8 @@ def motivo_de_bloqueo(lead: LeadSnapshot, secuencia_activa: bool) -> str | None:
         return EXIT_LEAD_DELETED
     if lead.anonymized:
         return EXIT_GDPR
+    if lead.opted_out:
+        return EXIT_UNSUBSCRIBED
     if lead.status != "active":
         return EXIT_LEAD_CLOSED
     return None

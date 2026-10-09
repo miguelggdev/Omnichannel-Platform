@@ -352,7 +352,25 @@ async def inscribir(
         raise SecuenciaError("opted_out", "El lead pidio no recibir mas mensajes")
     if next_step_at is None:
         next_step_at = siguiente_apertura(ahora, await ventana_del_tenant(session, lead.client_id))
+    return await _crear_inscripcion(
+        session, lead, secuencia, ahora=ahora, user_id=user_id, next_step_at=next_step_at
+    )
 
+
+async def _crear_inscripcion(
+    session: AsyncSession,
+    lead: Lead,
+    secuencia: LeadSequence,
+    *,
+    ahora: datetime,
+    user_id: UUID | None,
+    next_step_at: datetime,
+) -> LeadSequenceEnrollment:
+    """Inserta la inscripcion y la anota; quien llama ya comprobo que se puede inscribir.
+
+    Raises:
+        YaInscritoError: Si ya tiene una inscripcion viva en ella.
+    """
     inscripcion = LeadSequenceEnrollment(
         client_id=lead.client_id,
         lead_id=lead.id,
@@ -431,11 +449,15 @@ async def salir_de_secuencias(
     ahora: datetime,
     user_id: UUID | None = None,
     sequence_id: UUID | None = None,
+    saltar_bloqueadas: bool = False,
 ) -> int:
     """Saca a varios leads de todas sus secuencias vivas (o de una).
 
     Lo usan la supresion RGPD (`EXIT_GDPR`), y Dev B al recibir una respuesta (`EXIT_REPLIED`),
     una baja (`EXIT_UNSUBSCRIBED`) o al cerrar un lead.
+
+    Una baja (`OPT_OUT_EXITS`) saca de **todas** las secuencias aunque se pase `sequence_id`:
+    quien pidio no recibir mas mensajes no los recibe de ninguna.
 
     Args:
         session: Sesion con el contexto del tenant fijado.
@@ -444,7 +466,11 @@ async def salir_de_secuencias(
         motivo: Codigo `EXIT_*`.
         ahora: Instante de la salida.
         user_id: Quien los saca.
-        sequence_id: Solo esa secuencia (por defecto, todas).
+        sequence_id: Solo esa secuencia (por defecto, todas). Se ignora con una baja.
+        saltar_bloqueadas: No esperar a las inscripciones que un worker tiene bloqueadas
+            (`SKIP LOCKED`). Para la supresion RGPD: la peticion no se queda colgada mientras el
+            worker envia, y en el siguiente turno la regla de bloqueo del motor (lead
+            anonimizado) las saca. No usarlo con motivos que esa regla no ve (`EXIT_REPLIED`).
 
     Returns:
         Inscripciones cerradas.
@@ -456,9 +482,13 @@ async def salir_de_secuencias(
         LeadSequenceEnrollment.lead_id.in_(list(lead_ids)),
         LeadSequenceEnrollment.status.in_(LIVE_STATUSES),
     )
-    if sequence_id is not None:
+    if sequence_id is not None and motivo not in OPT_OUT_EXITS:
         consulta = consulta.where(LeadSequenceEnrollment.sequence_id == sequence_id)
-    vivas = (await session.execute(consulta.with_for_update())).scalars().all()
+    vivas = (
+        (await session.execute(consulta.with_for_update(skip_locked=saltar_bloqueadas)))
+        .scalars()
+        .all()
+    )
     for inscripcion in vivas:
         salir(session, inscripcion, motivo, ahora=ahora, user_id=user_id)
     await session.flush()
@@ -481,15 +511,17 @@ def pausar(inscripcion: LeadSequenceEnrollment) -> None:
 
 
 def reanudar(
-    inscripcion: LeadSequenceEnrollment, *, ahora: datetime, ventana: VentanaEnvio | None = None
+    inscripcion: LeadSequenceEnrollment, *, ahora: datetime, ventana: VentanaEnvio | None
 ) -> None:
     """Reanuda una inscripcion pausada; su paso actual se ejecuta en el siguiente turno.
 
     Args:
         inscripcion: Inscripcion pausada.
         ahora: Instante actual.
-        ventana: Horario del negocio; con el, el paso se programa para la siguiente apertura
-            (completar una tarea a las 23:00 no debe disparar un mensaje a esa hora).
+        ventana: Horario del negocio (`ventana_del_tenant`); el paso se programa para la
+            siguiente apertura (completar una tarea a las 23:00 no debe disparar un mensaje a esa
+            hora). Obligatorio, como en `registrar_avance`; `None` solo si el paso puede ir a
+            cualquier hora.
 
     Raises:
         SecuenciaError: `not_paused` si no esta pausada.
@@ -691,6 +723,7 @@ async def snapshot_del_lead(session: AsyncSession, lead: Lead, *, desde: datetim
         status=lead.status,
         deleted=lead.deleted_at is not None,
         anonymized=lead_esta_anonimizado(lead),
+        opted_out=await se_dio_de_baja(session, lead),
         stage_slug=slug,
         total_score=lead.total_score,
         channels=await canales_del_lead(session, lead),
@@ -868,6 +901,9 @@ async def inscribir_por_evento(
             .order_by(LeadSequence.created_at, LeadSequence.id)
         )
     ).scalars()
+    lista = secuencias.all()
+    if not lista or await se_dio_de_baja(session, lead):
+        return []
     datos = await datos_de_disparo(session, lead)
     ya_recorridas = set(
         (
@@ -880,7 +916,9 @@ async def inscribir_por_evento(
         ).scalars()
     )
     nuevas: list[LeadSequenceEnrollment] = []
-    for secuencia in secuencias.all():
+    # La baja y el horario se miran una sola vez, no una por secuencia candidata.
+    primer_paso: datetime | None = None
+    for secuencia in lista:
         if secuencia.id in ya_recorridas:
             continue
         try:
@@ -889,9 +927,19 @@ async def inscribir_por_evento(
             continue  # editada a mano en la base: mejor no disparar que disparar mal
         if not cumple_disparador(condiciones, evento, datos):
             continue
+        if lead.client_id != secuencia.client_id or motivo_para_no_inscribir(lead, secuencia):
+            continue
+        if primer_paso is None:
+            primer_paso = siguiente_apertura(
+                ahora, await ventana_del_tenant(session, lead.client_id)
+            )
         try:
-            nuevas.append(await inscribir(session, lead, secuencia, ahora=ahora))
-        except SecuenciaError:
+            nuevas.append(
+                await _crear_inscripcion(
+                    session, lead, secuencia, ahora=ahora, user_id=None, next_step_at=primer_paso
+                )
+            )
+        except YaInscritoError:
             continue
     return nuevas
 

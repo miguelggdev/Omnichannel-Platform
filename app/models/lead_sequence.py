@@ -152,7 +152,8 @@ class LeadSequenceEnrollment(TenantBaseModel):
         current_step: Posicion del paso que toca ejecutar.
         status: `active`, `paused`, `completed` o `exited`.
         steps_executed: Pasos ejecutados (tope contra bucles de condiciones).
-        next_step_at: Cuando toca el siguiente paso (`None` = ya).
+        next_step_at: Cuando toca el siguiente paso. Siempre con valor en una inscripcion
+            activa (`ck_lead_enrollment_due`); `None` en las pausadas y cerradas.
         last_step_at: Cuando se ejecuto el ultimo.
         completed_at: Cuando termino o salio.
         exit_reason: Codigo `EXIT_*` si salio antes de terminar.
@@ -169,6 +170,9 @@ class LeadSequenceEnrollment(TenantBaseModel):
         CheckConstraint(
             "status NOT IN ('completed', 'exited') OR completed_at IS NOT NULL",
             name="ck_lead_enrollment_closed_at",
+        ),
+        CheckConstraint(
+            "status <> 'active' OR next_step_at IS NOT NULL", name="ck_lead_enrollment_due"
         ),
         Index(
             "uq_lead_enrollment_live",
