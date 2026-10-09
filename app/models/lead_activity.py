@@ -48,6 +48,11 @@ ACTIVITY_SEQUENCE_COMPLETED = "sequence_completed"
 #: lead sin contacto enlazado). La anota la deteccion de respuestas (Dev B); las secuencias la
 #: cuentan como `replied`.
 ACTIVITY_EMAIL_REPLIED = "email_replied"
+# Sprint 19: deals y llamadas agendadas.
+ACTIVITY_DEAL_CREATED = "deal_created"
+ACTIVITY_DEAL_STAGE_CHANGED = "deal_stage_changed"
+ACTIVITY_CALL_SCHEDULED = "call_scheduled"
+ACTIVITY_CALL_STATUS_CHANGED = "call_status_changed"
 
 
 class LeadActivity(TenantBaseModel):

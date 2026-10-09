@@ -364,7 +364,9 @@ async def test_el_enriquecimiento_persiste_sin_pisar_y_sube_el_fit(tenant: uuid.
     )
     async with tenant_session(tenant) as s:
         lead = await _cargar(s, tenant, lead_id)
-        salida = await enriquecer_lead(s, lead, [ProveedorFijo()], ahora=AHORA)
+        salida = await enriquecer_lead(
+            s, lead, [ProveedorFijo()], ahora=AHORA, enriquecer_persona=True
+        )
         assert salida.providers_used == ["fijo"]
         await recalcular_fit(s, lead, trigger=TRIGGER_ENRICHMENT)
 

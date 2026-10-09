@@ -47,6 +47,27 @@ SKIP_DELETED = "deleted"
 SKIP_ANONYMIZED = "anonymized"
 SKIP_NOTHING_TO_LOOK_UP = "nothing_to_look_up"
 SKIP_NO_PROVIDERS = "no_providers"
+#: El lead llego sin autorizacion de tratamiento (`enrichment_data["capture"]["consent"]` es
+#: `false`, p. ej. perfiles de LinkedIn de Phantombuster): no se envia nada suyo a terceros,
+#: ni siquiera el dominio, hasta que lo resuelva la consulta legal (ver PROGRESS.md).
+SKIP_NO_CONSENT = "no_consent"
+
+
+def sin_autorizacion(lead: Lead) -> bool:
+    """Si el lead llego marcado sin autorizacion de tratamiento.
+
+    Solo cuenta un `false` explicito: un lead importado sin marca no se presume sin
+    autorizacion (la declara el tenant al importar).
+
+    Args:
+        lead: Lead.
+
+    Returns:
+        `True` si `enrichment_data["capture"]["consent"]` es `false`.
+    """
+    captura = (lead.enrichment_data or {}).get("capture")
+    return isinstance(captura, dict) and captura.get("consent") is False
+
 
 ERROR_NOT_CONFIGURED = "not_configured"
 ERROR_TEMPORARY = "temporary"
@@ -161,7 +182,7 @@ async def enriquecer_lead(
     *,
     ahora: datetime,
     cache: CompanyCache | None = None,
-    enriquecer_persona: bool = True,
+    enriquecer_persona: bool = False,
     user_id: UUID | None = None,
 ) -> EnrichmentOutcome:
     """Enriquece un lead con los proveedores dados (en orden de prioridad).
@@ -172,8 +193,9 @@ async def enriquecer_lead(
         proveedores: Proveedores del tenant, ya construidos (`registry.build_providers`).
         ahora: Instante del enriquecimiento (aware).
         cache: Cache de empresas; `None` para no usarla.
-        enriquecer_persona: `False` para consultar solo la empresa (no se envia ningun dato
-            personal a terceros).
+        enriquecer_persona: `True` para consultar tambien a la persona (envia email, LinkedIn y
+            nombre al proveedor). **Por defecto `False`**: pendiente de la consulta legal sobre
+            transferencia de datos personales (PROGRESS.md, "Lead Management: pendientes").
         user_id: Quien lo pidio; `None` si es el sistema.
 
     Returns:
@@ -185,6 +207,9 @@ async def enriquecer_lead(
         return salida
     if lead_esta_anonimizado(lead):
         salida.skipped = SKIP_ANONYMIZED
+        return salida
+    if sin_autorizacion(lead):
+        salida.skipped = SKIP_NO_CONSENT
         return salida
     if not proveedores and cache is None:
         salida.skipped = SKIP_NO_PROVIDERS
