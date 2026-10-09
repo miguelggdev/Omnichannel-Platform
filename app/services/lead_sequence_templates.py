@@ -11,12 +11,22 @@ empresa o agente faltan a menudo en leads importados y dejarian frases rotas ("v
 
 Ninguna se dispara sola salvo la de entrantes: inscribir en frio o reactivar a alguien es una
 decision comercial que toma una persona.
+
+**Email primero.** WhatsApp no deja abrir una conversacion fuera de la ventana de 24 h con texto
+libre, y una plantilla no puede traer el nombre de la plantilla aprobada por Meta de cada
+tenant (`whatsapp_template`). Por eso las tres prefieren el email y solo usan WhatsApp con quien
+no tiene email (p. ej. quien acaba de escribir por WhatsApp, que esta dentro de la ventana). Para
+escribir por WhatsApp a un lead frio, el tenant tiene que poner su `whatsapp_template` al copiarla.
+
+Ningun texto da por hecho que un paso anterior llego: un mensaje por un canal que el lead no tiene
+se salta, y la frase "te escribi por correo" seria falsa para quien no tiene email.
 """
 
 from app.schemas.lead_sequence import (
     Branch,
     ConditionStep,
     MessageStep,
+    OutreachChannel,
     SequenceDefinition,
     TaskStep,
     TriggerConditions,
@@ -28,6 +38,7 @@ OUTBOUND_COLD = "outbound_cold"
 REENGAGEMENT = "reengagement"
 
 _SALIR = Branch(action="exit")
+_EMAIL_PRIMERO: list[OutreachChannel] = ["email", "whatsapp", "instagram"]
 
 PLANTILLAS: dict[str, SequenceDefinition] = {
     INBOUND_NURTURING: SequenceDefinition(
@@ -37,6 +48,7 @@ PLANTILLAS: dict[str, SequenceDefinition] = {
             "llamar si no contesta. Sale en cuanto el lead responde."
         ),
         trigger_conditions=TriggerConditions(events=["lead_created"]),
+        channel_priority=_EMAIL_PRIMERO,
         steps=[
             MessageStep(
                 body=(
@@ -86,7 +98,7 @@ PLANTILLAS: dict[str, SequenceDefinition] = {
             ConditionStep(check="replied", if_true=_SALIR),
             MessageStep(
                 body=(
-                    "Hola {{first_name}}, te escribi por correo hace unos dias. "
+                    "Hola {{first_name}}, te escribo de {{business_name}} por ultima vez. "
                     "Si no es buen momento, no hay problema."
                 )
             ),
@@ -96,8 +108,10 @@ PLANTILLAS: dict[str, SequenceDefinition] = {
         name="Reactivacion",
         description=(
             "Para leads que se enfriaron: un mensaje, una espera larga y una tarea si vuelve a "
-            "mostrar interes. Inscribir a mano."
+            "mostrar interes. Inscribir a mano. Para WhatsApp, configurar antes una plantilla "
+            "aprobada (whatsapp_template)."
         ),
+        channel_priority=_EMAIL_PRIMERO,
         steps=[
             MessageStep(
                 body=(
