@@ -47,12 +47,13 @@ async def crear_fuente(client_id: uuid.UUID, **campos: Any) -> uuid.UUID:
 
 
 async def limpiar_leads(client_id: uuid.UUID) -> None:
-    """Borra leads, fuentes y etapas del tenant (antes de borrar contactos y el tenant)."""
+    """Borra leads, secuencias, fuentes y etapas del tenant (antes de borrar contactos y el tenant)."""
     async with tenant_session(client_id) as s:
         await s.execute(
             text("UPDATE contacts SET lead_id = NULL WHERE client_id = :c"), {"c": str(client_id)}
         )
-        for tabla in ("leads", "lead_sources", "lead_pipeline_stages"):
+        # `leads` antes que `lead_sequences`: sus inscripciones caen en cascada con el lead.
+        for tabla in ("leads", "lead_sequences", "lead_sources", "lead_pipeline_stages"):
             await s.execute(
                 text(f"DELETE FROM {tabla} WHERE client_id = :c"),  # noqa: S608
                 {"c": str(client_id)},
