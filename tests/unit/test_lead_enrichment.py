@@ -480,3 +480,62 @@ class TestEnriquecerLead:
             "not_configured",
             "temporary",
         )
+
+
+# ─── Correcciones de la revision ─────────────────────────────────────────────────────────────
+
+
+class TestCorreccionesRevision:
+    async def test_un_fallo_pasajero_impide_guardar_lo_que_dijo_otro(self) -> None:
+        """Si uno fallo pasajeramente, el reintento debe volver a preguntarle: nada a la cache."""
+        redis = FakeRedis()
+        cache = CompanyCache(redis)
+        caido = Proveedor("apollo", error=ProviderTemporaryError("429"), personas=False)
+        parcial = Proveedor("clearbit", empresa=CompanyData(name="Acme"), personas=False)
+        salida = await enriquecer_lead(
+            SesionFalsa(),
+            _lead(),
+            [caido, parcial],
+            ahora=AHORA,
+            cache=cache,  # type: ignore[arg-type]
+        )
+        assert salida.retryable
+        assert salida.providers_used == ["clearbit"]
+        assert redis.datos == {}
+
+        # Tambien con un "no encontrado" del otro.
+        vacio = Proveedor("clearbit", empresa=None, personas=False)
+        await enriquecer_lead(SesionFalsa(), _lead(), [caido, vacio], ahora=AHORA, cache=cache)  # type: ignore[arg-type]
+        assert redis.datos == {}
+
+    async def test_un_no_encontrado_recordado_no_cuenta_como_acierto(self) -> None:
+        cache = CompanyCache(FakeRedis())
+        await cache.set(TENANT, "acme.com", None)
+        sesion = SesionFalsa()
+        salida = await enriquecer_lead(
+            sesion,
+            _lead(),
+            [Proveedor(personas=False)],
+            ahora=AHORA,
+            cache=cache,  # type: ignore[arg-type]
+        )
+        assert not salida.company_from_cache
+        assert not salida.found_anything
+        [actividad] = sesion.actividades()
+        assert actividad.activity_type == ACTIVITY_ENRICHMENT_EMPTY
+
+    def test_un_modelo_sin_ningun_dato_no_cuenta_como_aporte(self) -> None:
+        empresa, _, aportaron = combinar(
+            [EnrichmentResult(provider="hueco", company=CompanyData())]
+        )
+        assert empresa is None
+        assert aportaron == []
+
+    async def test_ttl_cero_no_recuerda_y_no_se_cambia_por_el_de_por_defecto(self) -> None:
+        redis = FakeRedis()
+        cache = CompanyCache(redis, ttl_seconds=1000, negative_ttl_seconds=0)
+        assert cache.negative_ttl == 0
+        await cache.set(TENANT, "nadie.com", None)
+        assert redis.datos == {}
+        await cache.set(TENANT, "acme.com", ACME)
+        assert redis.ttl[cache.clave(TENANT, "acme.com")] == 1000

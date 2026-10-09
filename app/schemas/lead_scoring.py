@@ -254,8 +254,10 @@ class EnrichmentResult(BaseModel):
 
     @property
     def vacio(self) -> bool:
-        """Si el proveedor no supo nada."""
-        return self.company is None and self.person is None
+        """Si el proveedor no supo nada (un modelo con todos los campos a `None` no cuenta)."""
+        return not any(
+            m is not None and m.model_dump(exclude_none=True) for m in (self.company, self.person)
+        )
 
 
 # ─── Resultado de un calculo y respuestas de la API ────────────────────────────────────────

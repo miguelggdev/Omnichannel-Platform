@@ -84,7 +84,9 @@ class EnrichmentOutcome:
         return bool(self.providers_used) or self.company_from_cache
 
 
-def _registrar_error(salida: EnrichmentOutcome, proveedor: str, exc: EnrichmentError) -> None:
+def _registrar_error(
+    salida: EnrichmentOutcome, proveedor: str, exc: EnrichmentError, client_id: UUID
+) -> None:
     """Anota el fallo de un proveedor por su tipo (el mensaje puede llevar datos; no se usa)."""
     if isinstance(exc, ProviderNotConfiguredError):
         salida.errors[proveedor] = ERROR_NOT_CONFIGURED
@@ -94,39 +96,49 @@ def _registrar_error(salida: EnrichmentOutcome, proveedor: str, exc: EnrichmentE
             salida.retry_after = max(salida.retry_after or 0, exc.retry_after)
     else:
         salida.errors[proveedor] = ERROR_FAILED
-    logger.warning("Proveedor de enriquecimiento %s fallo (%s)", proveedor, type(exc).__name__)
+    logger.warning(
+        "Proveedor de enriquecimiento %s fallo (%s) client_id=%s",
+        proveedor,
+        type(exc).__name__,
+        client_id,
+    )
 
 
 async def _buscar_empresa(
     dominio: str,
     proveedores: Sequence[EnrichmentProvider],
     salida: EnrichmentOutcome,
+    client_id: UUID,
 ) -> tuple[list[EnrichmentResult], bool]:
     """Pregunta la empresa a cada proveedor que sabe de empresas.
 
     Returns:
-        `(respuestas, concluyente)`: concluyente si al menos uno respondio sin fallo pasajero,
-        que es la condicion para poder recordar un "no encontrado".
+        `(respuestas, concluyente)`: concluyente si al menos uno respondio y **ninguno** fallo de
+        forma pasajera. Es la condicion para guardar el resultado en la cache: si uno fallo, el
+        reintento tiene que volver a preguntarle, y una entrada en la cache lo impediria.
     """
     respuestas: list[EnrichmentResult] = []
-    concluyente = False
+    alguno_respondio = False
+    fallo_pasajero = False
     for proveedor in proveedores:
         if not proveedor.supports_company:
             continue
         try:
             empresa = await proveedor.enrich_company(dominio)
         except EnrichmentError as exc:
-            _registrar_error(salida, proveedor.name, exc)
+            _registrar_error(salida, proveedor.name, exc, client_id)
+            fallo_pasajero = fallo_pasajero or isinstance(exc, ProviderTemporaryError)
             continue
-        concluyente = True
+        alguno_respondio = True
         respuestas.append(EnrichmentResult(provider=proveedor.name, company=empresa))
-    return respuestas, concluyente
+    return respuestas, alguno_respondio and not fallo_pasajero
 
 
 async def _buscar_persona(
     consulta: PersonQuery,
     proveedores: Sequence[EnrichmentProvider],
     salida: EnrichmentOutcome,
+    client_id: UUID,
 ) -> list[EnrichmentResult]:
     """Pregunta la persona a cada proveedor que sabe de personas."""
     respuestas: list[EnrichmentResult] = []
@@ -136,7 +148,7 @@ async def _buscar_persona(
         try:
             persona = await proveedor.enrich_person(consulta)
         except EnrichmentError as exc:
-            _registrar_error(salida, proveedor.name, exc)
+            _registrar_error(salida, proveedor.name, exc, client_id)
             continue
         respuestas.append(EnrichmentResult(provider=proveedor.name, person=persona))
     return respuestas
@@ -196,10 +208,13 @@ async def enriquecer_lead(
     if dominio is not None:
         encontrado = await cache.get(lead.client_id, dominio) if cache is not None else None
         if encontrado is not None and encontrado.hit:
+            # Un "no encontrado" recordado no aporta datos: no cuenta como acierto de la cache.
             empresa = encontrado.company
-            salida.company_from_cache = True
+            salida.company_from_cache = empresa is not None
         else:
-            respuestas, concluyente = await _buscar_empresa(dominio, proveedores, salida)
+            respuestas, concluyente = await _buscar_empresa(
+                dominio, proveedores, salida, lead.client_id
+            )
             empresa, _, proveedores_empresa = combinar(respuestas)
             if cache is not None and concluyente:
                 await cache.set(lead.client_id, dominio, empresa)
@@ -207,7 +222,7 @@ async def enriquecer_lead(
     proveedores_persona: list[str] = []
     if buscar_persona:
         _, persona, proveedores_persona = combinar(
-            await _buscar_persona(consulta, proveedores, salida)
+            await _buscar_persona(consulta, proveedores, salida, lead.client_id)
         )
     salida.providers_used = list(dict.fromkeys(proveedores_empresa + proveedores_persona))
 
