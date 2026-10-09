@@ -43,7 +43,7 @@ _CLAVES_PROHIBIDAS = frozenset(
 _ultimo_instante = datetime.min.replace(tzinfo=timezone.utc)
 
 
-def _instante_monotono() -> datetime:
+def instante_monotono() -> datetime:
     """Un instante estrictamente creciente dentro del proceso.
 
     Los hechos de una misma peticion se escriben en una sola transaccion y, a veces, en un solo
@@ -94,7 +94,7 @@ def registrar_actividad(
         lead_id=lead_id,
         user_id=user_id,
         activity_type=tipo,
-        created_at=_instante_monotono(),
+        created_at=instante_monotono(),
         metadata_={k: (str(v) if isinstance(v, UUID) else v) for k, v in metadata.items()},
     )
     session.add(actividad)

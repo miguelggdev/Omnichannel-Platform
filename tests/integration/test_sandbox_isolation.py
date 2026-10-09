@@ -519,8 +519,10 @@ _NO_PURGADAS = {
     # nada de un sandbox los crea: no tiene usuarios, y `capture_lookup_source()` excluye los
     # tenants sandbox. REVISAR en los Sprints 17-18: si un agente crea leads desde una
     # conversacion, `leads` pasa a `_TABLAS_DE_PRUEBA` para que el reset los borre.
+    # `lead_scores` (Sprint 17) sigue a `leads`: sin leads no hay scores; ON DELETE CASCADE.
     "lead_activities",
     "lead_pipeline_stages",
+    "lead_scores",
     "lead_sources",
     "leads",
     "patient_consents",

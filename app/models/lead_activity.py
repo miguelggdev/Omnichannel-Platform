@@ -32,6 +32,14 @@ ACTIVITY_CONTACT_CREATED = "contact_created"
 ACTIVITY_DELETED = "deleted"
 ACTIVITY_ANONYMIZED = "gdpr_anonymized"
 ACTIVITY_INBOUND_MESSAGE = "inbound_message"
+# Sprint 17: enriquecimiento y scoring.
+ACTIVITY_ENRICHED = "enriched"
+ACTIVITY_ENRICHMENT_EMPTY = "enrichment_empty"
+ACTIVITY_SCORE_CHANGED = "score_changed"
+# Senales de comportamiento que produciran las secuencias del Sprint 18; el score de
+# comportamiento ya las cuenta.
+ACTIVITY_EMAIL_OPENED = "email_opened"
+ACTIVITY_LINK_CLICKED = "link_clicked"
 
 
 class LeadActivity(TenantBaseModel):

@@ -257,7 +257,7 @@ class TestInstanteMonotono:
 
         monkeypatch.setattr(lead_activity, "datetime", RelojParado)
         monkeypatch.setattr(lead_activity, "_ultimo_instante", fijo - dt.timedelta(seconds=1))
-        instantes = [lead_activity._instante_monotono() for _ in range(5)]
+        instantes = [lead_activity.instante_monotono() for _ in range(5)]
         assert instantes == sorted(set(instantes))
         assert instantes[0] == fijo
         assert instantes[4] == fijo + dt.timedelta(microseconds=4)

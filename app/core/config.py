@@ -215,6 +215,12 @@ class Settings(BaseSettings):
     CAPTURE_MAX_PER_IP_PER_MINUTE: int = 20
     CAPTURE_MAX_PER_SOURCE_PER_MINUTE: int = 120
 
+    # Enriquecimiento de leads (Sprint 17): cache de datos de EMPRESA por dominio y tenant.
+    # Los datos de la persona no se cachean (son personales). Un "no encontrado" se recuerda
+    # menos tiempo: el proveedor puede conocer la empresa manana.
+    ENRICHMENT_CACHE_TTL_SECONDS: int = 30 * 24 * 3600
+    ENRICHMENT_NEGATIVE_CACHE_TTL_SECONDS: int = 24 * 3600
+
     # Observabilidad (Sprint 8)
     # Vacio = tracing deshabilitado. Es el valor por defecto a proposito: sin
     # collector escuchando, el exporter OTLP reintenta en background y ensucia
