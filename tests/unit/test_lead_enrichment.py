@@ -35,8 +35,10 @@ from app.services.enrichment.engine import (
     ERROR_TEMPORARY,
     SKIP_ANONYMIZED,
     SKIP_DELETED,
+    SKIP_NO_CONSENT,
     SKIP_NOTHING_TO_LOOK_UP,
     enriquecer_lead,
+    sin_autorizacion,
 )
 from app.services.enrichment.merge import aplicar_a_lead, combinar
 from app.services.lead_privacy import anonimizar_lead
@@ -370,7 +372,13 @@ class TestEnriquecerLead:
         sesion = SesionFalsa()
         lead = _lead()
         proveedor = Proveedor(empresa=ACME, persona=PersonData(job_title="CTO", country="CO"))
-        salida = await enriquecer_lead(sesion, lead, [proveedor], ahora=AHORA)  # type: ignore[arg-type]
+        salida = await enriquecer_lead(
+            sesion,  # type: ignore[arg-type]
+            lead,
+            [proveedor],
+            ahora=AHORA,
+            enriquecer_persona=True,
+        )
 
         assert salida.skipped is None
         assert salida.providers_used == ["falso"]
@@ -446,12 +454,42 @@ class TestEnriquecerLead:
         [actividad] = sesion.actividades()
         assert actividad.activity_type == ACTIVITY_ENRICHMENT_EMPTY
 
+    async def test_por_defecto_no_sale_ningun_dato_de_la_persona(self) -> None:
+        # Pendiente de la consulta legal: sin pedirlo, solo se consulta el dominio.
+        proveedor = Proveedor(empresa=ACME, persona=PersonData(job_title="CTO"))
+        lead = _lead()
+        salida = await enriquecer_lead(SesionFalsa(), lead, [proveedor], ahora=AHORA)  # type: ignore[arg-type]
+        assert proveedor.consultas_empresa == ["acme.com"]
+        assert proveedor.consultas_persona == []
+        assert salida.found_anything
+        assert lead.job_title is None
+
+    @pytest.mark.parametrize(
+        ("capture", "sale"),
+        [
+            ({"consent": False}, False),
+            ({"consent": True}, True),
+            ({"consent": None}, True),  # formulario que no la exige: no se presume negada
+            ({}, True),
+        ],
+    )
+    def test_sin_autorizacion_solo_con_false_explicito(
+        self, capture: dict[str, Any], sale: bool
+    ) -> None:
+        lead = _lead()
+        lead.enrichment_data = {"capture": capture}
+        assert sin_autorizacion(lead) is not sale
+
     @pytest.mark.parametrize(
         ("preparar", "motivo"),
         [
             (lambda lead: setattr(lead, "deleted_at", AHORA), SKIP_DELETED),
             (anonimizar_lead, SKIP_ANONYMIZED),
             (lambda lead: setattr(lead, "email", "ana@gmail.com"), None),
+            (
+                lambda lead: setattr(lead, "enrichment_data", {"capture": {"consent": False}}),
+                SKIP_NO_CONSENT,
+            ),
         ],
     )
     async def test_borrados_y_anonimizados_no_salen_hacia_un_proveedor(
@@ -460,7 +498,13 @@ class TestEnriquecerLead:
         lead = _lead()
         preparar(lead)
         proveedor = Proveedor(empresa=ACME)
-        salida = await enriquecer_lead(SesionFalsa(), lead, [proveedor], ahora=AHORA)  # type: ignore[arg-type]
+        salida = await enriquecer_lead(
+            SesionFalsa(),  # type: ignore[arg-type]
+            lead,
+            [proveedor],
+            ahora=AHORA,
+            enriquecer_persona=True,
+        )
         if motivo is not None:
             assert salida.skipped == motivo
             assert proveedor.consultas_empresa == proveedor.consultas_persona == []
