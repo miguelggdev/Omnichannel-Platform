@@ -6,6 +6,7 @@ Las integraciones se registran con `@register_provider` y el tenant elige cuales
 
 import logging
 from collections.abc import Sequence
+from uuid import UUID
 
 from app.services.enrichment.base import EnrichmentProvider, ProviderNotConfiguredError
 
@@ -61,7 +62,9 @@ def available_providers() -> tuple[str, ...]:
     return tuple(sorted(_REGISTRO))
 
 
-def build_providers(names: Sequence[str]) -> list[EnrichmentProvider]:
+def build_providers(
+    names: Sequence[str], *, client_id: UUID | None = None
+) -> list[EnrichmentProvider]:
     """Instancia los proveedores pedidos, en ese orden (el orden es la prioridad al fusionar).
 
     Un proveedor cuyo constructor lanza `ProviderNotConfiguredError` (falta su API key) se omite
@@ -69,6 +72,7 @@ def build_providers(names: Sequence[str]) -> list[EnrichmentProvider]:
 
     Args:
         names: Nombres en orden de prioridad; los repetidos se ignoran.
+        client_id: Tenant, solo para el log.
 
     Returns:
         Los proveedores utilizables.
@@ -89,5 +93,9 @@ def build_providers(names: Sequence[str]) -> list[EnrichmentProvider]:
         try:
             proveedores.append(_REGISTRO[nombre]())
         except ProviderNotConfiguredError:
-            logger.warning("Proveedor de enriquecimiento %s sin configurar; se omite", nombre)
+            logger.warning(
+                "Proveedor de enriquecimiento %s sin configurar; se omite (client_id=%s)",
+                nombre,
+                client_id,
+            )
     return proveedores

@@ -46,6 +46,8 @@ from app.schemas.lead_scoring import ScoreResult
 
 BEHAVIORAL_VERSION = 1
 VENTANA = timedelta(days=30)
+#: Hasta donde se mira antes de la ventana para encontrar el mensaje al que responde el lead.
+RETROCESO_RESPUESTA = timedelta(days=30)
 
 _RECENCIA: tuple[tuple[timedelta, int], ...] = (
     (timedelta(days=1), 30),
@@ -193,6 +195,9 @@ async def recolectar_senales(
         salientes = int(por_direccion.get("outbound", 0))
 
         # Respuesta = mensaje del lead cuyo mensaje anterior en la conversacion fue nuestro.
+        # `lag()` solo recorre las conversaciones con movimiento en la ventana y, de ellas, lo
+        # posterior a `desde - RETROCESO_RESPUESTA`: ordenar toda la historia del contacto en
+        # cada recalculo no escala. Una "respuesta" a algo anterior a ese corte no se mide.
         # `type_`: sin el, `lag()` devuelve VARCHAR y comparar con el enum `message_direction`
         # falla en PostgreSQL ("operator does not exist").
         anterior_dir = func.lag(Message.direction, type_=Message.direction.type).over(
@@ -209,7 +214,16 @@ async def recolectar_senales(
                 anterior_at.label("prev_at"),
             )
             .join(Conversation, Conversation.id == Message.conversation_id)
-            .where(de_contacto, Message.created_at <= ahora)
+            .where(
+                de_contacto,
+                Message.created_at <= ahora,
+                Message.created_at >= desde - RETROCESO_RESPUESTA,
+                Message.conversation_id.in_(
+                    select(Message.conversation_id)
+                    .join(Conversation, Conversation.id == Message.conversation_id)
+                    .where(de_contacto, Message.created_at >= desde, Message.created_at <= ahora)
+                ),
+            )
             .subquery()
         )
         filas = await session.execute(

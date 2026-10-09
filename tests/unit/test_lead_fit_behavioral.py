@@ -131,6 +131,9 @@ class TestDatosNormalizados:
         ("120", "51-200"),
         ("0", "1-10"),
         ("50-250", "51-200"),
+        ("10.5k employees", "5001+"),
+        ("1,5k", "1001-5000"),
+        ("2.5M", "5001+"),
         ("pyme", None),
         ("", None),
         (None, None),
@@ -285,6 +288,15 @@ class TestCalcularFit:
         assert r.factors["excluded_by"] == "job_title"
         assert r.factors["dimensions"]["job_title"]["result"] == EXCLUDED
         assert all(d["points"] == 0 for d in r.factors["dimensions"].values())
+
+    def test_excluir_es_por_palabra_completa_no_por_prefijo(self) -> None:
+        icp = _icp(job_titles=["director"], excluded_job_titles=["intern", "practica"])
+        internacional = calcular_fit(FitInput(job_title="International Sales Director"), icp)
+        assert internacional.score == 100
+        assert calcular_fit(FitInput(job_title="Directora de practica clinica"), icp).score == 0
+        assert calcular_fit(FitInput(job_title="Interns program director"), icp).score == 0
+        # La inclusion sigue encajando por prefijo.
+        assert calcular_fit(FitInput(job_title="Directora comercial"), icp).score == 100
 
     def test_una_dimension_solo_con_exclusiones_filtra_pero_no_puntua(self) -> None:
         icp = _icp(countries=["CO"], excluded_industries=["apuestas"])

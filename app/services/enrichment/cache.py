@@ -66,8 +66,12 @@ class CompanyCache:
         """
         settings = get_settings()
         self._redis = redis_client
-        self.ttl = ttl_seconds or settings.ENRICHMENT_CACHE_TTL_SECONDS
-        self.negative_ttl = negative_ttl_seconds or settings.ENRICHMENT_NEGATIVE_CACHE_TTL_SECONDS
+        self.ttl = settings.ENRICHMENT_CACHE_TTL_SECONDS if ttl_seconds is None else ttl_seconds
+        self.negative_ttl = (
+            settings.ENRICHMENT_NEGATIVE_CACHE_TTL_SECONDS
+            if negative_ttl_seconds is None
+            else negative_ttl_seconds
+        )
 
     @property
     def redis(self) -> Any:
@@ -102,7 +106,11 @@ class CompanyCache:
         try:
             crudo = await self.redis.get(self.clave(client_id, dominio))
         except Exception as exc:  # cualquier fallo de Redis es no fatal
-            logger.warning("Cache de enriquecimiento no disponible: %s", type(exc).__name__)
+            logger.warning(
+                "Cache de enriquecimiento no disponible (client_id=%s): %s",
+                client_id,
+                type(exc).__name__,
+            )
             return MISS
         if crudo is None:
             return MISS
@@ -115,7 +123,9 @@ class CompanyCache:
                 hit=True, company=None if datos is None else CompanyData.model_validate(datos)
             )
         except (ValueError, TypeError, AttributeError, ValidationError):
-            logger.warning("Entrada de cache de enriquecimiento corrupta; se ignora")
+            logger.warning(
+                "Entrada de cache de enriquecimiento corrupta; se ignora (client_id=%s)", client_id
+            )
             return MISS
 
     async def set(self, client_id: UUID, dominio: str, company: CompanyData | None) -> None:
@@ -126,6 +136,9 @@ class CompanyCache:
             dominio: Dominio normalizado.
             company: Datos, o `None` para recordar que ningun proveedor la conoce.
         """
+        ttl = self.ttl if company is not None else self.negative_ttl
+        if ttl <= 0:  # TTL 0: no recordar este tipo de entrada
+            return
         valor = {
             "v": _VERSION,
             "company": None
@@ -136,11 +149,13 @@ class CompanyCache:
             await self.redis.set(
                 self.clave(client_id, dominio),
                 json.dumps(valor),
-                ex=self.ttl if company is not None else self.negative_ttl,
+                ex=ttl,
             )
         except Exception as exc:
             logger.warning(
-                "No se pudo guardar en la cache de enriquecimiento: %s", type(exc).__name__
+                "No se pudo guardar en la cache de enriquecimiento (client_id=%s): %s",
+                client_id,
+                type(exc).__name__,
             )
 
     async def invalidate(self, client_id: UUID, dominio: str) -> None:
@@ -154,5 +169,7 @@ class CompanyCache:
             await self.redis.delete(self.clave(client_id, dominio))
         except Exception as exc:
             logger.warning(
-                "No se pudo invalidar la cache de enriquecimiento: %s", type(exc).__name__
+                "No se pudo invalidar la cache de enriquecimiento (client_id=%s): %s",
+                client_id,
+                type(exc).__name__,
             )

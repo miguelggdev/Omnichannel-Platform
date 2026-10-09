@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.client import Client
@@ -25,6 +25,7 @@ from app.schemas.lead_scoring import IcpConfig, LeadScoreEntry, LeadScoresDetail
 from app.services.lead_activity import instante_monotono, registrar_actividad
 from app.services.lead_behavioral import calcular_behavioral, recolectar_senales
 from app.services.lead_fit import calcular_fit, cargar_icp, fit_input_de_lead
+from app.services.lead_privacy import lead_esta_anonimizado
 from app.services.lead_scoring import (
     DEFAULT_WEIGHTS,
     InvalidWeightsError,
@@ -53,10 +54,17 @@ async def pesos_del_tenant(session: AsyncSession, client_id: UUID) -> dict[str, 
     raw = (
         await session.execute(select(Client.lead_scoring_weights).where(Client.id == client_id))
     ).scalar_one_or_none()
+    return _leer_pesos(raw, client_id)
+
+
+def _leer_pesos(raw: Any, client_id: UUID) -> dict[str, int]:
+    """Normaliza los pesos guardados; si no sirven, registra el tenant y usa los de por defecto."""
     try:
         return normalizar_pesos(raw)
     except InvalidWeightsError:
-        logger.warning("lead_scoring_weights invalidos para el tenant; se usan los de por defecto")
+        logger.warning(
+            "lead_scoring_weights invalidos (client_id=%s); se usan los de por defecto", client_id
+        )
         return dict(DEFAULT_WEIGHTS)
 
 
@@ -73,7 +81,48 @@ async def icp_del_tenant(session: AsyncSession, client_id: UUID) -> IcpConfig | 
     raw = (
         await session.execute(select(Client.icp_config).where(Client.id == client_id))
     ).scalar_one_or_none()
-    return cargar_icp(raw)
+    return cargar_icp(raw, client_id=client_id)
+
+
+async def icp_y_pesos_del_tenant(
+    session: AsyncSession, client_id: UUID
+) -> tuple[IcpConfig | None, dict[str, int]]:
+    """El ICP y los pesos del tenant en una sola consulta.
+
+    Args:
+        session: Sesion con el contexto del tenant fijado.
+        client_id: Tenant.
+
+    Returns:
+        `(icp, pesos)`, con las mismas reglas que `icp_del_tenant()` y `pesos_del_tenant()`.
+    """
+    fila = (
+        await session.execute(
+            select(Client.icp_config, Client.lead_scoring_weights).where(Client.id == client_id)
+        )
+    ).one_or_none()
+    icp_raw, pesos_raw = fila if fila is not None else (None, None)
+    return cargar_icp(icp_raw, client_id=client_id), _leer_pesos(pesos_raw, client_id)
+
+
+def _lead_suprimido(lead: Lead) -> bool:
+    """Si el lead esta borrado o anonimizado por RGPD: no se le puede volver a perfilar."""
+    return lead.deleted_at is not None or lead_esta_anonimizado(lead)
+
+
+_COLUMNAS_SCORE = ("fit_score", "behavioral_score", "ai_score", "total_score")
+
+
+async def _cargar_columnas_score(session: AsyncSession, lead: Lead) -> None:
+    """Trae de la base los scores que el ORM no tiene cargados.
+
+    Un lead recien insertado deja sus `server_default` sin cargar tras el `flush`; leerlos en
+    `aplicar_score()` (sincrono) haria una carga perezosa, que en async falla.
+    """
+    estado = inspect(lead)
+    pendientes = [c for c in _COLUMNAS_SCORE if c in estado.unloaded]
+    if pendientes and estado.persistent:
+        await session.refresh(lead, pendientes)
 
 
 def recalcular_total(lead: Lead, pesos: dict[str, int]) -> int:
@@ -87,7 +136,7 @@ def recalcular_total(lead: Lead, pesos: dict[str, int]) -> int:
         El total nuevo.
     """
     lead.total_score = compute_total_score(
-        lead.fit_score, lead.behavioral_score, lead.ai_score, pesos
+        lead.fit_score or 0, lead.behavioral_score or 0, lead.ai_score or 0, pesos
     )
     return lead.total_score
 
@@ -105,7 +154,8 @@ def aplicar_score(
 ) -> LeadScore | None:
     """Aplica el resultado de un calculador al lead.
 
-    Si el resultado no es aplicable (p. ej. FIT sin ICP) no toca nada. Si el valor no cambia, no
+    Si el lead esta borrado o anonimizado (RGPD), o el resultado no es aplicable (p. ej. FIT sin
+    ICP), no toca nada: tras una supresion no se vuelve a escribir historial. Si el valor no cambia, no
     escribe historial salvo con `forzar_historial` (un recalculo pedido a mano debe dejar
     constancia aunque de lo mismo). Cuando cambia: columna, total, fila de `lead_scores` y
     actividad `score_changed` (con ids y numeros, sin datos personales).
@@ -129,10 +179,12 @@ def aplicar_score(
     columna = _COLUMNA.get(score_type)
     if columna is None:
         raise ValueError(f"Tipo de score desconocido: {score_type!r}")
-    if not resultado.aplicable:
+    if not resultado.aplicable or _lead_suprimido(lead):
         return None
 
-    anterior: int = getattr(lead, columna)
+    # `None` si la columna aun no tiene valor (lead recien creado, sin refrescar): el historial
+    # lo guarda tal cual y el total cuenta ese score como 0.
+    anterior: int | None = getattr(lead, columna)
     cambia = resultado.score != anterior
     if not cambia and not forzar_historial:
         return None
@@ -195,12 +247,18 @@ async def recalcular_fit(
         forzar_historial: Ver `aplicar_score()`.
 
     Returns:
-        La fila de historial creada, o `None`.
+        La fila de historial creada, o `None` (tambien si el lead esta suprimido por RGPD).
     """
-    if icp is None:
-        icp = await icp_del_tenant(session, lead.client_id)
-    if pesos is None:
-        pesos = await pesos_del_tenant(session, lead.client_id)
+    if _lead_suprimido(lead):
+        return None
+    await _cargar_columnas_score(session, lead)
+    if icp is None and pesos is None:
+        icp, pesos = await icp_y_pesos_del_tenant(session, lead.client_id)
+    else:
+        if icp is None:
+            icp = await icp_del_tenant(session, lead.client_id)
+        if pesos is None:
+            pesos = await pesos_del_tenant(session, lead.client_id)
     resultado = calcular_fit(
         fit_input_de_lead(
             industry=lead.industry,
@@ -244,8 +302,11 @@ async def recalcular_behavioral(
         forzar_historial: Ver `aplicar_score()`.
 
     Returns:
-        La fila de historial creada, o `None`.
+        La fila de historial creada, o `None` (tambien si el lead esta suprimido por RGPD).
     """
+    if _lead_suprimido(lead):
+        return None
+    await _cargar_columnas_score(session, lead)
     if pesos is None:
         pesos = await pesos_del_tenant(session, lead.client_id)
     senales = await recolectar_senales(session, lead, ahora)

@@ -29,6 +29,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -86,7 +87,10 @@ _LIMITES_TRAMOS: tuple[tuple[int, str], ...] = (
     (1000, "501-1000"),
     (5000, "1001-5000"),
 )
-_NUMERO = re.compile(r"(\d+(?:[.,]\d{3})*)(?:\s*([kKmM])\b)?")
+#: Un numero con separadores de miles ("1.000", "10,001") o, solo delante de k/m, con decimales
+#: ("10.5k", "1,5k"): sin esa alternativa "10.5k" se partia en 10 y 5k.
+_NUMERO = re.compile(r"(\d+[.,]\d{1,2}(?=\s*[kKmM]\b)|\d+(?:[.,]\d{3})*)(?:\s*([kKmM])\b)?")
+_DECIMAL = re.compile(r"\d+[.,]\d{1,2}")
 _ABIERTO = re.compile(r"\+|\bmas de\b|\bmás de\b|\bover\b|\bmore than\b", re.IGNORECASE)
 
 
@@ -106,13 +110,11 @@ def tramo_por_empleados(empleados: int) -> str:
 
 
 def _a_entero(cifra: str, sufijo: str | None) -> int:
-    """`"1.000"`, `"10,001"` y `"5"`+`"k"` a entero."""
-    valor = int(cifra.replace(".", "").replace(",", ""))
-    if sufijo and sufijo.lower() == "k":
-        valor *= 1_000
-    elif sufijo and sufijo.lower() == "m":
-        valor *= 1_000_000
-    return valor
+    """`"1.000"`, `"10,001"`, `"5"`+`"k"` y `"10.5"`+`"k"` a entero."""
+    multiplicador = {"k": 1_000, "m": 1_000_000}.get((sufijo or "").lower(), 1)
+    if multiplicador > 1 and _DECIMAL.fullmatch(cifra):
+        return int(Fraction(cifra.replace(",", ".")) * multiplicador)
+    return int(cifra.replace(".", "").replace(",", "")) * multiplicador
 
 
 def parsear_tamano_empresa(texto: str | None) -> str | None:
@@ -205,33 +207,45 @@ def fit_input_de_lead(
 # ─── Comparaciones ──────────────────────────────────────────────────────────────────────────
 
 
-def _palabra_encaja(termino: str, palabra: str) -> bool:
-    """Una palabra del ICP encaja con una del lead: igual o, si es larga, como prefijo."""
-    if len(termino) >= _PREFIJO_MINIMO:
+def _palabra_encaja(termino: str, palabra: str, *, prefijo: bool = True) -> bool:
+    """Una palabra del ICP encaja con una del lead.
+
+    Con `prefijo`, una palabra larga encaja tambien como prefijo ("director" con "directora").
+    Sin el, solo la palabra completa o su plural ("practicante" con "practicantes", pero
+    "intern" no con "international").
+    """
+    if prefijo and len(termino) >= _PREFIJO_MINIMO:
         return palabra.startswith(termino)
-    return palabra == termino
+    if prefijo:
+        return palabra == termino
+    return palabra in (termino, f"{termino}s", f"{termino}es")
 
 
-def contiene_termino(texto: str, termino: str) -> bool:
+def contiene_termino(texto: str, termino: str, *, prefijo: bool = True) -> bool:
     """Si todas las palabras del termino aparecen en el texto (en cualquier orden).
 
     Args:
         texto: Valor del lead ("Gerente General de Compras").
         termino: Termino del ICP ("gerente de compras").
+        prefijo: Si una palabra larga del termino encaja tambien como prefijo. Las exclusiones
+            lo desactivan: "intern" no debe descartar a un "International Sales Director".
 
     Returns:
         `True` si cada palabra del termino encaja con alguna del texto.
     """
     palabras = tokens(texto)
     buscadas = tokens(termino)
-    return bool(buscadas) and all(any(_palabra_encaja(b, p) for p in palabras) for b in buscadas)
+    return bool(buscadas) and all(
+        any(_palabra_encaja(b, p, prefijo=prefijo) for p in palabras) for b in buscadas
+    )
 
 
 def _resultado_texto(valor: str | None, objetivos: list[str], excluidos: list[str]) -> str:
     """Resultado de sector o cargo frente a sus listas del ICP."""
     if valor is None:
         return MISSING
-    if any(contiene_termino(valor, t) for t in excluidos):
+    # Excluir es tajante (FIT 0): solo con palabras completas, nunca por prefijo.
+    if any(contiene_termino(valor, t, prefijo=False) for t in excluidos):
         return EXCLUDED
     if any(contiene_termino(valor, t) for t in objetivos):
         return MATCH
@@ -259,7 +273,7 @@ def _resultado_tamano(tramo: str | None, objetivos: Sequence[str]) -> str:
 # ─── Calculo ────────────────────────────────────────────────────────────────────────────────
 
 
-def cargar_icp(raw: Mapping[str, Any] | None) -> IcpConfig | None:
+def cargar_icp(raw: Mapping[str, Any] | None, *, client_id: UUID | None = None) -> IcpConfig | None:
     """Lee `clients.icp_config` sin romper un calculo en segundo plano.
 
     Lo que se guarda pasa por `IcpConfig` en la API (Dev B), asi que un valor invalido solo
@@ -267,6 +281,7 @@ def cargar_icp(raw: Mapping[str, Any] | None) -> IcpConfig | None:
 
     Args:
         raw: El JSON guardado.
+        client_id: Tenant, solo para el log.
 
     Returns:
         El ICP, o `None` si esta vacio, no configura nada o no es valido.
@@ -276,7 +291,7 @@ def cargar_icp(raw: Mapping[str, Any] | None) -> IcpConfig | None:
     try:
         icp = IcpConfig.model_validate(raw)
     except ValidationError:
-        logger.warning("icp_config invalido; se trata como sin ICP")
+        logger.warning("icp_config invalido (client_id=%s); se trata como sin ICP", client_id)
         return None
     return icp if icp.configurado else None
 

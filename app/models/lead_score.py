@@ -39,7 +39,7 @@ class LeadScore(TenantBaseModel):
         user_id: Quien pidio el calculo; `None` si fue el sistema.
         score_type: `fit`, `behavioral` o `ai`.
         score: Valor nuevo, 0-100.
-        previous_score: Valor antes del calculo (`None` en el primero).
+        previous_score: Valor de la columna antes del calculo (`None` si aun no tenia).
         trigger: Una de las constantes `TRIGGER_*`.
         factors: Explicacion del calculo (dimensiones, puntos y codigos de motivo).
     """
