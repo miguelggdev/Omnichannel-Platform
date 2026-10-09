@@ -521,6 +521,9 @@ _NO_PURGADAS = {
     # conversacion, `leads` pasa a `_TABLAS_DE_PRUEBA` para que el reset los borre.
     # `lead_scores` (Sprint 17) sigue a `leads`: sin leads no hay scores; ON DELETE CASCADE.
     "lead_activities",
+    # Deals y llamadas agendadas (Sprint 19): siguen a `leads` (un sandbox no tiene leads).
+    "deals",
+    "scheduled_calls",
     "lead_pipeline_stages",
     "lead_scores",
     # Secuencias (Sprint 18): las crea un usuario del panel y un sandbox no tiene usuarios ni
