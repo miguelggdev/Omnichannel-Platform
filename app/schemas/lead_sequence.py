@@ -15,6 +15,7 @@ En la base, cada paso es `step_type` + `config`; aqui un paso es un solo objeto 
 """
 
 import re
+from collections.abc import Iterator
 from datetime import timedelta
 from typing import Annotated, Any, Literal, Self
 
@@ -367,13 +368,26 @@ def _saltos(paso: MessageStep | WaitStep | ConditionStep | TaskStep) -> list[int
     ]
 
 
-def _siguientes(posicion: int, paso: MessageStep | WaitStep | ConditionStep | TaskStep) -> set[int]:
-    """Pasos a los que se puede llegar desde `posicion` **sin esperar**.
+#: Espera minima que debe haber en un ciclo que envia mensajes o crea tareas. Con menos, un
+#: bucle "mensaje, esperar 1 minuto, si no contesta volver" escribiria al lead decenas de veces en
+#: una hora (solo lo cortaria `MAX_STEPS_PER_ENROLLMENT`).
+MIN_ESPERA_EN_BUCLE = timedelta(days=1)
 
-    Un `wait` no tiene sucesores aqui: corta el camino (lo que viene despues ocurre en otro
-    turno). Una condicion lleva a sus dos ramas; un `exit` no lleva a ninguna parte.
+
+def _siguientes(
+    posicion: int,
+    paso: MessageStep | WaitStep | ConditionStep | TaskStep,
+    espera_minima: timedelta | None = None,
+) -> set[int]:
+    """Pasos a los que se puede llegar desde `posicion` **sin esperar** lo suficiente.
+
+    Un `wait` corta el camino (lo que viene despues ocurre en otro turno), salvo que dure menos
+    que `espera_minima`: entonces cuenta como si no estuviera. Una condicion lleva a sus dos
+    ramas; un `exit` no lleva a ninguna parte.
     """
     if isinstance(paso, WaitStep):
+        if espera_minima is not None and paso.delta < espera_minima:
+            return {posicion + 1}
         return set()
     if not isinstance(paso, ConditionStep):
         return {posicion + 1}
@@ -386,20 +400,27 @@ def _siguientes(posicion: int, paso: MessageStep | WaitStep | ConditionStep | Ta
     return destinos
 
 
-def _paso_en_bucle_sin_espera(
+def _ciclos(
     pasos: list[MessageStep | WaitStep | ConditionStep | TaskStep],
-) -> int | None:
-    """Un paso que forma parte de un ciclo sin ningun `wait`, o `None` si no hay ninguno.
+    espera_minima: timedelta | None = None,
+) -> list[list[int]]:
+    """Ciclos del grafo de "lo que se ejecuta sin esperar" (DFS con tres colores).
 
-    Busca ciclos (DFS con tres colores) en el grafo de "lo que se ejecuta en el mismo turno".
-    Mirar solo si hay un `wait` entre el destino y el origen de un salto hacia atras no basta:
-    otro salto hacia delante puede saltarse ese `wait`.
+    Devuelve, por cada arista de retroceso, los pasos del ciclo que cierra. Mirar solo si hay un
+    `wait` entre el destino y el origen de un salto hacia atras no basta: otro salto hacia
+    delante puede saltarse ese `wait`.
     """
     total = len(pasos)
     estado = [0] * (total + 1)  # 0 sin visitar, 1 en la pila, 2 cerrado
+    encontrados: list[list[int]] = []
 
-    def visitar(inicio: int) -> int | None:
-        pila = [(inicio, iter(sorted(_siguientes(inicio, pasos[inicio - 1]))))]
+    def hijos_de(nodo: int) -> Iterator[int]:
+        return iter(sorted(_siguientes(nodo, pasos[nodo - 1], espera_minima)))
+
+    for inicio in range(1, total + 1):
+        if estado[inicio] != 0:
+            continue
+        pila = [(inicio, hijos_de(inicio))]
         estado[inicio] = 1
         while pila:
             nodo, hijos = pila[-1]
@@ -408,17 +429,29 @@ def _paso_en_bucle_sin_espera(
                 estado[nodo] = 2
                 pila.pop()
             elif estado[hijo] == 1:
-                return hijo
+                en_pila = [n for n, _ in pila]
+                encontrados.append(en_pila[en_pila.index(hijo) :])
             elif estado[hijo] == 0:
                 estado[hijo] = 1
-                pila.append((hijo, iter(sorted(_siguientes(hijo, pasos[hijo - 1])))))
-        return None
+                pila.append((hijo, hijos_de(hijo)))
+    return encontrados
 
-    for posicion in range(1, total + 1):
-        if estado[posicion] == 0:
-            encontrado = visitar(posicion)
-            if encontrado is not None:
-                return encontrado
+
+def _paso_en_bucle_sin_espera(
+    pasos: list[MessageStep | WaitStep | ConditionStep | TaskStep],
+) -> int | None:
+    """Un paso que forma parte de un ciclo sin ningun `wait`, o `None` si no hay ninguno."""
+    ciclos = _ciclos(pasos)
+    return ciclos[0][0] if ciclos else None
+
+
+def _paso_en_bucle_con_espera_corta(
+    pasos: list[MessageStep | WaitStep | ConditionStep | TaskStep],
+) -> int | None:
+    """Un paso de un ciclo que envia o crea tareas sin esperar `MIN_ESPERA_EN_BUCLE`, o `None`."""
+    for ciclo in _ciclos(pasos, MIN_ESPERA_EN_BUCLE):
+        if any(isinstance(pasos[n - 1], MessageStep | TaskStep) for n in ciclo):
+            return ciclo[0]
     return None
 
 
@@ -430,6 +463,8 @@ def validar_grafo(pasos: list[MessageStep | WaitStep | ConditionStep | TaskStep]
     por un `wait`**: un bucle sin espera enviaria mensajes sin parar o giraria sin fin. Se mira
     el grafo entero, no solo el tramo entre un salto y su destino (un `goto` hacia delante puede
     saltarse la espera de ese tramo).
+    Ademas, un ciclo que envia un mensaje o crea una tarea debe esperar al menos
+    `MIN_ESPERA_EN_BUCLE` en cada vuelta.
 
     Args:
         pasos: Pasos en orden (posicion = indice + 1).
@@ -449,3 +484,9 @@ def validar_grafo(pasos: list[MessageStep | WaitStep | ConditionStep | TaskStep]
     en_bucle = _paso_en_bucle_sin_espera(pasos)
     if en_bucle is not None:
         raise ValueError(f"El paso {en_bucle} esta en un bucle sin 'wait'")
+    con_espera_corta = _paso_en_bucle_con_espera_corta(pasos)
+    if con_espera_corta is not None:
+        raise ValueError(
+            f"El paso {con_espera_corta} esta en un bucle que escribe al lead sin esperar al "
+            f"menos {MIN_ESPERA_EN_BUCLE.days} dia entre vuelta y vuelta"
+        )
