@@ -282,6 +282,7 @@ async def _inscrito(esc: Escenario, lead_id: uuid.UUID) -> uuid.UUID:
 
 
 async def _estado_inscripcion(esc: Escenario, inscripcion_id: uuid.UUID) -> tuple[str, str | None]:
+    """Estado y motivo de salida de una inscripcion, leidos de la base."""
     async with tenant_session(esc.client_id) as s:
         fila = (
             await s.execute(

@@ -747,10 +747,10 @@ class TestPausa:
         assert (ins.status, ins.next_step_at) == (modelo.ENROLLMENT_PAUSED, None)
         with pytest.raises(SecuenciaError):
             pausar(ins)
-        reanudar(ins, ahora=AHORA)
+        reanudar(ins, ahora=AHORA, ventana=None)
         assert (ins.status, ins.next_step_at) == (modelo.ENROLLMENT_ACTIVE, AHORA)
         with pytest.raises(SecuenciaError):
-            reanudar(ins, ahora=AHORA)
+            reanudar(ins, ahora=AHORA, ventana=None)
 
 
 # ─── Plantillas predefinidas y coherencia ───────────────────────────────────────────────────
@@ -817,3 +817,64 @@ def test_tipos_de_paso_del_schema_iguales_que_el_modelo() -> None:
         cls.model_fields["type"].default for cls in (MessageStep, WaitStep, ConditionStep, TaskStep)
     }
     assert tipos == set(modelo.STEP_TYPES)
+
+
+# ─── Correcciones de la segunda revision ────────────────────────────────────────────────────
+
+
+class TestCorreccionesSegundaRevision:
+    def test_un_bucle_que_escribe_necesita_esperar_al_menos_un_dia(self) -> None:
+        def bucle(espera: WaitStep) -> list[Any]:
+            return [
+                MessageStep(body="Hola"),
+                espera,
+                ConditionStep(check="no_reply", if_true=Branch(action="goto", goto_position=1)),
+            ]
+
+        with pytest.raises(ValueError, match="al menos 1 dia"):
+            validar_grafo(bucle(WaitStep(amount=1, unit="minutes", business_hours_only=False)))
+        with pytest.raises(ValueError, match="al menos 1 dia"):
+            validar_grafo(bucle(WaitStep(amount=23, unit="hours")))
+        validar_grafo(bucle(WaitStep(amount=1, unit="days")))
+        # Una espera corta fuera de un bucle sigue permitida.
+        validar_grafo([MessageStep(body="Hola"), WaitStep(amount=5, unit="minutes")])
+
+    def test_un_bucle_corto_sin_mensajes_ni_tareas_esta_permitido(self) -> None:
+        validar_grafo(
+            [
+                WaitStep(amount=1, unit="hours"),
+                ConditionStep(
+                    check="replied",
+                    if_true=Branch(action="continue"),
+                    if_false=Branch(action="goto", goto_position=1),
+                ),
+                TaskStep(title="Llamar"),
+            ]
+        )
+
+    def test_quien_se_dio_de_baja_no_recibe_nada_de_ninguna_secuencia(self) -> None:
+        decision = decidir(
+            pasos=[MessageStep(body="Hola")],
+            current_step=1,
+            steps_executed=0,
+            lead=LeadSnapshot(channels=frozenset({"email"}), opted_out=True),
+            channel_priority=["email"],
+        )
+        assert decision.action == Exit(modelo.EXIT_UNSUBSCRIBED)
+
+    def test_las_plantillas_prefieren_el_email_y_no_dan_por_hecho_un_correo(self) -> None:
+        for clave in ("inbound_nurturing", "reengagement"):
+            assert PLANTILLAS[clave].channel_priority[0] == "email"
+        textos = [
+            p.body or ""
+            for plantilla in PLANTILLAS.values()
+            for p in plantilla.steps
+            if isinstance(p, MessageStep)
+        ]
+        assert not any("por correo" in t for t in textos)
+
+    def test_la_migracion_exige_next_step_at_en_las_activas(self) -> None:
+        ruta = Path(__file__).parents[2] / "migrations" / "versions" / "028_lead_sequences.py"
+        assert "ck_lead_enrollment_due" in ruta.read_text(encoding="utf-8")
+        nombres = {c.name for c in modelo.LeadSequenceEnrollment.__table__.constraints if c.name}
+        assert "ck_lead_enrollment_due" in nombres

@@ -719,3 +719,96 @@ class TestRecorrido:
             assert len(mias) == 2
             assert len(suyas) == 1
             assert {i.id for i in mias}.isdisjoint({i.id for i in suyas})
+
+
+# ─── Correcciones de la segunda revision ────────────────────────────────────────────────────
+
+
+class TestCorreccionesSegundaRevision:
+    async def test_una_baja_saca_de_todas_aunque_se_pida_una(self, tenant: uuid.UUID) -> None:
+        a, b = await _secuencia(tenant, nombre="A"), await _secuencia(tenant, nombre="B")
+        lead_id = await _lead(tenant)
+        await _inscribir(tenant, lead_id, a)
+        await _inscribir(tenant, lead_id, b)
+        async with tenant_session(tenant) as s:
+            cerradas = await salir_de_secuencias(
+                s, tenant, [lead_id], EXIT_UNSUBSCRIBED,
+                ahora=datetime.now(timezone.utc), sequence_id=a,
+            )  # fmt: skip
+        assert cerradas == 2
+
+    async def test_el_motor_no_escribe_a_quien_se_dio_de_baja_en_otra(
+        self, tenant: uuid.UUID
+    ) -> None:
+        """Aunque una inscripcion siga viva (p. ej. una carrera), su turno la saca."""
+        a, b = await _secuencia(tenant, nombre="A"), await _secuencia(tenant, nombre="B")
+        lead_id = await _lead(tenant)
+        await _inscribir(tenant, lead_id, a)
+        viva = await _inscribir(tenant, lead_id, b)
+        async with tenant_session(tenant) as s:
+            # Simula la carrera: la baja de A se escribe a mano, B queda activa.
+            await s.execute(
+                text(
+                    "UPDATE lead_sequence_enrollments SET status = 'exited', "
+                    "exit_reason = :m, completed_at = now(), next_step_at = NULL "
+                    "WHERE sequence_id = :a"
+                ),
+                {"m": EXIT_UNSUBSCRIBED, "a": str(a)},
+            )
+        async with tenant_session(tenant) as s:
+            foto = await snapshot_del_lead(
+                s, await _cargar(s, Lead, lead_id), desde=datetime.now(timezone.utc)
+            )
+            assert foto.opted_out
+            inscripcion = await _cargar(s, LeadSequenceEnrollment, viva)
+            decision = decidir(
+                pasos=await cargar_pasos(s, tenant, b),
+                current_step=inscripcion.current_step,
+                steps_executed=inscripcion.steps_executed,
+                lead=foto,
+                channel_priority=["whatsapp"],
+            )
+        assert decision.action == Exit(EXIT_UNSUBSCRIBED)
+
+    async def test_la_supresion_no_espera_a_un_worker_que_tiene_la_fila(
+        self, tenant: uuid.UUID
+    ) -> None:
+        secuencia_id, lead_id = await _secuencia(tenant), await _lead(tenant)
+        await _inscribir(tenant, lead_id, secuencia_id)
+        ahora = datetime.now(timezone.utc) + timedelta(seconds=1)
+        async with tenant_session(tenant) as worker:
+            assert len(await inscripciones_pendientes(worker, tenant, ahora)) == 1
+            async with tenant_session(tenant) as rgpd:
+                cerradas = await salir_de_secuencias(
+                    rgpd, tenant, [lead_id], "gdpr", ahora=ahora, saltar_bloqueadas=True
+                )
+            assert cerradas == 0  # la saca el motor en su turno (lead anonimizado)
+
+    async def test_una_activa_sin_next_step_at_la_rechaza_la_base(self, tenant: uuid.UUID) -> None:
+        secuencia_id, lead_id = await _secuencia(tenant), await _lead(tenant)
+        inscripcion_id = await _inscribir(tenant, lead_id, secuencia_id)
+        async with tenant_session(tenant) as s:
+            with pytest.raises(IntegrityError):
+                await s.execute(
+                    text("UPDATE lead_sequence_enrollments SET next_step_at = NULL WHERE id = :i"),
+                    {"i": str(inscripcion_id)},
+                )
+
+    async def test_un_disparador_no_inscribe_a_quien_se_dio_de_baja(
+        self, tenant: uuid.UUID
+    ) -> None:
+        a = await _secuencia(tenant, nombre="A")
+        await _secuencia(
+            tenant, nombre="Auto", trigger_conditions=TriggerConditions(events=["lead_created"])
+        )
+        lead_id = await _lead(tenant)
+        await _inscribir(tenant, lead_id, a)
+        async with tenant_session(tenant) as s:
+            await salir_de_secuencias(
+                s, tenant, [lead_id], EXIT_UNSUBSCRIBED, ahora=datetime.now(timezone.utc)
+            )
+        async with tenant_session(tenant) as s:
+            nuevas = await inscribir_por_evento(
+                s, await _cargar(s, Lead, lead_id), "lead_created", ahora=datetime.now(timezone.utc)
+            )
+        assert nuevas == []
