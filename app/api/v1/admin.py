@@ -62,10 +62,12 @@ from app.models.tag import Tag
 from app.models.user import User
 from app.schemas.csat import CsatSummaryResponse
 from app.schemas.user import UserCreate, UserListResponse, UserResponse, UserUpdate
+from app.services.deals import deals_para_export
 from app.services.lead_privacy import lead_a_dict, lead_esta_anonimizado
 from app.services.lead_score_service import scores_para_export
 from app.services.lead_sequences import inscripciones_para_export
 from app.services.lead_suppression import suprimir_leads
+from app.services.scheduled_calls import llamadas_para_export
 
 logger = logging.getLogger(__name__)
 
@@ -227,9 +229,10 @@ async def export_contact_data(
             .all()
         )
         scores = await scores_para_export(session, client_id, [lead.id for lead in leads])
-        secuencias = await inscripciones_para_export(
-            session, client_id, [lead.id for lead in leads]
-        )
+        ids_leads = [lead.id for lead in leads]
+        secuencias = await inscripciones_para_export(session, client_id, ids_leads)
+        deals = await deals_para_export(session, client_id, ids_leads)
+        llamadas = await llamadas_para_export(session, client_id, ids_leads)
 
         return {
             "export_date": datetime.now(timezone.utc).isoformat(),
@@ -263,6 +266,9 @@ async def export_contact_data(
                     **lead_a_dict(lead),
                     "score_history": scores[lead.id],
                     "sequence_enrollments": secuencias[lead.id],
+                    # Sprint 19: deals y llamadas agendadas (notas y motivos son texto libre).
+                    "deals": deals[lead.id],
+                    "scheduled_calls": llamadas[lead.id],
                 }
                 for lead in leads
             ],
@@ -697,12 +703,16 @@ async def export_lead_data(
         lead = await _lead_o_404(session, lead_id, client_id)
         scores = await scores_para_export(session, client_id, [lead.id])
         secuencias = await inscripciones_para_export(session, client_id, [lead.id])
+        deals = await deals_para_export(session, client_id, [lead.id])
+        llamadas = await llamadas_para_export(session, client_id, [lead.id])
         return {
             "export_date": datetime.now(timezone.utc).isoformat(),
             "lead": {
                 **lead_a_dict(lead),
                 "score_history": scores[lead.id],
                 "sequence_enrollments": secuencias[lead.id],
+                "deals": deals[lead.id],
+                "scheduled_calls": llamadas[lead.id],
             },
         }
 

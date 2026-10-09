@@ -15,10 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.lead import Lead
 from app.models.lead_activity import ACTIVITY_ANONYMIZED
 from app.models.lead_sequence import EXIT_GDPR
+from app.services.deals import anonimizar_deals
 from app.services.lead_activity import registrar_actividad
 from app.services.lead_privacy import anonimizar_lead
 from app.services.lead_score_service import borrar_historial_scores
 from app.services.lead_sequences import salir_de_secuencias
+from app.services.scheduled_calls import suprimir_llamadas
 
 
 async def suprimir_leads(
@@ -30,7 +32,8 @@ async def suprimir_leads(
     via: str,
     ahora: datetime,
 ) -> None:
-    """Anonimiza los leads, borra su historial de scores y los saca de sus secuencias.
+    """Anonimiza los leads, borra su historial de scores, los saca de sus secuencias, cancela
+    sus llamadas futuras y quita el texto libre de sus deals y llamadas.
 
     No hace `commit`: todo va en la transaccion del endpoint.
 
@@ -67,3 +70,7 @@ async def suprimir_leads(
         user_id=user_id,
         saltar_bloqueadas=True,
     )
+    # Sprint 19: a quien pidio la supresion no se le llama, y el texto libre de sus deals y
+    # llamadas (titulo, notas, motivo de perdida) puede identificarle.
+    await suprimir_llamadas(session, client_id, ids, ahora=ahora)
+    await anonimizar_deals(session, client_id, ids)
