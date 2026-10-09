@@ -41,6 +41,7 @@ from app.services.enrichment.base import EnrichmentProvider, PersonQuery
 from app.services.enrichment.engine import enriquecer_lead
 from app.services.lead_activity import registrar_actividad
 from app.services.lead_behavioral import recolectar_senales
+from app.services.lead_privacy import anonimizar_lead
 from app.services.lead_score_service import (
     aplicar_score,
     borrar_historial_scores,
@@ -407,3 +408,71 @@ async def test_export_y_borrado_del_historial(tenant: uuid.UUID) -> None:
         assert len(await historial_scores(s, tenant, otro_id)) == 1
         # El valor vigente se conserva (estadisticas), como la etapa.
         assert (await _cargar(s, tenant, lead_id)).fit_score > 0
+
+
+# ─── Correcciones de la revision ─────────────────────────────────────────────────────────────
+
+
+class TestCorreccionesRevision:
+    @pytest.mark.parametrize("suprimir", ["borrado", "anonimizado"])
+    async def test_un_lead_suprimido_no_vuelve_a_tener_historial(
+        self, tenant: uuid.UUID, suprimir: str
+    ) -> None:
+        """Tras el borrado RGPD, ningun recalculo puede volver a perfilar al lead."""
+        lead_id = await _lead(tenant, first_name="Ana", email="ana@acme.com", industry="Software")
+        async with tenant_session(tenant) as s:
+            lead = await _cargar(s, tenant, lead_id)
+            if suprimir == "borrado":
+                lead.deleted_at = AHORA
+            else:
+                anonimizar_lead(lead)
+            pesos = {"fit": 40, "behavioral": 30, "ai": 30}
+            assert await recalcular_fit(s, lead, trigger=TRIGGER_RECALC) is None
+            assert await recalcular_behavioral(s, lead, trigger=TRIGGER_RECALC, ahora=AHORA) is None
+            assert (
+                aplicar_score(
+                    s, lead, SCORE_FIT, ScoreResult(score=90), trigger=TRIGGER_RECALC, pesos=pesos
+                )
+                is None
+            )
+        async with tenant_session(tenant) as s:
+            assert await historial_scores(s, tenant, lead_id) == []
+
+    async def test_un_lead_recien_insertado_se_puntua_sin_carga_perezosa(
+        self, tenant: uuid.UUID
+    ) -> None:
+        """Los `server_default` sin cargar tras el flush no rompen el recalculo en async."""
+        async with tenant_session(tenant) as s:
+            lead = Lead(client_id=tenant, first_name="Ana", industry="Software")
+            s.add(lead)
+            await s.flush()
+            fila = await recalcular_fit(s, lead, trigger=TRIGGER_RECALC)
+            assert fila is not None
+            assert fila.previous_score == 0
+            lead_id = lead.id
+        async with tenant_session(tenant) as s:
+            assert (await _cargar(s, tenant, lead_id)).fit_score == fila.score
+
+    async def test_un_score_sin_valor_previo_se_guarda_como_none(self) -> None:
+        lead = Lead(id=uuid.uuid4(), client_id=uuid.uuid4(), first_name="Ana")
+        fila = aplicar_score(
+            _SesionQueRecoge(),  # type: ignore[arg-type]
+            lead,
+            SCORE_FIT,
+            ScoreResult(score=60),
+            trigger=TRIGGER_RECALC,
+            pesos={"fit": 40, "behavioral": 30, "ai": 30},
+        )
+        assert fila is not None
+        assert fila.previous_score is None
+        assert lead.total_score == 24
+
+
+class _SesionQueRecoge:
+    """Sesion minima para `aplicar_score()`: solo recoge lo que se anade."""
+
+    def __init__(self) -> None:
+        self.anadidos: list[Any] = []
+
+    def add(self, objeto: Any) -> None:
+        self.anadidos.append(objeto)
