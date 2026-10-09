@@ -18,6 +18,7 @@ from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.contact_tag import ContactTag
 from app.models.conversation import Conversation
+from app.models.deal import Deal
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.models.internal_note import InternalNote
@@ -34,6 +35,7 @@ from app.models.pending_response import PendingResponse
 from app.models.quick_reply import QuickReply
 from app.models.sandbox import ConfigHistory, TenantSandbox
 from app.models.satisfaction_survey import SatisfactionSurvey
+from app.models.scheduled_call import ScheduledCall
 from app.models.service_type import Appointment, ServiceType
 from app.models.tag import Tag
 from app.models.tenant_template import InstantiationStatus, TemplateInstantiation, TenantTemplate
@@ -61,6 +63,7 @@ __all__ = [
     "ContactTag",
     "Conversation",
     "CupsCatalog",
+    "Deal",
     "Document",
     "DocumentChunk",
     "InstantiationStatus",
@@ -80,6 +83,7 @@ __all__ = [
     "PendingResponse",
     "QuickReply",
     "SatisfactionSurvey",
+    "ScheduledCall",
     "ServiceType",
     "Tag",
     "TemplateInstantiation",
