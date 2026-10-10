@@ -12,13 +12,15 @@ origen bloqueado para siempre.
 """
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from app.core.config import get_settings
 from app.core.exceptions import AppException
 from app.services.dedup import get_redis
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
     from fastapi import Request
 
 logger = logging.getLogger(__name__)
@@ -82,6 +84,48 @@ async def dentro_del_limite(key: str, limit: int, window_seconds: int) -> bool:
     except Exception:
         logger.exception("Redis no responde al limitar %s", key.split(":", 1)[0])
         return True
+
+
+async def contar_fallo(key: str, window_seconds: int) -> None:
+    """Anota un fallo (p. ej. una contrasena erronea). Falla abierto.
+
+    Args:
+        key: Identificador del recurso y del origen.
+        window_seconds: Duracion de la ventana.
+    """
+    try:
+        await _contar(key, window_seconds)
+    except Exception:
+        logger.exception("Redis no responde al contar %s", key.split(":", 1)[0])
+
+
+async def fallos(key: str) -> int:
+    """Fallos anotados en la ventana actual. Falla abierto (0 si Redis no responde).
+
+    Args:
+        key: Identificador del recurso y del origen.
+
+    Returns:
+        El numero de fallos.
+    """
+    try:
+        valor = await cast("Awaitable[str | None]", get_redis().get(f"ratelimit:{key}"))
+    except Exception:
+        logger.exception("Redis no responde al leer %s", key.split(":", 1)[0])
+        return 0
+    return int(valor) if valor and valor.isdigit() else 0
+
+
+async def olvidar(key: str) -> None:
+    """Borra un contador (p. ej. los fallos de un email tras un login correcto).
+
+    Args:
+        key: Identificador del recurso y del origen.
+    """
+    try:
+        await cast("Awaitable[int]", get_redis().delete(f"ratelimit:{key}"))
+    except Exception:
+        logger.exception("Redis no responde al borrar %s", key.split(":", 1)[0])
 
 
 async def hit(key: str, limit: int, window_seconds: int) -> None:

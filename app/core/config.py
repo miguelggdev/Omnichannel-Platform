@@ -7,7 +7,7 @@ DATABASE_URL_DIRECT es SOLO para migraciones Alembic (conexión directa, puerto 
 
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -221,6 +221,13 @@ class Settings(BaseSettings):
     # Longitud maxima del texto de un mensaje que entra al grafo de IA.
     AI_MAX_INPUT_CHARS: int = 4000
     EMAIL_VERIFICATION_TTL_HOURS: int = 24
+    # Login y refresh (OWASP API4/ASVS 2.2): intentos por IP y minuto, y fallos por email en la
+    # ventana antes de bloquear ese email. Fallan abierto si Redis no responde: dejar a todos
+    # sin entrar por una caida de Redis es peor que unos minutos sin freno.
+    LOGIN_MAX_PER_IP_PER_MINUTE: int = 20
+    LOGIN_MAX_FAILURES_PER_EMAIL: int = 10
+    LOGIN_FAILURE_WINDOW_SECONDS: int = 900
+    REFRESH_MAX_PER_IP_PER_MINUTE: int = 60
 
     # Captura publica de leads (`POST /capture/{token}`, Sprint 16): limites por minuto.
     # El de IP corta antes de tocar la base, incluso con tokens que no existen.
@@ -326,6 +333,31 @@ class Settings(BaseSettings):
         if len(v) < 32:
             raise ValueError("ENCRYPTION_KEY debe tener al menos 32 caracteres")
         return v
+
+    @model_validator(mode="after")
+    def produccion_sin_valores_de_ejemplo(self) -> "Settings":
+        """En produccion, rechaza secretos de ejemplo y CORS abierto con credenciales.
+
+        Los validadores de longitud aceptan `your_encryption_key_min_32_chars_here` del
+        `.env.example`: un despliegue que olvide cambiarlo firmaria JWT con un secreto publico.
+
+        Returns:
+            La propia configuracion.
+
+        Raises:
+            ValueError: Si `APP_ENV=production` y un secreto parece de ejemplo, o
+                `CORS_ORIGINS` admite cualquier origen.
+        """
+        if self.APP_ENV != "production":
+            return self
+        marcas = ("your_", "your-", "changeme", "change-me", "placeholder", "example", "test-")
+        for nombre in ("JWT_SECRET", "ENCRYPTION_KEY"):
+            valor = str(getattr(self, nombre)).lower()
+            if any(marca in valor for marca in marcas):
+                raise ValueError(f"{nombre} tiene un valor de ejemplo; genera uno aleatorio")
+        if "*" in self.CORS_ORIGINS:
+            raise ValueError("CORS_ORIGINS no puede ser '*' en produccion (van credenciales)")
+        return self
 
     @field_validator("DATABASE_URL")
     @classmethod

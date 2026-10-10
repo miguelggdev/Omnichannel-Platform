@@ -20,17 +20,27 @@ con la RLS aplicándose con normalidad.
 """
 
 import asyncio
+import hashlib
 import logging
 import secrets
 from datetime import datetime, timezone
 from functools import lru_cache
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from sqlalchemy import text
 
+from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal, tenant_session
 from app.core.exceptions import FORBIDDEN, INVALID_TOKEN, AppException
+from app.core.rate_limit import (
+    RATE_LIMITED,
+    client_ip,
+    contar_fallo,
+    dentro_del_limite,
+    fallos,
+    olvidar,
+)
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -96,8 +106,47 @@ def _verificar_password(password: str, hash_guardado: str | None) -> bool:
     return verify_password(password, hash_guardado)
 
 
+def _demasiados_intentos() -> AppException:
+    """429 comun a login y refresh (no dice si el email existe)."""
+    return AppException(
+        status_code=429,
+        error_code=RATE_LIMITED,
+        message="Demasiados intentos. Espera un rato e intentalo de nuevo",
+    )
+
+
+def _clave_de_fallos(email: str) -> str:
+    """Clave de Redis de los fallos de un email, sin guardar el email en claro."""
+    return "login-fallos:" + hashlib.sha256(email.strip().lower().encode()).hexdigest()[:32]
+
+
+async def _frenar_login(request: Request, email: str) -> str:
+    """Limita los intentos de login por IP y los fallos por email (fuerza bruta).
+
+    Args:
+        request: Peticion, para la IP.
+        email: Email que se intenta.
+
+    Returns:
+        La clave de fallos del email, para anotar el resultado.
+
+    Raises:
+        AppException: 429 si la IP o el email superaron su limite.
+    """
+    ajustes = get_settings()
+    ip = client_ip(request)
+    if not await dentro_del_limite(f"login-ip:{ip}", ajustes.LOGIN_MAX_PER_IP_PER_MINUTE, 60):
+        logger.warning("Login: limite por IP superado (%s)", ip)
+        raise _demasiados_intentos()
+    clave = _clave_de_fallos(email)
+    if await fallos(clave) >= ajustes.LOGIN_MAX_FAILURES_PER_EMAIL:
+        logger.warning("Login: email bloqueado por fallos (%s, ip=%s)", clave[-8:], ip)
+        raise _demasiados_intentos()
+    return clave
+
+
 @router.post("/login", response_model=TokenResponse)
-async def login(credentials: LoginRequest) -> TokenResponse:
+async def login(credentials: LoginRequest, request: Request) -> TokenResponse:
     """Autenticar usuario con email y password.
 
     1. Busca al usuario por email vía `auth_lookup_user()` (ver el docstring del
@@ -107,16 +156,20 @@ async def login(credentials: LoginRequest) -> TokenResponse:
     4. Genera access_token y refresh_token.
     5. Actualiza `last_login_at`, ya dentro del contexto del tenant.
 
+    Antes de nada se limita por IP y por fallos del email (`_frenar_login`).
+
     Args:
         credentials: Email y password del usuario.
+        request: Peticion, para la IP del limite.
 
     Returns:
         TokenResponse con access_token, refresh_token y token_type.
 
     Raises:
         AppException: 401 si las credenciales son inválidas o si el usuario o su
-            organización están desactivados.
+            organización están desactivados; 429 si se superó un límite.
     """
+    clave_fallos = await _frenar_login(request, credentials.email)
     async with AsyncSessionLocal() as session, session.begin():
         user = (await session.execute(_AUTH_LOOKUP, {"email": credentials.email})).one_or_none()
 
@@ -125,6 +178,8 @@ async def login(credentials: LoginRequest) -> TokenResponse:
         _verificar_password, credentials.password, None if user is None else user.password_hash
     )
     if user is None or not password_ok:
+        await contar_fallo(clave_fallos, get_settings().LOGIN_FAILURE_WINDOW_SECONDS)
+        logger.warning("Login fallido (%s, ip=%s)", clave_fallos[-8:], client_ip(request))
         raise AppException(
             status_code=401,
             error_code=INVALID_TOKEN,
@@ -158,6 +213,7 @@ async def login(credentials: LoginRequest) -> TokenResponse:
     # camino normal: con RLS aplicada y firmada por el propio usuario, que es lo
     # que el trigger de auditoría registrará el día que `users` lleve uno.
     await _registrar_ultimo_acceso(user.client_id, user.id)
+    await olvidar(clave_fallos)
 
     logger.info(
         "Login exitoso: user=%s client=%s role=%s",
@@ -193,7 +249,7 @@ async def _registrar_ultimo_acceso(client_id: UUID, user_id: UUID) -> None:
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(refresh: RefreshRequest) -> TokenResponse:
+async def refresh_token(refresh: RefreshRequest, request: Request) -> TokenResponse:
     """Renovar access_token usando un refresh_token válido.
 
     1. Decodifica el refresh_token.
@@ -207,6 +263,7 @@ async def refresh_token(refresh: RefreshRequest) -> TokenResponse:
 
     Args:
         refresh: Refresh token JWT.
+        request: Peticion, para la IP del limite.
 
     Returns:
         TokenResponse con nuevo access_token y el mismo refresh_token.
@@ -215,6 +272,10 @@ async def refresh_token(refresh: RefreshRequest) -> TokenResponse:
         AppException: 401 si el refresh_token es inválido, no es tipo refresh,
             el usuario ya no existe, o el usuario o su tenant están inactivos.
     """
+    if not await dentro_del_limite(
+        f"refresh-ip:{client_ip(request)}", get_settings().REFRESH_MAX_PER_IP_PER_MINUTE, 60
+    ):
+        raise _demasiados_intentos()
     payload = decode_jwt(refresh.refresh_token)
 
     if payload.get("type") != "refresh":
