@@ -24,6 +24,7 @@ from app.core.database import tenant_session
 from app.core.dependencies import require_role
 from app.core.events import EVENT_CONTACT_CREATED, EVENT_CONTACT_UPDATED, EventEmitter
 from app.core.exceptions import NOT_FOUND, VALIDATION_ERROR, AppException
+from app.core.like import ESCAPE, patron_contiene
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.contact_tag import ContactTag
@@ -93,7 +94,9 @@ async def get_contact_or_404(session: AsyncSession, contact_id: UUID, client_id:
 
 @router.get("", response_model=ContactListResponse)
 async def list_contacts(
-    search: str | None = Query(default=None, description="Busca en nombre, apellido y display"),
+    search: str | None = Query(
+        default=None, max_length=100, description="Busca en nombre, apellido y display"
+    ),
     tag_id: UUID | None = Query(default=None, description="Solo contactos con esta etiqueta"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -124,12 +127,12 @@ async def list_contacts(
         ]
 
         if search:
-            patron = f"%{search}%"
+            patron = patron_contiene(search)
             filtros.append(
                 or_(
-                    Contact.first_name.ilike(patron),
-                    Contact.last_name.ilike(patron),
-                    Contact.display_name.ilike(patron),
+                    Contact.first_name.ilike(patron, escape=ESCAPE),
+                    Contact.last_name.ilike(patron, escape=ESCAPE),
+                    Contact.display_name.ilike(patron, escape=ESCAPE),
                 )
             )
 
