@@ -147,7 +147,9 @@ services:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`api.localhost`)"
+      # Sin /internal (metricas, health detallado): Prometheus y el healthcheck van por la red
+      # interna, y desde fuera no se debe ver el estado ni las metricas por tenant (ADR-088).
+      - "traefik.http.routers.api.rule=Host(`api.localhost`) && !PathPrefix(`/internal`)"
       - "traefik.http.routers.api.entrypoints=websecure"
       - "traefik.http.routers.api.tls=true"
       - "traefik.http.routers.api.middlewares=rate-limit@file,security-headers@file,compress@file"
