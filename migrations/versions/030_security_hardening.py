@@ -65,10 +65,14 @@ def upgrade() -> None:
                     END IF;
                 END $$
             """)  # noqa: S608
+        # Sin el rol, solo el dueno puede ejecutarlas: si la app conecta con otro rol, el login
+        # deja de funcionar. Se avisa en vez de fallar (conectar como el dueno sigue valiendo).
         op.execute(f"""
             DO $$ BEGIN
                 IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{rol_app}') THEN
                     EXECUTE 'GRANT EXECUTE ON FUNCTION {funcion} TO {rol_app}';
+                ELSE
+                    RAISE WARNING 'El rol {rol_app} no existe: nadie salvo el dueno puede ejecutar {funcion}. Crea el rol y repite el GRANT EXECUTE (ADR-088).';
                 END IF;
             END $$
         """)  # noqa: S608

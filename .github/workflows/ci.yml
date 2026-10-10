@@ -144,6 +144,15 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio httpx
 
+      - name: Crear rol de aplicacion antes de migrar
+        # Antes de `alembic upgrade`: la migracion 030 (ADR-088) quita EXECUTE a
+        # PUBLIC en las funciones SECURITY DEFINER y se lo da a `app_user`. Si el
+        # rol no existe todavia, nadie se lo da y el login falla.
+        run: |
+          PGPASSWORD=test_password psql -h localhost -U test_user -d test_omnichannel -v ON_ERROR_STOP=1 <<'SQL'
+            CREATE ROLE app_user LOGIN PASSWORD 'app_password' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
+          SQL
+
       - name: Initialize database schema
         # BUG-005: la suite de integracion (incluida RLS) debe correr contra el
         # schema real de Alembic, no contra supabase/init/init.sql — ese script
@@ -163,16 +172,15 @@ jobs:
           DATABASE_URL: "postgresql+asyncpg://test_user:test_password@localhost:5432/test_omnichannel"
           ENCRYPTION_KEY: "test-encryption-key-minimum-32-characters!!"
 
-      - name: Crear rol de aplicacion que no saltee RLS
+      - name: Permisos del rol de aplicacion que no saltee RLS
         # POSTGRES_USER del contenedor (test_user) se crea como SUPERUSER, y
         # PostgreSQL ignora las politicas RLS para superusuarios incluso con FORCE.
         # Corriendo la suite como test_user, todo test de aislamiento pasaba en
         # vacio. Las migraciones siguen corriendo como test_user (es el dueno de
         # las tablas); los tests se conectan como app_user, que si esta sujeto a
-        # las politicas.
+        # las politicas. El rol se crea antes de migrar (paso anterior al schema).
         run: |
           PGPASSWORD=test_password psql -h localhost -U test_user -d test_omnichannel -v ON_ERROR_STOP=1 <<'SQL'
-            CREATE ROLE app_user LOGIN PASSWORD 'app_password' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE;
             GRANT USAGE ON SCHEMA public TO app_user;
             GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
             GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;
