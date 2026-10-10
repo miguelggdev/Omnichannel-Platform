@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, cast
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.internal.health import router as health_router
@@ -56,6 +57,7 @@ from app.core.exceptions import (
     AppException,
     app_exception_handler,
     unhandled_exception_handler,
+    validation_exception_handler,
 )
 from app.core.logging import setup_logging
 from app.core.telemetry import instrument_fastapi, setup_telemetry, shutdown_telemetry
@@ -140,13 +142,15 @@ def create_app() -> FastAPI:
     Returns:
         Instancia configurada de FastAPI.
     """
+    # En produccion no se publica el mapa de la API (OWASP API9): Swagger, ReDoc y el esquema.
+    docs = get_settings().APP_ENV != "production"
     app = FastAPI(
         title="Omnichannel Conversational AI",
         description="Plataforma SaaS omnicanal multi-tenant de IA conversacional",
         version="1.0.0",
-        docs_url="/api/docs",
-        redoc_url="/api/redoc",
-        openapi_url="/api/openapi.json",
+        docs_url="/api/docs" if docs else None,
+        redoc_url="/api/redoc" if docs else None,
+        openapi_url="/api/openapi.json" if docs else None,
         lifespan=lifespan,
         # FastAPI >= 0.142 trae telemetria propia; la instrumentacion del proyecto
         # es `instrument_fastapi()` (una traza por request, sin /health ni
@@ -182,6 +186,10 @@ def create_app() -> FastAPI:
     # ── Exception handlers ──
     app.add_exception_handler(AppException, app_exception_handler)  # type: ignore[arg-type]
     app.add_exception_handler(Exception, unhandled_exception_handler)
+    app.add_exception_handler(
+        RequestValidationError,
+        validation_exception_handler,  # type: ignore[arg-type]
+    )
 
     # ── Routers ──
     app.include_router(health_router, prefix="/internal", tags=["internal"])
