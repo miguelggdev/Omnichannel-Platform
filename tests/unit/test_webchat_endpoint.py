@@ -532,6 +532,37 @@ class TestLimites:
         assert respuestas[2]["code"] == "rate_limited"
         assert len(entorno.encolados) == 2
 
+    def test_reconectar_sin_sesion_no_reinicia_el_limite_de_la_ip(
+        self, cliente: TestClient, entorno: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cada conexion sin sesion es un visitante nuevo; la IP es la misma."""
+        monkeypatch.setattr(get_settings(), "WEBCHAT_MAX_MESSAGES_PER_MINUTE", 100)
+        monkeypatch.setattr(get_settings(), "WEBCHAT_MAX_MESSAGES_PER_IP_PER_MINUTE", 2)
+        tipos = []
+        for i in range(3):
+            with _abrir(cliente) as ws:
+                _hello(ws)
+                ws.send_json({"type": "message", "message_id": f"m{i}", "text": "hola"})
+                tipos.append(ws.receive_json()["type"])
+
+        assert tipos == ["ack", "ack", "error"]
+        assert len(entorno.encolados) == 2
+
+    def test_las_sesiones_nuevas_por_ip_tienen_tope(
+        self, cliente: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(get_settings(), "WEBCHAT_MAX_SESSIONS_PER_IP_PER_HOUR", 1)
+        with _abrir(cliente) as ws:
+            _hello(ws)
+
+        def intento() -> None:
+            with _abrir(cliente) as ws:
+                ws.send_json({"type": "hello"})
+                assert ws.receive_json()["code"] == "rate_limited"
+                ws.receive_json()
+
+        assert _codigo(intento) == api.CLOSE_DEMASIADAS_CONEXIONES
+
     def test_el_contador_del_limite_siempre_tiene_caducidad(
         self, cliente: TestClient, entorno: SimpleNamespace
     ) -> None:

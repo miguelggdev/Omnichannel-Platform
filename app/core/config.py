@@ -102,6 +102,9 @@ class Settings(BaseSettings):
     WEBCHAT_MAX_FRAME_BYTES: int = 16 * 1024
     WEBCHAT_MAX_MESSAGES_PER_MINUTE: int = 20
     WEBCHAT_MAX_CONNECTIONS_PER_VISITOR: int = 5
+    # Por IP (ADR-088): sin sesion cada conexion es un visitante nuevo con su propio limite.
+    WEBCHAT_MAX_MESSAGES_PER_IP_PER_MINUTE: int = 60
+    WEBCHAT_MAX_SESSIONS_PER_IP_PER_HOUR: int = 30
     WEBCHAT_HELLO_TIMEOUT_SECONDS: float = 10.0
     # Sin ningun frame (el widget manda `ping` cada ~25 s) se cierra la conexion.
     WEBCHAT_IDLE_TIMEOUT_SECONDS: float = 120.0

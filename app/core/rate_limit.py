@@ -21,14 +21,14 @@ from app.services.dedup import get_redis
 if TYPE_CHECKING:
     from collections.abc import Awaitable
 
-    from fastapi import Request
+    from starlette.requests import HTTPConnection
 
 logger = logging.getLogger(__name__)
 
 RATE_LIMITED = "RATE_LIMITED"
 
 
-def client_ip(request: "Request") -> str:
+def client_ip(request: "HTTPConnection") -> str:
     """IP del cliente, segun los proxies de confianza que hay delante de la API.
 
     Con `TRUSTED_PROXY_HOPS = n`, la IP real es la n-esima empezando por la derecha de
@@ -36,7 +36,7 @@ def client_ip(request: "Request") -> str:
     escribio a la izquierda no cuenta. Con 0 se usa la direccion del socket.
 
     Args:
-        request: Peticion entrante.
+        request: Peticion o WebSocket entrante.
 
     Returns:
         La IP del cliente, o `unknown` si no se puede determinar.
