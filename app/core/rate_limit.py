@@ -1,20 +1,24 @@
-"""Limite de peticiones por IP para endpoints publicos (Redis, ventana fija).
+"""Limites de frecuencia en Redis con ventana fija.
 
-Solo lo usa el onboarding: es el unico endpoint que crea datos sin autenticar.
-Falla cerrado: si Redis no responde, el endpoint devuelve 503 en vez de quedarse
-sin limite, porque un registro sin freno es justo lo que este modulo evita.
+- `hit()`: para endpoints publicos (onboarding, captura de leads, login). Falla cerrado: si
+  Redis no responde devuelve 503 en vez de quedarse sin limite.
+- `dentro_del_limite()`: para el procesamiento interno (p. ej. mensajes que llegan a la IA
+  por contacto). No lanza; falla abierto, porque perder mensajes de clientes por una caida de
+  Redis es peor que no limitar unos minutos.
+
+El contador se crea con su TTL y se incrementa en una sola transaccion (`SET NX EX` + `INCR`):
+con `INCR` y despues `EXPIRE`, un fallo entre los dos dejaba la clave sin caducidad y el
+origen bloqueado para siempre.
 """
 
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from app.core.config import get_settings
 from app.core.exceptions import AppException
 from app.services.dedup import get_redis
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
-
     from fastapi import Request
 
 logger = logging.getLogger(__name__)
@@ -44,6 +48,42 @@ def client_ip(request: "Request") -> str:
     return request.client.host if request.client else "unknown"
 
 
+async def _contar(key: str, window_seconds: int) -> int:
+    """Suma uno al contador de la ventana y devuelve el total, de forma atomica.
+
+    Args:
+        key: Identificador del recurso y del origen.
+        window_seconds: Duracion de la ventana.
+
+    Returns:
+        Las peticiones contadas en la ventana actual, esta incluida.
+    """
+    clave = f"ratelimit:{key}"
+    async with get_redis().pipeline(transaction=True) as pipe:
+        pipe.set(clave, 0, ex=window_seconds, nx=True)
+        pipe.incr(clave)
+        _, cuenta = await pipe.execute()
+    return int(cuenta)
+
+
+async def dentro_del_limite(key: str, limit: int, window_seconds: int) -> bool:
+    """Cuenta un evento y dice si sigue dentro del limite. Falla abierto.
+
+    Args:
+        key: Identificador del recurso y del origen, p. ej. `ia-contacto:<client>:<contact>`.
+        limit: Eventos permitidos por ventana.
+        window_seconds: Duracion de la ventana.
+
+    Returns:
+        `False` si se supero el limite; `True` si no, o si Redis no responde.
+    """
+    try:
+        return await _contar(key, window_seconds) <= limit
+    except Exception:
+        logger.exception("Redis no responde al limitar %s", key.split(":", 1)[0])
+        return True
+
+
 async def hit(key: str, limit: int, window_seconds: int) -> None:
     """Cuenta una peticion y corta si se supera el limite de la ventana.
 
@@ -55,12 +95,8 @@ async def hit(key: str, limit: int, window_seconds: int) -> None:
     Raises:
         AppException: 429 si se supero el limite; 503 si Redis no responde.
     """
-    redis = get_redis()
-    clave = f"ratelimit:{key}"
     try:
-        cuenta = await cast("Awaitable[int]", redis.incr(clave))
-        if cuenta == 1:
-            await cast("Awaitable[bool]", redis.expire(clave, window_seconds))
+        cuenta = await _contar(key, window_seconds)
     except Exception as exc:
         logger.exception("Redis no responde al limitar %s", key.split(":", 1)[0])
         raise AppException(

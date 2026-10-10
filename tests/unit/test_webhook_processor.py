@@ -455,6 +455,56 @@ class TestProcessMessage:
 
         assert capturado["channel"] == "facebook"
 
+    async def test_contacto_que_supera_el_limite_no_llega_a_la_ia(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Por encima del limite por contacto el mensaje se guarda pero no se encola IA."""
+        client_id = uuid.uuid4()
+        monkeypatch.setattr(wp, "_resolve_client_id", lambda provider, channel: client_id)
+        session = FakeSession(results=[None, None])
+
+        class FakeTenantSession:
+            async def __aenter__(self) -> FakeSession:
+                return session
+
+            async def __aexit__(self, *exc: Any) -> None:
+                return None
+
+        monkeypatch.setattr(wp, "tenant_session", lambda _client_id: FakeTenantSession())
+
+        async def no(*args: Any, **kwargs: Any) -> bool:
+            return False
+
+        async def si(*args: Any, **kwargs: Any) -> bool:
+            return True
+
+        claves: list[str] = []
+
+        async def limite_superado(key: str, limit: int, window: int) -> bool:
+            claves.append(key)
+            return False
+
+        monkeypatch.setattr(wp, "is_duplicate_persisted", no)
+        monkeypatch.setattr(wp, "persist_dedup", si)
+        monkeypatch.setattr(wp, "dentro_del_limite", limite_superado)
+        encolado: list[Any] = []
+        monkeypatch.setattr(wp, "_enqueue_ai_processing", lambda **kw: encolado.append(kw))
+
+        message_data = {
+            "external_message_id": "wa.1",
+            "sender_identifier": "+573001112233",
+            "channel": "whatsapp",
+            "text": "hola",
+            "timestamp": "2026-09-09T20:00:00+00:00",
+            "raw_payload": {},
+        }
+        await wp._process_message("ycloud", "whatsapp", message_data)
+
+        assert encolado == []
+        assert len(claves) == 1
+        assert claves[0].startswith(f"ia-contacto:{client_id}:")
+        assert any(isinstance(obj, wp.Message) for obj in session.added)
+
 
 # ─── Eventos salientes (Sprint 11) ───────────────────────────────────────────
 

@@ -40,6 +40,7 @@ from app.core.events import (
     EventEmitter,
 )
 from app.core.metrics import record_message
+from app.core.rate_limit import dentro_del_limite
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
 from app.models.conversation import Conversation
@@ -511,6 +512,22 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
             "Conversacion %s en manos de un humano (status=%s); no se encola IA",
             conversation.id,
             conversation_status,
+        )
+        return
+
+    # Limite por contacto antes de gastar en transcripcion o IA: el mensaje ya esta guardado
+    # y lo ve un agente humano; solo se deja sin respuesta automatica.
+    settings = get_settings()
+    if not await dentro_del_limite(
+        f"ia-contacto:{client_id}:{contact.id}",
+        settings.AI_MAX_MESSAGES_PER_CONTACT,
+        settings.AI_CONTACT_WINDOW_SECONDS,
+    ):
+        logger.warning(
+            "Contacto %s supero %s mensajes en %ss; no se encola IA",
+            contact.id,
+            settings.AI_MAX_MESSAGES_PER_CONTACT,
+            settings.AI_CONTACT_WINDOW_SECONDS,
         )
         return
 
