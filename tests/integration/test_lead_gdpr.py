@@ -9,7 +9,7 @@ que ademas libera la deduplicacion) y que nada cruce tenants.
 
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -18,8 +18,11 @@ from sqlalchemy import select, text
 from app.core.database import tenant_session
 from app.models.lead import Lead
 from app.models.lead_score import LeadScore
+from app.schemas.deal import DealCreate, ScheduledCallCreate
 from app.schemas.lead_sequence import MessageStep, SequenceDefinition
+from app.services.deals import crear_deal
 from app.services.lead_sequences import crear_secuencia, inscribir
+from app.services.scheduled_calls import agendar
 from tests.integration.lead_helpers import crear_lead, fila_cruda, limpiar_leads
 from tests.integration.test_crm_api import Escenario, _cliente, dos_tenants, escenario  # noqa: F401
 
@@ -323,3 +326,34 @@ class TestSecuencias:
         async with _cliente(crm, "admin") as c:
             assert (await c.delete(f"{LEAD}/{lead}/gdpr-delete")).status_code == 200
         assert await _estado_inscripcion(crm, inscripcion) == ("exited", "gdpr")
+
+
+class TestDealsYLlamadas:
+    """Sprint 19: el export cuenta los deals y las llamadas; la supresion corta las llamadas."""
+
+    async def test_export_y_supresion_por_la_api(self, crm: Escenario) -> None:
+        lead_id = await _lead_completo(crm)
+        ahora = datetime.now(timezone.utc)
+        async with tenant_session(crm.client_id) as s:
+            lead = (await s.execute(select(Lead).where(Lead.id == lead_id))).scalar_one()
+            await crear_deal(
+                s, lead, DealCreate(lead_id=lead_id, title="Plan", notes="Pago a 30 dias"),
+                ahora=ahora,
+            )  # fmt: skip
+            await agendar(
+                s, lead,
+                ScheduledCallCreate(
+                    lead_id=lead_id, scheduled_at=ahora + timedelta(days=2),
+                    call_type="ai_voice", ai_voice_provider="falso",
+                ),
+                ahora=ahora,
+            )  # fmt: skip
+        async with _cliente(crm, "admin") as c:
+            r = await c.get(f"{CONTACTO}/{crm.contact_id}/export")
+            [exportado] = r.json()["leads"]
+            assert [d["notes"] for d in exportado["deals"]] == ["Pago a 30 dias"]
+            assert [ll["status"] for ll in exportado["scheduled_calls"]] == ["pending"]
+            assert (await c.delete(f"{CONTACTO}/{crm.contact_id}/gdpr-delete")).status_code == 200
+            r = await c.get(f"{LEAD}/{lead_id}/export")
+        assert [ll["status"] for ll in r.json()["lead"]["scheduled_calls"]] == ["cancelled"]
+        assert r.json()["lead"]["deals"][0]["notes"] is None
