@@ -17,6 +17,7 @@ estado sin persistir: como minimo, "processing" ya esta commiteado.
 import csv
 import io
 import logging
+import zipfile
 from typing import Any
 from uuid import UUID
 
@@ -55,6 +56,48 @@ class EmptyDocumentError(ValueError):
     """
 
 
+# Topes contra archivos hostiles (ADR-088). Un PDF de 50 MB puede tener cientos de miles de
+# paginas vacias, y un DOCX/XLSX es un zip: unos KB pueden descomprimir a gigas.
+MAX_PDF_PAGES = 1000
+MAX_ZIP_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
+MAX_ZIP_RATIO = 100
+MAX_ZIP_ENTRIES = 5000
+
+
+class DocumentRejectedError(ValueError):
+    """El archivo supera un tope de seguridad o no tiene el formato que dice.
+
+    Igual que `EmptyDocumentError`: no se reintenta (el mismo archivo da el mismo resultado) y
+    el documento queda `failed` con el motivo en `metadata.error`.
+    """
+
+
+def comprobar_zip(content: bytes) -> None:
+    """Rechaza un DOCX/XLSX que sea una bomba de descompresion.
+
+    Se miran los tamanos declarados en el directorio del zip: `zipfile` no entrega mas bytes
+    de los que declara cada entrada, asi que mentir en la cabecera no permite saltarselo.
+
+    Args:
+        content: Bytes del archivo.
+
+    Raises:
+        DocumentRejectedError: Si no es un zip valido, tiene demasiadas entradas, descomprime
+            a mas de `MAX_ZIP_UNCOMPRESSED_BYTES` o comprime mas de `MAX_ZIP_RATIO` veces.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archivo:
+            entradas = archivo.infolist()
+    except zipfile.BadZipFile as exc:
+        raise DocumentRejectedError("El archivo no es un documento de Office valido") from exc
+    if len(entradas) > MAX_ZIP_ENTRIES:
+        raise DocumentRejectedError("El archivo tiene demasiadas partes internas")
+    total = sum(e.file_size for e in entradas)
+    comprimido = max(1, sum(e.compress_size for e in entradas))
+    if total > MAX_ZIP_UNCOMPRESSED_BYTES or total / comprimido > MAX_ZIP_RATIO:
+        raise DocumentRejectedError("El archivo descomprime a un tamano no admitido")
+
+
 def extract_pdf_pages(content: bytes) -> list[dict[str, Any]]:
     """Extrae el texto nativo de cada pagina de un PDF (sin OCR).
 
@@ -65,6 +108,8 @@ def extract_pdf_pages(content: bytes) -> list[dict[str, Any]]:
         Una entrada `{"page_number": int, "text": str}` por pagina.
     """
     with pymupdf.open(stream=content, filetype="pdf") as documento:
+        if documento.page_count > MAX_PDF_PAGES:
+            raise DocumentRejectedError(f"El PDF tiene mas de {MAX_PDF_PAGES} paginas")
         return [
             {"page_number": i, "text": pagina.get_text()}
             for i, pagina in enumerate(documento, start=1)
@@ -80,6 +125,7 @@ def extract_docx_text(content: bytes) -> list[dict[str, Any]]:
     Returns:
         Una unica entrada con `page_number=None` (no aplica) y todo el texto.
     """
+    comprobar_zip(content)
     documento = DocxFile(io.BytesIO(content))
     texto = "\n".join(parrafo.text for parrafo in documento.paragraphs)
     return [{"page_number": None, "text": texto}]
@@ -109,6 +155,7 @@ def extract_xlsx_text(content: bytes) -> list[dict[str, Any]]:
     Returns:
         Una entrada por hoja, con su indice (1-based) como `page_number`.
     """
+    comprobar_zip(content)
     libro = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     try:
         paginas = []

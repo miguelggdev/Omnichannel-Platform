@@ -19,6 +19,11 @@ from PIL import Image, ImageFilter
 # DPI de rasterizado: 300 es el punto de equilibrio estandar para OCR (Tesseract
 # recomienda 300-400dpi); un PDF nace a 72dpi.
 _OCR_DPI = 300
+#: Paginas maximas que se pasan por OCR (a 300 dpi cada una es una imagen de ~25 MB en memoria).
+MAX_OCR_PAGES = 100
+# Bomba de descompresion en imagenes: PIL avisa por encima de su limite y solo falla al doble.
+# Con este valor falla antes (~ una pagina A3 a 600 dpi).
+Image.MAX_IMAGE_PIXELS = 60_000_000
 _PDF_DEFAULT_DPI = 72
 
 # Umbral de binarizacion fijo. Un umbral adaptativo por documento daria mejor
@@ -122,6 +127,13 @@ class OCRService:
         matrix = pymupdf.Matrix(zoom, zoom)
 
         with pymupdf.open(stream=pdf_content, filetype="pdf") as documento:
+            if documento.page_count > MAX_OCR_PAGES:
+                # Import perezoso: document_pipeline importa este modulo.
+                from app.services.document_pipeline import DocumentRejectedError
+
+                raise DocumentRejectedError(
+                    f"El PDF escaneado tiene mas de {MAX_OCR_PAGES} paginas"
+                )
             return [
                 Image.open(io.BytesIO(pagina.get_pixmap(matrix=matrix).tobytes("png")))
                 for pagina in documento
