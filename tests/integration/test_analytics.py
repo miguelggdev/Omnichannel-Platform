@@ -53,16 +53,25 @@ async def _sql(esc: Escenario, sql: str, **params: Any) -> None:
 
 
 async def _mensajes(esc: Escenario, conv: uuid.UUID, filas: list[tuple[str, str]]) -> None:
-    """Inserta `(direccion, desplazamiento)`; el desplazamiento es un intervalo ('-2 hours')."""
-    for direccion, delta in filas:
-        await _sql(
-            esc,
-            _MSG,
-            conv=str(conv),
-            dir=direccion,
-            snd="contact" if direccion == "inbound" else "bot",
-            delta=_d(delta),
-        )
+    """Inserta `(direccion, desplazamiento)`; el desplazamiento es un intervalo ('-2 hours').
+
+    Todas las filas van en una sola transaccion: `now()` es la hora de inicio de la
+    transaccion, asi que comparten la misma base y las diferencias son exactas. Con una
+    transaccion por fila, la latencia entre inserts se sumaba a los tiempos de respuesta
+    (en CI salio 20.1 s donde se esperaban 20.0).
+    """
+    async with tenant_session(esc.client_id) as s:
+        for direccion, delta in filas:
+            await s.execute(
+                text(_MSG),
+                {
+                    "cid": str(esc.client_id),
+                    "conv": str(conv),
+                    "dir": direccion,
+                    "snd": "contact" if direccion == "inbound" else "bot",
+                    "delta": _d(delta),
+                },
+            )
 
 
 async def _limpiar_presupuesto_y_encuestas(esc: Escenario) -> None:
