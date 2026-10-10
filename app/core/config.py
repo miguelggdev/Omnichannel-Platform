@@ -208,6 +208,18 @@ class Settings(BaseSettings):
     ONBOARDING_ENABLED: bool = False
     ONBOARDING_MAX_PER_IP_PER_HOUR: int = 5
     ONBOARDING_FREE_TOKEN_BUDGET: int = 50_000
+    # Presupuesto mensual de un tenant que nunca tuvo uno (ADR-088). Un mes nuevo hereda el
+    # presupuesto del anterior; solo sin historia se usa este. 0 = sin limite (no recomendado:
+    # sin fila, el consumo era ilimitado desde el segundo mes y cualquiera podia agotar la
+    # cuenta de OpenAI con mensajes).
+    TOKEN_BUDGET_DEFAULT_MONTHLY: int = 1_000_000
+    # Mensajes de un mismo contacto que pasan a la IA (o a transcripcion) por ventana. Por
+    # encima, el mensaje se guarda pero no se contesta: un bot o un atacante no puede quemar
+    # el presupuesto del tenant ni la cuenta de OpenAI desde un solo numero (OWASP LLM10).
+    AI_MAX_MESSAGES_PER_CONTACT: int = 20
+    AI_CONTACT_WINDOW_SECONDS: int = 600
+    # Longitud maxima del texto de un mensaje que entra al grafo de IA.
+    AI_MAX_INPUT_CHARS: int = 4000
     EMAIL_VERIFICATION_TTL_HOURS: int = 24
 
     # Captura publica de leads (`POST /capture/{token}`, Sprint 16): limites por minuto.
