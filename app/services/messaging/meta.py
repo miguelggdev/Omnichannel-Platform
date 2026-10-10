@@ -182,7 +182,9 @@ class MetaProvider(MessagingProvider):
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{self._base_url}/me/messages",
-                params={"access_token": channel_config["page_access_token"]},
+                # En la cabecera, no en la URL: la URL acaba en logs y en el texto de
+                # `HTTPStatusError` (raise_for_status) con el token dentro.
+                headers={"Authorization": f"Bearer {channel_config['page_access_token']}"},
                 json=message_payload,
                 timeout=30.0,
             )
@@ -229,7 +231,9 @@ class MetaProvider(MessagingProvider):
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{self._base_url}/me/messages",
-                params={"access_token": channel_config["page_access_token"]},
+                # En la cabecera, no en la URL: la URL acaba en logs y en el texto de
+                # `HTTPStatusError` (raise_for_status) con el token dentro.
+                headers={"Authorization": f"Bearer {channel_config['page_access_token']}"},
                 json=message_payload,
                 timeout=30.0,
             )

@@ -183,3 +183,36 @@ class TestTemplates:
             await _provider("instagram").send_template(
                 "6789000000000001", template, {"page_access_token": "token-de-prueba"}
             )
+
+
+class TestTokenFueraDeLaUrl:
+    """El token de pagina va en `Authorization`, no en `?access_token=` (ADR-088)."""
+
+    async def test_send_message_manda_el_token_en_la_cabecera(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import httpx
+
+        peticiones: list[httpx.Request] = []
+
+        def responder(request: httpx.Request) -> httpx.Response:
+            peticiones.append(request)
+            return httpx.Response(200, json={"message_id": "m.1"})
+
+        transporte = httpx.MockTransport(responder)
+        original = httpx.AsyncClient
+        monkeypatch.setattr(
+            meta.httpx,
+            "AsyncClient",
+            lambda *a, **kw: original(*a, transport=transporte, **kw),
+        )
+
+        mid = await _provider("facebook").send_message(
+            "6789000000000001",
+            base.MessageContent(text="hola"),
+            {"page_access_token": "token-secreto"},
+        )
+
+        assert mid == "m.1"
+        assert "token-secreto" not in str(peticiones[0].url)
+        assert peticiones[0].headers["authorization"] == "Bearer token-secreto"
