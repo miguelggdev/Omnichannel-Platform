@@ -23,7 +23,7 @@ import secrets
 from dataclasses import dataclass, field
 
 #: Caracteres de control salvo salto de linea y tabulador.
-_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f​-‏‪-‮⁦-⁩]")
+_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
 _ESPACIOS = re.compile(r"[ \t]{3,}")
 _SALTOS = re.compile(r"\n{3,}")
 
