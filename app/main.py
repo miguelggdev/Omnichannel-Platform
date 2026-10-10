@@ -60,6 +60,7 @@ from app.core.exceptions import (
 from app.core.logging import setup_logging
 from app.core.telemetry import instrument_fastapi, setup_telemetry, shutdown_telemetry
 from app.middleware.audit import AuditContextMiddleware
+from app.middleware.body_limit import BodySizeLimitMiddleware
 from app.middleware.observability import ObservabilityMiddleware
 from app.middleware.public_capture_cors import PublicCaptureCORSMiddleware
 from app.middleware.tenant_context import TenantContextMiddleware
@@ -175,6 +176,8 @@ def create_app() -> FastAPI:
     # Lo ultimo registrado es lo primero que ejecuta: va por fuera del CORSMiddleware global
     # para que el preflight de la captura publica no lo rechace ese (ver su docstring).
     app.add_middleware(PublicCaptureCORSMiddleware)
+    # Por fuera de todo: el tope del cuerpo se aplica antes de que nadie lo lea (ADR-088).
+    app.add_middleware(BodySizeLimitMiddleware)
 
     # ── Exception handlers ──
     app.add_exception_handler(AppException, app_exception_handler)  # type: ignore[arg-type]

@@ -137,7 +137,8 @@ class MetaProvider(MessagingProvider):
         Returns:
             True si la firma coincide.
         """
-        if not signature.startswith("sha256="):
+        # Sin secreto configurado, el HMAC con clave vacia lo puede calcular cualquiera.
+        if not secret or not signature.startswith("sha256="):
             return False
         expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
         return hmac.compare_digest(signature[len("sha256=") :], expected)

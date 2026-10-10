@@ -140,6 +140,12 @@ class TestFirmaHmac:
 
         assert not await _provider("instagram").validate_signature(body, "", APP_SECRET)
 
+    async def test_secreto_sin_configurar_nunca_valida(self) -> None:
+        """Con `META_APP_SECRET` vacio cualquiera calcula el HMAC con clave vacia."""
+        body = json.dumps(INSTAGRAM_TEXT).encode()
+
+        assert not await _provider("instagram").validate_signature(body, _firma(body, ""), "")
+
 
 class TestConstraintsPorCanal:
     """Cada sub-canal declara sus propios limites."""

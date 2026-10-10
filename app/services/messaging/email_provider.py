@@ -49,6 +49,7 @@ from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.parser import HeaderParser
 from email.utils import make_msgid, parseaddr, parsedate_to_datetime
+from itertools import islice
 from typing import Any
 
 import aiosmtplib
@@ -89,6 +90,10 @@ _LINEA_ORIGINAL = re.compile(
 _DIVISOR_OUTLOOK = re.compile(r"^\s*_{10,}\s*$")
 _CABECERA_CITADA = re.compile(r"^\s*(?:From|De|Sent|Enviado|Date|Fecha)\s*:", re.IGNORECASE)
 _ETIQUETAS = re.compile(r"<[^>]+>")
+_APERTURA_SCRIPT = re.compile(r"<(script|style)\b", re.IGNORECASE)
+#: Longitud maxima del cuerpo que se procesa: un email no necesita mas para la IA, y las
+#: expresiones de este modulo no deben recorrer megas de texto de un remitente cualquiera.
+MAX_CUERPO_CHARS = 100_000
 
 
 def recortar_cita(texto: str) -> str:
@@ -105,7 +110,7 @@ def recortar_cita(texto: str) -> str:
     Returns:
         Solo lo que el cliente escribio de nuevo, sin espacios sobrantes.
     """
-    lineas = texto.splitlines()
+    lineas = texto[:MAX_CUERPO_CHARS].splitlines()
     resultado: list[str] = []
     for i, linea in enumerate(lineas):
         if _LINEA_CITA.match(linea) or _LINEA_ORIGINAL.match(linea):
@@ -113,13 +118,41 @@ def recortar_cita(texto: str) -> str:
         if _DIVISOR_OUTLOOK.match(linea):
             # Solo es una cita de Outlook si lo siguiente es la cabecera de un
             # mensaje: una firma con una raya de guiones bajos no se recorta.
-            siguiente = next((x for x in lineas[i + 1 :] if x.strip()), "")
+            # `islice`, no `lineas[i + 1 :]`: copiar la cola en cada divisor es cuadratico.
+            siguiente = next((x for x in islice(lineas, i + 1, None) if x.strip()), "")
             if _CABECERA_CITADA.match(siguiente):
                 break
         if linea.lstrip().startswith(">"):
             continue
         resultado.append(linea)
     return "\n".join(resultado).strip()
+
+
+def _quitar_scripts(contenido: str) -> str:
+    """Quita los bloques `<script>` y `<style>` en tiempo lineal.
+
+    `(?is)<(script|style).*?</\1>` es cuadratico con muchos `<script` sin cerrar: cada uno
+    recorre el resto del texto buscando su cierre. Aqui cada busqueda empieza donde acabo la
+    anterior, y un bloque sin cierre se lleva el resto del texto.
+
+    Args:
+        contenido: HTML.
+
+    Returns:
+        El HTML sin esos bloques.
+    """
+    partes: list[str] = []
+    pos = 0
+    while (apertura := _APERTURA_SCRIPT.search(contenido, pos)) is not None:
+        partes.append(contenido[pos : apertura.start()])
+        cierre = re.compile(rf"</{apertura.group(1)}\s*>", re.IGNORECASE).search(
+            contenido, apertura.end()
+        )
+        if cierre is None:
+            return "".join(partes)
+        pos = cierre.end()
+    partes.append(contenido[pos:])
+    return "".join(partes)
 
 
 def _html_a_texto(contenido: str) -> str:
@@ -131,7 +164,7 @@ def _html_a_texto(contenido: str) -> str:
     Returns:
         Texto sin etiquetas y con las entidades resueltas.
     """
-    sin_bloques = re.sub(r"(?is)<(script|style).*?</\1>", "", contenido)
+    sin_bloques = _quitar_scripts(contenido[:MAX_CUERPO_CHARS])
     con_saltos = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>", "\n", sin_bloques)
     return html.unescape(_ETIQUETAS.sub("", con_saltos)).strip()
 
