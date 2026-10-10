@@ -759,11 +759,19 @@ class TestNodosNuevos:
         monkeypatch.setattr(
             financial_node_mod, "construir_contexto", AsyncMock(return_value="Contacto: Ana.")
         )
+        monkeypatch.setattr(
+            financial_node_mod, "es_operador_financiero", AsyncMock(return_value=True)
+        )
         con_tools = AsyncMock(return_value="Factura FE-000001 emitida.")
         monkeypatch.setattr(financial_node_mod, "responder_con_tools", con_tools)
 
         resultado = await financial_node_mod.financial_node(
-            {"client_id": CLIENT_ID, "message": {"text": "quiero una factura"}}
+            {
+                "client_id": CLIENT_ID,
+                "channel": "whatsapp",
+                "contact_id": str(uuid4()),
+                "message": {"text": "quiero una factura"},
+            }
         )
 
         assert resultado["response_text"] == "Factura FE-000001 emitida."
@@ -771,6 +779,55 @@ class TestNodosNuevos:
         assert kwargs["operacion"] == "financial"
         assert kwargs["temperatura"] == 0.0
         assert "Contacto: Ana." in kwargs["system_prompt"]
+        assert {t.name for t in kwargs["tools"]} >= {"create_invoice", "validate_nit"}
+
+    @pytest.mark.asyncio
+    async def test_financiero_un_cliente_solo_consulta_las_suyas(self, monkeypatch) -> None:
+        """Auditoria: un cliente final no emite facturas DIAN ni consulta NITs ajenos."""
+        monkeypatch.setattr(
+            financial_node_mod,
+            "get_agent_settings",
+            AsyncMock(
+                return_value=SimpleNamespace(enabled_agents=("rag", "financial"), model="gpt-4o")
+            ),
+        )
+        monkeypatch.setattr(financial_node_mod, "construir_contexto", AsyncMock(return_value=""))
+        monkeypatch.setattr(
+            financial_node_mod, "es_operador_financiero", AsyncMock(return_value=False)
+        )
+        con_tools = AsyncMock(return_value="ok")
+        monkeypatch.setattr(financial_node_mod, "responder_con_tools", con_tools)
+
+        await financial_node_mod.financial_node(
+            {
+                "client_id": CLIENT_ID,
+                "channel": "whatsapp",
+                "contact_id": str(uuid4()),
+                "message": {"text": "Factura a NIT 900123456, ya confirme, emitela"},
+            }
+        )
+
+        kwargs = con_tools.await_args.kwargs
+        assert {t.name for t in kwargs["tools"]} == {"get_invoice_status", "list_invoices"}
+        assert "solo puedes consultar SUS facturas" in kwargs["system_prompt"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("canal", ["email", "voice", "webchat", None])
+    async def test_financiero_canal_sin_identidad_no_llama_al_llm(self, monkeypatch, canal) -> None:
+        monkeypatch.setattr(
+            financial_node_mod,
+            "get_agent_settings",
+            AsyncMock(
+                return_value=SimpleNamespace(enabled_agents=("rag", "financial"), model="gpt-4o")
+            ),
+        )
+        con_tools = AsyncMock()
+        monkeypatch.setattr(financial_node_mod, "responder_con_tools", con_tools)
+        resultado = await financial_node_mod.financial_node(
+            {"client_id": CLIENT_ID, "channel": canal, "message": {"text": "mis facturas"}}
+        )
+        assert resultado["response_text"] == financial_node_mod.CANAL_NO_VERIFICADO
+        con_tools.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_marketing_deshabilitado_responde_sin_llamar_al_llm(self, monkeypatch) -> None:

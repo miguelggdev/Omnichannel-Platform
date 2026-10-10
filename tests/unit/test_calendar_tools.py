@@ -117,11 +117,13 @@ def _config(
     client_id: uuid.UUID,
     conversation_id: uuid.UUID | None = None,
     contact_id: uuid.UUID | None = None,
+    channel: str = "whatsapp",
 ) -> dict[str, Any]:
     """Arma el `RunnableConfig` con `client_id`/`contact_id` inyectados, como haría el nodo real."""
     configurable: dict[str, Any] = {
         "client_id": str(client_id),
         "contact_id": str(contact_id or uuid.uuid4()),
+        "channel": channel,
     }
     if conversation_id is not None:
         configurable["conversation_id"] = str(conversation_id)
@@ -341,7 +343,8 @@ class TestModifyAppointment:
         """Una cita cancelada no se reprograma."""
         apt_id = uuid.uuid4()
         cita = _FakeAppointment(id_=apt_id, status="cancelled")
-        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[cita]))
+        # None: el advisory lock (valor ignorado), luego la cita.
+        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[None, cita]))
 
         resultado = await modulo.modify_appointment.ainvoke(
             {"appointment_id": str(apt_id), "new_datetime_iso": "2026-09-22T11:00:00"},
@@ -355,11 +358,17 @@ class TestModifyAppointment:
     ) -> None:
         """La cita queda con la nueva fecha, y Calendar recibe el mismo cambio."""
         apt_id, tipo_id = uuid.uuid4(), uuid.uuid4()
-        cita = _FakeAppointment(id_=apt_id, service_type_id=tipo_id, google_event_id="evt-1")
+        cita = _FakeAppointment(
+            id_=apt_id,
+            service_type_id=tipo_id,
+            google_event_id="evt-1",
+            starts_at=datetime(2026, 9, 21, 9, 0, tzinfo=ZoneInfo("America/Bogota")),
+            ends_at=datetime(2026, 9, 21, 9, 30, tzinfo=ZoneInfo("America/Bogota")),
+        )
         tipo = _FakeServiceType(id_=tipo_id, duration_minutes=30)
-        # El tipo de servicio se busca con select() filtrado por client_id, no
-        # con session.get(): sale de `resultados` justo despues de la cita.
-        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[cita, tipo]))
+        # El advisory lock primero; el tipo de servicio se busca con select() filtrado por
+        # client_id, no con session.get(): sale de `resultados` justo despues de la cita.
+        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[None, cita, tipo]))
         fake_calendar = _FakeCalendarService()
         _parchear_calendar(monkeypatch, fake_calendar)
 
@@ -374,6 +383,86 @@ class TestModifyAppointment:
         # si la busqueda del tipo se rompiera, este assert lo delata.
         assert cita.ends_at == cita.starts_at + timedelta(minutes=30)
         assert fake_calendar.modified["event_id"] == "evt-1"
+
+    async def test_no_reprograma_si_el_horario_nuevo_esta_ocupado(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mover una cita es reservar: se re-comprueba Calendar como al crearla (BUG-023)."""
+        apt_id, tipo_id = uuid.uuid4(), uuid.uuid4()
+        inicio = datetime(2026, 9, 21, 9, 0, tzinfo=ZoneInfo("America/Bogota"))
+        cita = _FakeAppointment(
+            id_=apt_id, service_type_id=tipo_id, starts_at=inicio,
+            ends_at=inicio + timedelta(minutes=30),
+        )  # fmt: skip
+        tipo = _FakeServiceType(id_=tipo_id, duration_minutes=30)
+        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[None, cita, tipo]))
+        fake_calendar = _FakeCalendarService(conflicto=True)
+        _parchear_calendar(monkeypatch, fake_calendar)
+
+        resultado = await modulo.modify_appointment.ainvoke(
+            {"appointment_id": str(apt_id), "new_datetime_iso": "2026-09-22T11:00:00"},
+            config=_config(uuid.uuid4()),
+        )
+
+        assert "ya no está disponible" in resultado
+        assert cita.starts_at == inicio
+        assert fake_calendar.modified is None
+
+
+class TestSeguridadDeCitas:
+    """Auditoria de seguridad: ver, mover o cancelar citas exige canal verificado y que la
+    cita sea del contacto de la conversacion (no de otro cliente del tenant)."""
+
+    @pytest.mark.parametrize("canal", ["email", "voice", "webchat", None])
+    @pytest.mark.parametrize("tool", ["modify", "cancel", "list"])
+    async def test_canal_sin_identidad(
+        self, monkeypatch: pytest.MonkeyPatch, canal: str | None, tool: str
+    ) -> None:
+        sesion = FakeSession(resultados=[_FakeAppointment()])
+        parchear_tenant_session(monkeypatch, modulo, sesion)
+        config = _config(uuid.uuid4(), channel=canal)  # type: ignore[arg-type]
+        if tool == "modify":
+            args = {"appointment_id": str(uuid.uuid4()), "new_datetime_iso": "2026-09-22T11:00"}
+            resultado = await modulo.modify_appointment.ainvoke(args, config=config)
+        elif tool == "cancel":
+            args = {"appointment_id": str(uuid.uuid4()), "reason": "x"}
+            resultado = await modulo.cancel_appointment.ainvoke(args, config=config)
+        else:
+            args = {"date_from": "2026-09-01", "date_to": "2026-09-30"}
+            resultado = await modulo.list_appointments.ainvoke(args, config=config)
+        assert resultado == modulo.CANAL_NO_VERIFICADO
+        assert sesion.executed == []
+
+    async def test_la_cita_se_busca_por_el_contacto_de_la_conversacion(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sesion = FakeSession(resultados=[None])
+        parchear_tenant_session(monkeypatch, modulo, sesion)
+        contacto = uuid.uuid4()
+        resultado = await modulo.cancel_appointment.ainvoke(
+            {"appointment_id": str(uuid.uuid4()), "reason": "x"},
+            config=_config(uuid.uuid4(), contact_id=contacto),
+        )
+        assert "No encontré esa cita" in resultado
+        sql = str(sesion.executed[0].compile(compile_kwargs={"literal_binds": True}))
+        assert "appointments.contact_id" in sql
+        assert contacto.hex in sql.replace("-", "")
+
+    @pytest.mark.parametrize("tool", ["modify", "cancel"])
+    async def test_id_mal_formado_no_revienta(
+        self, monkeypatch: pytest.MonkeyPatch, tool: str
+    ) -> None:
+        parchear_tenant_session(monkeypatch, modulo, FakeSession(resultados=[None]))
+        if tool == "modify":
+            resultado = await modulo.modify_appointment.ainvoke(
+                {"appointment_id": "la-del-martes", "new_datetime_iso": "2026-09-22T11:00"},
+                config=_config(uuid.uuid4()),
+            )
+        else:
+            resultado = await modulo.cancel_appointment.ainvoke(
+                {"appointment_id": "la-del-martes", "reason": "x"}, config=_config(uuid.uuid4())
+            )
+        assert "No encontré esa cita" in resultado
 
 
 # ─── cancel_appointment ──────────────────────────────────────────────────────

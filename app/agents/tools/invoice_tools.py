@@ -39,6 +39,7 @@ from sqlalchemy import BigInteger, func, select, text
 from sqlalchemy import update as sa_update
 
 from app.core.database import tenant_session
+from app.models.agent_config import AgentConfig
 from app.models.invoice import (
     INVOICE_APPROVED,
     INVOICE_PENDING_DIAN,
@@ -46,6 +47,7 @@ from app.models.invoice import (
     INVOICE_STATUSES,
     Invoice,
 )
+from app.services.channel_identity import identidad_verificada
 from app.services.dian import (
     DianError,
     NitInvalidoError,
@@ -75,6 +77,79 @@ SIN_CONTACTO = (
     "No puedo consultar facturas en esta conversacion porque todavia no se "
     "identifico al contacto. Pidele sus datos para poder ubicarlas."
 )
+
+#: Respuesta de las tools de escritura cuando quien escribe no es operador financiero.
+NO_AUTORIZADO = (
+    "Esta conversacion no esta autorizada para emitir facturas ni consultar NIT. "
+    "Un administrador puede hacerlo desde el panel."
+)
+
+#: Respuesta de las tools de consulta en un canal que no identifica al contacto.
+CANAL_NO_VERIFICADO = (
+    "Por este canal no puedo consultar facturas: no permite confirmar quien escribe. "
+    "Escribenos por WhatsApp o pide ayuda a un agente."
+)
+
+
+async def es_operador_financiero(client_id: UUID, contact_id: str | None) -> bool:
+    """Si el contacto puede emitir facturas y consultar NIT por el agente.
+
+    Igual que el agente de marketing (BUG-045): el grafo atiende a los clientes finales, asi
+    que habilitar `financial` en `enabled_agents` no dice *quien* puede facturar. Solo los
+    contactos de `agent_configs.config.financial.operator_contact_ids` (por ejemplo, el
+    WhatsApp del contador del negocio). Sin lista, nadie.
+
+    Args:
+        client_id: Tenant.
+        contact_id: Contacto de la conversacion.
+
+    Returns:
+        `True` si esta en la lista de operadores del tenant.
+    """
+    if not contact_id:
+        return False
+    async with tenant_session(client_id) as session:
+        config = (
+            await session.execute(
+                select(AgentConfig)
+                .where(AgentConfig.client_id == client_id, AgentConfig.is_active.is_(True))
+                .order_by(AgentConfig.created_at.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    financiero = ((config.config or {}) if config else {}).get("financial", {})
+    operadores = financiero.get("operator_contact_ids", []) if isinstance(financiero, dict) else []
+    if not isinstance(operadores, list):
+        return False
+    return str(contact_id) in {str(o) for o in operadores}
+
+
+async def puede_operar(config: RunnableConfig) -> bool:
+    """Canal verificado y contacto operador financiero (defensa en profundidad del nodo).
+
+    Args:
+        config: Config que inyecta el nodo.
+
+    Returns:
+        `True` si puede emitir facturas y consultar NIT.
+    """
+    configurable = config.get("configurable", {})
+    if not identidad_verificada(configurable.get("channel")):
+        return False
+    return await es_operador_financiero(_client_id(config), configurable.get("contact_id"))
+
+
+def canal_verificado(config: RunnableConfig) -> bool:
+    """Si el canal de la conversacion identifica de verdad al contacto.
+
+    Args:
+        config: Config que inyecta el nodo.
+
+    Returns:
+        `True` en WhatsApp, Instagram, Facebook y Telegram.
+    """
+    return identidad_verificada(config.get("configurable", {}).get("channel"))
+
 
 PREFIJO_CONSECUTIVO = "FE-"
 DIGITOS_CONSECUTIVO = 6
@@ -314,6 +389,10 @@ async def validate_nit(nit: str, config: RunnableConfig) -> str:
         nit: Numero de identificacion tributaria, con o sin puntos y sin el
             digito de verificacion.
     """
+    # Consultar un NIT ajeno devuelve razon social, regimen y ciudad: no es para clientes.
+    if not await puede_operar(config):
+        logger.warning("validate_nit sin operador financiero (tenant %s)", _client_id(config))
+        return NO_AUTORIZADO
     try:
         limpio = normalizar_nit(nit)
     except NitInvalidoError as exc:
@@ -358,6 +437,11 @@ async def create_invoice(
             en porcentaje, que solo puede ser 0, 5 o 19.
     """
     client_id = _client_id(config)
+    # Emitir una factura electronica es un acto fiscal: solo operadores en canal verificado,
+    # nunca un cliente final que pide "facturame a este NIT" (auditoria de seguridad).
+    if not await puede_operar(config):
+        logger.warning("create_invoice sin operador financiero (tenant %s)", client_id)
+        return NO_AUTORIZADO
 
     try:
         nit_limpio = normalizar_nit(buyer_nit)
@@ -504,6 +588,8 @@ async def get_invoice_status(invoice_number: str, config: RunnableConfig) -> str
     Args:
         invoice_number: Numero de la factura, por ejemplo FE-000012.
     """
+    if not canal_verificado(config):
+        return CANAL_NO_VERIFICADO
     client_id = _client_id(config)
     contact_id = _contact_id_o_mensaje(config)
     numero = invoice_number.strip().upper()
@@ -550,6 +636,8 @@ async def list_invoices(
         date_to: Fecha final en formato AAAA-MM-DD, opcional.
         status: Estado a filtrar: draft, pending_dian, approved o rejected.
     """
+    if not canal_verificado(config):
+        return CANAL_NO_VERIFICADO
     client_id = _client_id(config)
     contact_id = _contact_id_o_mensaje(config)
 
@@ -603,3 +691,5 @@ async def list_invoices(
 
 #: Tools que el nodo financiero le ofrece al LLM.
 INVOICE_TOOLS = [validate_nit, create_invoice, get_invoice_status, list_invoices]
+#: Tools para un cliente final en canal verificado: solo consultar lo suyo.
+INVOICE_READ_TOOLS = [get_invoice_status, list_invoices]

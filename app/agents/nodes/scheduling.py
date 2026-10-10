@@ -33,6 +33,7 @@ from zoneinfo import ZoneInfo
 from googleapiclient.errors import HttpError
 from sqlalchemy import select
 
+from app.agents.nodes._agent_tools import MAX_TOOLS_POR_TURNO
 from app.agents.nodes._llm import extract_usage, get_chat_model, response_text
 from app.agents.nodes._state import ConversationState
 from app.agents.tools.calendar_tools import SCHEDULING_TOOLS
@@ -47,6 +48,7 @@ from app.services.calendar import (
     SchedulingNotConfiguredError,
 )
 from app.services.i18n import con_idioma
+from app.services.prompt_safety import REGLA_DATOS, Delimitador
 
 logger = logging.getLogger(__name__)
 
@@ -136,16 +138,24 @@ async def _final_response(
         El `AIMessage` crudo (para poder extraer el consumo de tokens).
     """
     llm = get_chat_model(model_to_use, temperature=0.0)
-    resultados_texto = "\n\n".join(tool_results)
+    # Los resultados repiten datos que escribio el cliente (notas, motivo): datos en un bloque
+    # delimitado del rol `user`, no instrucciones con autoridad de `system` (LLM01).
+    delimitador = Delimitador()
+    resultados_texto = "\n\n".join(
+        delimitador.bloque("resultado_herramienta", r, 4000) for r in tool_results
+    )
     messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_message},
         {
             "role": "system",
             "content": (
-                f"Resultados de las operaciones realizadas:\n{resultados_texto}\n\n"
-                "Genera una respuesta amable para el usuario basandote en estos resultados."
+                f"{system_prompt}\n\n{REGLA_DATOS}\n\nGenera una respuesta amable para el "
+                "usuario basandote en los resultados de las operaciones."
             ),
+        },
+        {"role": "user", "content": user_message},
+        {
+            "role": "user",
+            "content": f"Resultados de las operaciones realizadas:\n{resultados_texto}",
         },
     ]
     return await llm.ainvoke(messages)
@@ -195,7 +205,8 @@ async def scheduling_node(state: ConversationState) -> dict[str, Any]:
         operation=OPERATION,
     )
 
-    tool_calls = getattr(response, "tool_calls", None) or []
+    # Mismo tope que el resto de agentes con tools (`_agent_tools.MAX_TOOLS_POR_TURNO`).
+    tool_calls = (getattr(response, "tool_calls", None) or [])[:MAX_TOOLS_POR_TURNO]
     if not tool_calls:
         return {"response_text": response_text(response), "intent": "scheduling"}
 
@@ -204,6 +215,8 @@ async def scheduling_node(state: ConversationState) -> dict[str, Any]:
             "client_id": client_id,
             "conversation_id": conversation_id,
             "contact_id": contact_id,
+            # Ver, mover y cancelar citas exige un canal que identifique al contacto.
+            "channel": state.get("channel"),
         }
     }
     tool_results: list[str] = []
@@ -213,7 +226,20 @@ async def scheduling_node(state: ConversationState) -> dict[str, Any]:
             if tool_fn is None:
                 tool_results.append(f"Herramienta '{tool_call['name']}' no reconocida.")
                 continue
-            resultado = await tool_fn.ainvoke(tool_call["args"], config=tool_config)
+            try:
+                resultado = await tool_fn.ainvoke(tool_call["args"], config=tool_config)
+            except (SchedulingNotConfiguredError, CalendarCredentialsError, HttpError):
+                raise
+            except Exception as exc:
+                # Argumentos mal formados del modelo (un id que no es UUID, una fecha rara):
+                # sin capturarlo, Celery reintentaba el grafo entero y repetia las tools que
+                # ya habian tenido efecto en este turno (mismo patron que BUG-045).
+                logger.exception("La tool %s fallo", tool_call["name"])
+                tool_results.append(
+                    f"La herramienta '{tool_call['name']}' no pudo completarse "
+                    f"({type(exc).__name__}). No se hizo el cambio; explicaselo al usuario."
+                )
+                continue
             tool_results.append(str(resultado))
     except (SchedulingNotConfiguredError, CalendarCredentialsError, HttpError):
         logger.exception("Agendamiento no disponible para el tenant %s", client_id)
