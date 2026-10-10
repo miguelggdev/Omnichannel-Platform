@@ -281,6 +281,45 @@ class TestAsignacion:
 class TestCambioDeEstado:
     """Cambio manual de estado."""
 
+    async def test_un_agent_no_mueve_la_conversacion_de_otro(
+        self, authenticated_client_factory: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ni la toma ni la cierra: es de un companero."""
+        conv = FakeConversation(status="human_active", assigned_user_id=uuid.uuid4())
+        _usa_sesion(monkeypatch, CrmSession(resultados=[conv]))
+        client = authenticated_client_factory(role="agent")
+
+        response = await client.put(f"{URL}/{conv.id}/status", json={"status": "resolved"})
+
+        assert response.status_code == 403
+        assert conv.status == "human_active"
+
+    async def test_un_agent_si_mueve_la_suya_o_una_libre(
+        self, authenticated_client_factory: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        yo = uuid.uuid4()
+        suya = FakeConversation(status="human_active", assigned_user_id=yo)
+        libre = FakeConversation(status="bot_active")
+        client = authenticated_client_factory(role="agent", user_id=yo)
+
+        _usa_sesion(monkeypatch, CrmSession(resultados=[suya]))
+        r1 = await client.put(f"{URL}/{suya.id}/status", json={"status": "resolved"})
+        _usa_sesion(monkeypatch, CrmSession(resultados=[libre]))
+        r2 = await client.put(f"{URL}/{libre.id}/status", json={"status": "resolved"})
+
+        assert (r1.status_code, r2.status_code) == (200, 200)
+
+    async def test_un_supervisor_si_mueve_la_de_otro(
+        self, authenticated_client_factory: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        conv = FakeConversation(status="human_active", assigned_user_id=uuid.uuid4())
+        _usa_sesion(monkeypatch, CrmSession(resultados=[conv]))
+        client = authenticated_client_factory(role="supervisor")
+
+        response = await client.put(f"{URL}/{conv.id}/status", json={"status": "resolved"})
+
+        assert response.status_code == 200
+
     async def test_transicion_valida_responde_200(
         self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
