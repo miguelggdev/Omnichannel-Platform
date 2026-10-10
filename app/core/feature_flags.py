@@ -260,7 +260,7 @@ class FeatureFlags:
             config = (
                 await session.execute(
                     select(AgentConfig.config)
-                    .where(AgentConfig.is_active.is_(True))
+                    .where(AgentConfig.client_id == client_id, AgentConfig.is_active.is_(True))
                     .order_by(AgentConfig.created_at.asc())
                     .limit(1)
                 )

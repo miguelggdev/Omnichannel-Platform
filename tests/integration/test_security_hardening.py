@@ -154,3 +154,106 @@ class TestPresupuestoDelMes:
         fila = await self._fila(tenant, mes)
         assert fila is not None
         assert fila[1] == 120
+
+
+async def _tenant_nuevo() -> uuid.UUID:
+    client_id = uuid.uuid4()
+    async with tenant_session(client_id) as s:
+        await s.execute(
+            text("INSERT INTO clients (id, name, slug, plan) VALUES (:id, 'T', :slug, 'free')"),
+            {"id": str(client_id), "slug": f"sec-{client_id.hex[:10]}"},
+        )
+    return client_id
+
+
+async def _borrar(client_id: uuid.UUID) -> None:
+    async with tenant_session(client_id) as s:
+        for tabla in ("patient_consents", "contacts"):
+            await s.execute(
+                text(f"DELETE FROM {tabla} WHERE client_id = :c"),  # noqa: S608
+                {"c": str(client_id)},
+            )
+        await s.execute(text("DELETE FROM clients WHERE id = :c"), {"c": str(client_id)})
+
+
+async def _contacto(client_id: uuid.UUID, nombre: str = "Paciente") -> uuid.UUID:
+    contacto = uuid.uuid4()
+    async with tenant_session(client_id) as s:
+        await s.execute(
+            text("INSERT INTO contacts (id, client_id, display_name) VALUES (:id, :c, :n)"),
+            {"id": str(contacto), "c": str(client_id), "n": nombre},
+        )
+    return contacto
+
+
+class TestReferenciasEntreTenants:
+    async def test_un_consentimiento_no_enlaza_un_contacto_de_otro_tenant(
+        self, tenant: uuid.UUID
+    ) -> None:
+        """La FK se comprueba sin RLS: sin la validacion, el id ajeno se guardaba."""
+        from app.core.habeas_data import HabeasDataCompliance, HabeasDataError
+
+        otro = await _tenant_nuevo()
+        try:
+            ajeno = await _contacto(otro)
+            with pytest.raises(HabeasDataError, match="contacto"):
+                async with tenant_session(tenant) as s:
+                    await HabeasDataCompliance.register_consent(
+                        s, tenant, "CC", "1020304050", "verbal", contact_id=ajeno
+                    )
+            propio = await _contacto(tenant)
+            async with tenant_session(tenant) as s:
+                r = await HabeasDataCompliance.register_consent(
+                    s, tenant, "CC", "1020304050", "verbal", contact_id=propio
+                )
+            assert r["registered"] is True
+        finally:
+            await _borrar(otro)
+            async with tenant_session(tenant) as s:
+                for tabla in ("patient_consents", "contacts"):
+                    await s.execute(
+                        text(f"DELETE FROM {tabla} WHERE client_id = :c"),  # noqa: S608
+                        {"c": str(tenant)},
+                    )
+
+    async def test_la_busqueda_trata_el_porcentaje_como_texto(self, tenant: uuid.UUID) -> None:
+        from sqlalchemy import select
+
+        from app.core.like import ESCAPE, patron_contiene
+        from app.models.contact import Contact
+
+        await _contacto(tenant, "Descuento 100% real")
+        await _contacto(tenant, "Ana")
+        try:
+            async with tenant_session(tenant) as s:
+                nombres = (
+                    (
+                        await s.execute(
+                            select(Contact.display_name).where(
+                                Contact.client_id == tenant,
+                                Contact.display_name.ilike(patron_contiene("%"), escape=ESCAPE),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+        finally:
+            async with tenant_session(tenant) as s:
+                await s.execute(
+                    text("DELETE FROM contacts WHERE client_id = :c"), {"c": str(tenant)}
+                )
+        assert nombres == ["Descuento 100% real"]
+
+
+class TestRolDeLaApp:
+    async def test_el_rol_de_la_app_no_salta_la_rls_y_no_hay_aviso(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        from app.core.database import init_db
+
+        with caplog.at_level(logging.CRITICAL, logger="app.core.database"):
+            await init_db()
+        assert not [r for r in caplog.records if r.levelno >= logging.CRITICAL]

@@ -182,7 +182,8 @@ async def get_agent_settings(client_id: UUID) -> AgentSettings:
     async with tenant_session(client_id) as session:
         stmt = (
             select(AgentConfig)
-            .where(AgentConfig.is_active.is_(True))
+            # client_id explicito ademas de RLS (BUG-020/022).
+            .where(AgentConfig.client_id == client_id, AgentConfig.is_active.is_(True))
             .order_by(AgentConfig.created_at.asc())
             .limit(1)
         )
