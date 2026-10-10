@@ -43,7 +43,8 @@ class TestRag:
 
         sistema = modelo.llamadas[0][0]
         assert sistema["role"] == "system"
-        assert sistema["content"] == f"Eres el asistente de Sol.\n\n{INSTRUCCION_EN}"
+        assert sistema["content"].startswith("Eres el asistente de Sol.\n\n")
+        assert sistema["content"].endswith(f"\n\n{INSTRUCCION_EN}")
 
     async def test_sin_prompt_del_tenant_la_instruccion_va_sola(
         self, monkeypatch: pytest.MonkeyPatch
@@ -52,18 +53,21 @@ class TestRag:
 
         await rag_mod.rag_query_node(estado(detected_language="fr"))
 
-        assert modelo.llamadas[0][0] == {
-            "role": "system",
-            "content": "Responde siempre en frances (fr).",
-        }
+        sistema = modelo.llamadas[0][0]
+        assert sistema["role"] == "system"
+        assert sistema["content"].startswith(rag_mod.RAGService.REGLAS_GROUNDING)
+        assert sistema["content"].endswith("Responde siempre en frances (fr).")
 
-    async def test_sin_idioma_el_mensaje_no_cambia(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Compatibilidad: sin `detected_language` no aparece ningun mensaje de sistema nuevo."""
+    async def test_sin_idioma_no_hay_instruccion_de_idioma(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sin `detected_language` el sistema lleva solo las reglas de grounding y de datos."""
         modelo, _, _ = _preparar(monkeypatch, FakeRAGService(chunks=[_chunk(0.9)]))
 
         await rag_mod.rag_query_node(estado())
 
-        assert [m["role"] for m in modelo.llamadas[0]] == ["user"]
+        assert [m["role"] for m in modelo.llamadas[0]] == ["system", "user"]
+        assert INSTRUCCION not in modelo.llamadas[0][0]["content"]
 
 
 class TestAgentesConTools:
@@ -73,8 +77,14 @@ class TestAgentesConTools:
         con_tools = AsyncMock(return_value="ok")
         monkeypatch.setattr(financial_mod, "responder_con_tools", con_tools)
 
+        monkeypatch.setattr(financial_mod, "es_operador_financiero", AsyncMock(return_value=True))
         await financial_mod.financial_node(
-            {"client_id": CLIENT_ID, "message": {"text": "x"}, "detected_language": "en"}  # type: ignore[typeddict-item]
+            {  # type: ignore[typeddict-item]
+                "client_id": CLIENT_ID,
+                "channel": "whatsapp",
+                "message": {"text": "x"},
+                "detected_language": "en",
+            }
         )
 
         assert con_tools.await_args.kwargs["system_prompt"].endswith(f"\n\n{INSTRUCCION_EN}")
