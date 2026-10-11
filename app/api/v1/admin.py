@@ -1064,6 +1064,10 @@ async def update_user(
             objetivo.is_active = data.is_active
         if password_hash is not None:
             objetivo.password_hash = password_hash
+        # Contrasena nueva, otro rol o desactivado: las sesiones abiertas no deben seguir con
+        # lo de antes (ADR-089). El access token vigente caduca solo en minutos.
+        if password_hash is not None or cambia_rol or se_desactiva:
+            objetivo.token_version = User.token_version + 1
         await session.flush()
         await session.refresh(objetivo)
         respuesta = UserResponse.model_validate(objetivo)

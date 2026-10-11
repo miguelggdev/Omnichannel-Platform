@@ -1,13 +1,22 @@
 """Seguridad: JWT y hashing de passwords.
 
-JWT con python-jose (HS256). Password hashing con passlib/bcrypt.
-Payload JWT: { user_id, client_id, email, role, exp, type }.
+JWT con PyJWT (HS256 por defecto). Password hashing con passlib/bcrypt.
+
+Todos los tokens llevan `iss` y `aud` propios de la plataforma, `iat`, `exp` y `type`
+(ADR-089). `decode_jwt` exige los cinco: un token firmado con el mismo secreto por otro
+emisor (por ejemplo, Supabase Auth si alguien reutilizo su secreto JWT, como sugeria el
+`.env.example`) no tiene nuestro `iss`/`aud` y se rechaza.
+
+- access: `{user_id, client_id, email, role}`; vive `JWT_EXPIRATION_MINUTES`.
+- refresh: `{user_id, client_id, ver, jti}`; `ver` es `users.token_version` (subirla revoca
+  todas las sesiones del usuario) y `jti` identifica el token para la rotacion.
 """
 
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from jose import ExpiredSignatureError, JWTError, jwt
+import jwt
 from passlib.context import CryptContext
 
 from app.core.config import get_settings
@@ -41,6 +50,31 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return cast("bool", pwd_context.verify(plain_password, hashed_password))
 
 
+_CLAIMS_OBLIGATORIOS = ["exp", "iat", "iss", "aud", "type"]
+
+
+def _firmar(payload: dict[str, Any], vida: timedelta) -> str:
+    """Firma un payload con los claims comunes (`iss`, `aud`, `iat`, `exp`).
+
+    Args:
+        payload: Claims propios del tipo de token (incluido `type`).
+        vida: Tiempo hasta la expiracion.
+
+    Returns:
+        Token JWT codificado.
+    """
+    ajustes = get_settings()
+    ahora = datetime.now(timezone.utc)
+    cuerpo = {
+        **payload,
+        "iss": ajustes.JWT_ISSUER,
+        "aud": ajustes.JWT_AUDIENCE,
+        "iat": ahora,
+        "exp": ahora + vida,
+    }
+    return jwt.encode(cuerpo, ajustes.JWT_SECRET, algorithm=ajustes.JWT_ALGORITHM)
+
+
 def create_access_token(
     data: dict[str, Any],
     expires_delta: timedelta | None = None,
@@ -54,33 +88,31 @@ def create_access_token(
     Returns:
         Token JWT codificado.
     """
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(minutes=get_settings().JWT_EXPIRATION_MINUTES)
-    )
-    to_encode.update({"exp": expire, "type": "access"})
-    return cast(
-        "str",
-        jwt.encode(to_encode, get_settings().JWT_SECRET, algorithm=get_settings().JWT_ALGORITHM),
-    )
+    vida = expires_delta or timedelta(minutes=get_settings().JWT_EXPIRATION_MINUTES)
+    return _firmar({**data, "type": "access"}, vida)
 
 
-def create_refresh_token(data: dict[str, Any]) -> str:
-    """Crea un refresh token JWT con expiración de 7 días.
+def create_refresh_token(user_id: str, client_id: str, token_version: int) -> str:
+    """Crea un refresh token JWT, de un solo uso (se rota en cada `/auth/refresh`).
+
+    Solo lleva identidad, version y `jti`: el rol y el email se leen de la base al refrescar.
 
     Args:
-        data: Payload del token (user_id, client_id, email, role).
+        user_id: Usuario.
+        client_id: Tenant del usuario.
+        token_version: `users.token_version` actual; si sube, el token deja de valer.
 
     Returns:
-        Refresh token JWT codificado.
+        Refresh token JWT codificado, con `JWT_REFRESH_EXPIRATION_DAYS` de vida.
     """
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(days=get_settings().JWT_REFRESH_EXPIRATION_DAYS)
-    to_encode.update({"exp": expire, "type": "refresh"})
-    return cast(
-        "str",
-        jwt.encode(to_encode, get_settings().JWT_SECRET, algorithm=get_settings().JWT_ALGORITHM),
-    )
+    payload = {
+        "user_id": user_id,
+        "client_id": client_id,
+        "ver": token_version,
+        "jti": secrets.token_urlsafe(16),
+        "type": "refresh",
+    }
+    return _firmar(payload, timedelta(days=get_settings().JWT_REFRESH_EXPIRATION_DAYS))
 
 
 def create_email_verification_token(user_id: str, client_id: str, email: str) -> str:
@@ -97,24 +129,19 @@ def create_email_verification_token(user_id: str, client_id: str, email: str) ->
     Returns:
         Token JWT codificado, con `EMAIL_VERIFICATION_TTL_HOURS` de vida.
     """
-    expire = datetime.now(timezone.utc) + timedelta(
-        hours=get_settings().EMAIL_VERIFICATION_TTL_HOURS
-    )
     payload = {
         "user_id": user_id,
         "client_id": client_id,
         "email": email,
-        "exp": expire,
         "type": "email_verification",
     }
-    return cast(
-        "str",
-        jwt.encode(payload, get_settings().JWT_SECRET, algorithm=get_settings().JWT_ALGORITHM),
-    )
+    return _firmar(payload, timedelta(hours=get_settings().EMAIL_VERIFICATION_TTL_HOURS))
 
 
 def decode_jwt(token: str) -> dict[str, Any]:
     """Decodifica y valida un token JWT.
+
+    Comprueba firma, `exp`, `iss` y `aud`, y que traiga todos los claims obligatorios.
 
     Args:
         token: Token JWT codificado.
@@ -124,14 +151,20 @@ def decode_jwt(token: str) -> dict[str, Any]:
 
     Raises:
         JWTExpiredError: Si el token ha expirado.
-        JWTInvalidError: Si el token es inválido o corrupto.
+        JWTInvalidError: Si el token es inválido, corrupto o de otro emisor.
     """
+    ajustes = get_settings()
     try:
         payload: dict[str, Any] = jwt.decode(
-            token, get_settings().JWT_SECRET, algorithms=[get_settings().JWT_ALGORITHM]
+            token,
+            ajustes.JWT_SECRET,
+            algorithms=[ajustes.JWT_ALGORITHM],
+            audience=ajustes.JWT_AUDIENCE,
+            issuer=ajustes.JWT_ISSUER,
+            options={"require": _CLAIMS_OBLIGATORIOS},
         )
         return payload
-    except ExpiredSignatureError as err:
+    except jwt.ExpiredSignatureError as err:
         raise JWTExpiredError("Token expirado") from err
-    except JWTError as err:
+    except jwt.PyJWTError as err:
         raise JWTInvalidError("Token inválido") from err

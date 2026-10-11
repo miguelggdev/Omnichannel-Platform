@@ -9,8 +9,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import jwt
 import pytest
-from jose import jwt
 
 from app.core.config import get_settings
 from app.core.security import create_access_token, create_refresh_token
@@ -28,9 +28,18 @@ def _claims(**cambios: Any) -> dict[str, Any]:
     }
 
 
-def _firmar(payload: dict[str, Any]) -> str:
+def _firmar(payload: dict[str, Any], **comunes: Any) -> str:
+    """Firma con el secreto y los `iss`/`aud` propios: solo falla lo que el test cambia."""
     ajustes = get_settings()
-    cuerpo = {"exp": datetime.now(timezone.utc) + timedelta(minutes=5), **payload}
+    ahora = datetime.now(timezone.utc)
+    cuerpo = {
+        "exp": ahora + timedelta(minutes=5),
+        "iat": ahora,
+        "iss": ajustes.JWT_ISSUER,
+        "aud": ajustes.JWT_AUDIENCE,
+        **comunes,
+        **payload,
+    }
     return str(jwt.encode(cuerpo, ajustes.JWT_SECRET, algorithm=ajustes.JWT_ALGORITHM))
 
 
@@ -39,7 +48,8 @@ async def _get(cliente: Any, token: str) -> Any:
 
 
 async def test_un_refresh_token_no_autentica_peticiones(api_client: Any) -> None:
-    r = await _get(api_client, create_refresh_token(_claims()))
+    c = _claims()
+    r = await _get(api_client, create_refresh_token(c["user_id"], c["client_id"], 0))
 
     assert r.status_code == 401
     assert r.json()["error_code"] == "INVALID_TOKEN"
@@ -103,3 +113,54 @@ async def test_un_access_token_valido_sigue_pasando(
     r = await _get(api_client, create_access_token(_claims()))
 
     assert r.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "comunes",
+    [
+        # Lo que emite Supabase Auth: si alguien reutilizo su secreto JWT, la firma cuadra,
+        # pero el emisor y la audiencia no son los nuestros (ADR-089).
+        {"iss": "https://proyecto.supabase.co/auth/v1", "aud": "authenticated"},
+        {"aud": "authenticated"},
+        {"iss": "otro-emisor"},
+    ],
+)
+async def test_un_token_de_otro_emisor_con_el_mismo_secreto_no_autentica(
+    api_client: Any, comunes: dict[str, Any]
+) -> None:
+    r = await _get(api_client, _firmar({**_claims(), "type": "access"}, **comunes))
+
+    assert r.status_code == 401
+    assert r.json()["error_code"] == "INVALID_TOKEN"
+
+
+async def test_un_token_sin_iss_ni_aud_no_autentica(api_client: Any) -> None:
+    """Los tokens de antes de ADR-089 (sin `iss`/`aud`) dejan de valer."""
+    ajustes = get_settings()
+    cuerpo = {
+        **_claims(),
+        "type": "access",
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+    }
+    token = jwt.encode(cuerpo, ajustes.JWT_SECRET, algorithm=ajustes.JWT_ALGORITHM)
+
+    r = await _get(api_client, token)
+
+    assert r.status_code == 401
+
+
+async def test_alg_none_no_autentica(api_client: Any) -> None:
+    ajustes = get_settings()
+    cuerpo = {
+        **_claims(),
+        "type": "access",
+        "iss": ajustes.JWT_ISSUER,
+        "aud": ajustes.JWT_AUDIENCE,
+        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+    }
+    token = jwt.encode(cuerpo, None, algorithm="none")
+
+    r = await _get(api_client, token)
+
+    assert r.status_code == 401
