@@ -26,14 +26,14 @@ function backendFalso(tokenValido: string, vistas: string[]): AxiosAdapter {
 }
 
 beforeEach(() => {
-  useAuthStore.getState().setTokens("viejo", "refresh-viejo");
+  useAuthStore.getState().setTokens("viejo");
   vi.restoreAllMocks();
 });
 
 describe("cliente de la API", () => {
   it("manda el access token en Authorization", async () => {
     const vistas: string[] = [];
-    useAuthStore.getState().setTokens("viejo", "r");
+    useAuthStore.getState().setTokens("viejo");
     api.defaults.adapter = backendFalso("viejo", vistas);
 
     await api.get("/contacts");
@@ -47,14 +47,15 @@ describe("cliente de la API", () => {
     api.defaults.adapter = backendFalso(nuevo, vistas);
     const post = vi
       .spyOn(axios, "post")
-      .mockResolvedValue({ data: { access_token: nuevo, refresh_token: "refresh-nuevo", token_type: "bearer" } });
+      .mockResolvedValue({ data: { access_token: nuevo, token_type: "bearer" } });
 
     const r = await api.get("/contacts");
 
     expect(r.status).toBe(200);
-    expect(post).toHaveBeenCalledWith("/api/v1/auth/refresh", { refresh_token: "refresh-viejo" });
+    // Sin cuerpo: el refresh va en la cookie httpOnly que el navegador adjunta solo.
+    expect(post).toHaveBeenCalledWith("/api/v1/auth/refresh");
     expect(vistas).toEqual(["Bearer viejo", `Bearer ${nuevo}`]);
-    expect(useAuthStore.getState().refreshToken).toBe("refresh-nuevo");
+    expect(useAuthStore.getState().accessToken).toBe(nuevo);
   });
 
   it("varias peticiones que fallan a la vez comparten una sola renovacion", async () => {
@@ -62,7 +63,7 @@ describe("cliente de la API", () => {
     api.defaults.adapter = backendFalso(nuevo, []);
     const post = vi
       .spyOn(axios, "post")
-      .mockResolvedValue({ data: { access_token: nuevo, refresh_token: "r2", token_type: "bearer" } });
+      .mockResolvedValue({ data: { access_token: nuevo, token_type: "bearer" } });
 
     await Promise.all([api.get("/a"), api.get("/b"), api.get("/c")]);
 
