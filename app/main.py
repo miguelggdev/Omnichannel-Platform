@@ -31,6 +31,7 @@ from app.api.v1.documents import router as documents_router
 from app.api.v1.feature_flags import router as feature_flags_router
 from app.api.v1.lead_module import platform_router as lead_module_platform_router
 from app.api.v1.lead_module import router as lead_module_router
+from app.api.v1.lead_scoring_config import router as lead_scoring_config_router
 from app.api.v1.lead_sources import router as lead_sources_router
 from app.api.v1.lead_stages import router as lead_stages_router
 from app.api.v1.leads import router as leads_router
@@ -204,6 +205,7 @@ def create_app() -> FastAPI:
     app.include_router(capture_router, prefix="/api/v1/capture", tags=["leads"])
     app.include_router(lead_stages_router, prefix="/api/v1/lead-pipeline-stages", tags=["leads"])
     app.include_router(lead_sources_router, prefix="/api/v1/lead-sources", tags=["leads"])
+    app.include_router(lead_scoring_config_router, prefix="/api/v1/clients", tags=["leads"])
     # Los webhooks NO pasan por TenantContextMiddleware: se autentican por firma
     # HMAC. El prefijo debe coincidir con WEBHOOK_PATHS_PREFIX del middleware.
     app.include_router(webhooks_router, prefix="/api/v1/webhooks", tags=["webhooks"])
