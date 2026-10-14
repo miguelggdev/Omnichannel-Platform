@@ -83,6 +83,11 @@ async def _actividades(tenant: uuid.UUID, lead: uuid.UUID) -> list[Any]:
         )
 
 
+def _entrantes(actividades: list[Any]) -> list[Any]:
+    """Solo las filas `inbound_message` (el recalculo del comportamiento anade `score_changed`)."""
+    return [a for a in actividades if a.activity_type == "inbound_message"]
+
+
 async def _mensajes(tenant: uuid.UUID) -> int:
     async with tenant_session(tenant) as s:
         return int((await s.execute(text("SELECT count(*) FROM messages"))).scalar_one())
@@ -94,7 +99,7 @@ async def test_un_mensaje_del_contacto_sube_la_actividad_del_lead_y_deja_rastro(
     _, lead = contacto_lead
     await _process_message("ycloud", "whatsapp", _msg(1))
     assert (await _lead(webhook_tenant, lead)).last_activity_at == BASE
-    (act,) = await _actividades(webhook_tenant, lead)
+    (act,) = _entrantes(await _actividades(webhook_tenant, lead))
     assert act.activity_type == "inbound_message"
     assert act.user_id is None
     assert act.metadata["channel"] == "whatsapp"
@@ -107,14 +112,14 @@ async def test_varios_mensajes_seguidos_son_una_sola_fila_y_pasada_media_hora_ot
     _, lead = contacto_lead
     for n, minutos in enumerate((0, 1, 5, 20)):
         await _process_message("ycloud", "whatsapp", _msg(n + 1, minutos))
-    assert len(await _actividades(webhook_tenant, lead)) == 1
+    assert len(_entrantes(await _actividades(webhook_tenant, lead))) == 1
     # Pasa media hora (se envejece la fila): el siguiente mensaje anota una nueva.
     async with tenant_session(webhook_tenant) as s:
         await s.execute(
             text("UPDATE lead_activities SET created_at = created_at - interval '31 minutes'")
         )
     await _process_message("ycloud", "whatsapp", _msg(9, minutos=61))
-    assert len(await _actividades(webhook_tenant, lead)) == 2
+    assert len(_entrantes(await _actividades(webhook_tenant, lead))) == 2
     assert (await _lead(webhook_tenant, lead)).last_activity_at == BASE + timedelta(minutes=61)
 
 
@@ -168,4 +173,123 @@ async def test_si_anotar_la_actividad_falla_el_mensaje_del_cliente_se_guarda_igu
     # Y el siguiente mensaje, ya sin el fallo, funciona con normalidad.
     monkeypatch.setattr("app.services.lead_activity.registrar_actividad", original)
     await _process_message("ycloud", "whatsapp", _msg(2, minutos=1))
-    assert len(await _actividades(webhook_tenant, lead)) == 1
+    assert len(_entrantes(await _actividades(webhook_tenant, lead))) == 1
+
+
+# ── Comportamiento del lead al escribir (Sprint 17) ──────────────────────────────────────────
+
+
+async def _scores(tenant: uuid.UUID, lead: uuid.UUID) -> Any:
+    async with tenant_session(tenant) as s:
+        return (
+            await s.execute(
+                text(
+                    "SELECT behavioral_score, total_score, "
+                    "(SELECT count(*) FROM lead_scores WHERE lead_id = :l AND trigger = "
+                    "'inbound_message') AS filas FROM leads WHERE id = :l"
+                ),
+                {"l": str(lead)},
+            )
+        ).one()
+
+
+async def test_un_mensaje_del_lead_recalcula_su_score_de_comportamiento(
+    webhook_tenant: uuid.UUID, contacto_lead: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    _, lead = contacto_lead
+    antes = await _scores(webhook_tenant, lead)
+    await _process_message("ycloud", "whatsapp", _msg(1, minutos=0))
+    despues = await _scores(webhook_tenant, lead)
+    assert antes.behavioral_score == 0
+    assert despues.behavioral_score > 0
+    assert despues.filas == 1
+    cambios = [
+        a for a in await _actividades(webhook_tenant, lead) if a.activity_type == "score_changed"
+    ]
+    assert len(cambios) == 1
+    assert cambios[0].metadata["trigger"] == "inbound_message"
+    assert "Hola" not in str(cambios[0].metadata)
+
+
+async def test_el_recalculo_no_corre_con_cada_mensaje(
+    webhook_tenant: uuid.UUID,
+    contacto_lead: tuple[uuid.UUID, uuid.UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Como la anotacion `inbound_message`: a lo sumo una vez cada 30 minutos por lead."""
+    from app.services import lead_score_service
+
+    llamadas: list[int] = []
+    original = lead_score_service.recalcular_behavioral
+
+    async def contado(*a: Any, **k: Any) -> Any:
+        llamadas.append(1)
+        return await original(*a, **k)
+
+    monkeypatch.setattr(lead_score_service, "recalcular_behavioral", contado)
+    for n, minutos in enumerate((0, 1, 5, 20)):
+        await _process_message("ycloud", "whatsapp", _msg(n + 1, minutos))
+    assert len(llamadas) == 1
+
+
+async def test_si_el_recalculo_falla_el_mensaje_y_la_anotacion_se_conservan(
+    webhook_tenant: uuid.UUID,
+    contacto_lead: tuple[uuid.UUID, uuid.UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, lead = contacto_lead
+    antes = await _mensajes(webhook_tenant)
+
+    async def roto(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("fallo inesperado al puntuar")
+
+    from app.services import lead_score_service
+
+    monkeypatch.setattr(lead_score_service, "recalcular_behavioral", roto)
+    await _process_message("ycloud", "whatsapp", _msg(1))  # no lanza
+    assert await _mensajes(webhook_tenant) == antes + 1
+    assert len(_entrantes(await _actividades(webhook_tenant, lead))) == 1
+    assert (await _lead(webhook_tenant, lead)).last_activity_at == BASE
+    assert (await _scores(webhook_tenant, lead)).behavioral_score == 0
+
+
+async def test_el_recalculo_puede_calificar_automaticamente_y_no_toca_a_otros(
+    webhook_tenant: uuid.UUID, contacto_lead: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    from tests.integration.lead_helpers import crear_etapa
+
+    _, lead = contacto_lead
+    nueva = await crear_etapa(webhook_tenant, "new", 0)
+    await crear_etapa(webhook_tenant, "qualified", 1)
+    async with tenant_session(webhook_tenant) as s:
+        await s.execute(
+            text("UPDATE leads SET pipeline_stage_id = :e WHERE id = :l"),
+            {"e": str(nueva), "l": str(lead)},
+        )
+        await s.execute(
+            text("UPDATE clients SET lead_automation_config = CAST(:c AS jsonb) WHERE id = :t"),
+            {
+                "c": '{"qualification": {"enabled": true, '
+                '"rules": [{"min_score": 1, "stage_slug": "qualified"}]}}',
+                "t": str(webhook_tenant),
+            },
+        )
+    await _process_message("ycloud", "whatsapp", _msg(1))
+    async with tenant_session(webhook_tenant) as s:
+        slug = (
+            await s.execute(
+                text(
+                    "SELECT st.slug FROM leads l JOIN lead_pipeline_stages st "
+                    "ON st.id = l.pipeline_stage_id WHERE l.id = :l"
+                ),
+                {"l": str(lead)},
+            )
+        ).scalar_one()
+    assert slug == "qualified"
+    mov = [
+        a for a in await _actividades(webhook_tenant, lead) if a.activity_type == "stage_changed"
+    ]
+    assert len(mov) == 1
+    assert mov[0].user_id is None
+    assert mov[0].metadata["automatic"] is True
+    assert mov[0].metadata["to_stage"] == "qualified"
