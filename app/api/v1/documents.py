@@ -131,7 +131,8 @@ async def upload_document(
             message=f"Tipo de archivo no soportado: {file.content_type}",
         )
 
-    contents = await file.read()
+    # Leer como mucho un byte de mas basta para saber si se pasa.
+    contents = await file.read(MAX_FILE_SIZE + 1)
     if len(contents) > MAX_FILE_SIZE:
         raise AppException(
             status_code=400,

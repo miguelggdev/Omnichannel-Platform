@@ -154,9 +154,9 @@ def ingest_document(self: Any, document_id: str, client_id: str) -> dict[str, st
         # app.services.document_pipeline sin error (sino habria caido en el
         # except PipelineUnavailableError de arriba), asi que Python ya lo tiene
         # cacheado en sys.modules.
-        from app.services.document_pipeline import EmptyDocumentError
+        from app.services.document_pipeline import DocumentRejectedError, EmptyDocumentError
 
-        if isinstance(exc, EmptyDocumentError):
+        if isinstance(exc, (EmptyDocumentError, DocumentRejectedError)):
             # No se reintenta: el mismo archivo va a dar el mismo resultado vacio.
             logger.error("Documento %s sin contenido para RAG: %s", document_id, exc)
             run_isolated(_mark_document_failed(doc_uuid, client_uuid, str(exc)))

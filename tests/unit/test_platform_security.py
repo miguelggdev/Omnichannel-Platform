@@ -41,7 +41,9 @@ def test_fuera_de_produccion_se_avisa_del_entorno() -> None:
 
 
 def test_cors_con_comodin_es_un_fallo_y_con_localhost_en_produccion_un_aviso() -> None:
-    assert _estado(_ajustes(CORS_ORIGINS=["*"]))["cors"] == FAIL
+    # En produccion `Settings` ya no arranca con "*" (ADR-088); el panel lo sigue marcando
+    # como fallo en cualquier otro entorno.
+    assert _estado(_ajustes(APP_ENV="staging", CORS_ORIGINS=["*"]))["cors"] == FAIL
     assert _estado(_ajustes(CORS_ORIGINS=["http://localhost:3000"]))["cors"] == WARN
     assert (
         _estado(_ajustes(APP_ENV="development", CORS_ORIGINS=["http://localhost:3000"]))["cors"]

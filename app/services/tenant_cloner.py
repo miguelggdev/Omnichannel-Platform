@@ -52,6 +52,7 @@ from app.models.tag import Tag
 from app.models.tenant_template import TenantTemplate
 from app.models.token_budget import TokenBudget
 from app.models.user import User
+from app.services.branding import sin_logo_subido
 from app.services.storage import (
     StorageError,
     build_object_path,
@@ -206,7 +207,8 @@ class TenantCloner:
         self, session: AsyncSession, client_id: UUID
     ) -> dict[str, Any]:
         client = (await session.execute(select(Client).where(Client.id == client_id))).scalar_one()
-        return {"settings": client.settings, "theme_config": client.theme_config}
+        # Sin el logo subido: su ruta es del tenant de origen (ver `app/services/branding.py`).
+        return {"settings": client.settings, "theme_config": sin_logo_subido(client.theme_config)}
 
     async def instantiate(
         self,
@@ -245,7 +247,10 @@ class TenantCloner:
                     name=new_tenant_name,
                     slug=slug,
                     settings=config.get("client_settings", {}).get("settings", {}),
-                    theme_config=config.get("client_settings", {}).get("theme_config", {}),
+                    # Plantillas guardadas antes de ADR-088 pueden traer el logo del origen.
+                    theme_config=sin_logo_subido(
+                        config.get("client_settings", {}).get("theme_config", {})
+                    ),
                     is_active=True,
                 )
             )

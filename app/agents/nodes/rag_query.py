@@ -29,6 +29,7 @@ from app.core.config import get_settings
 from app.middleware.token_budget import TokenBudgetGuard
 from app.services.embedding import EmbeddingService
 from app.services.i18n import con_idioma
+from app.services.prompt_safety import REGLA_DATOS
 from app.services.rag import FEW_SHOT_TOP_K, RAGService
 
 logger = logging.getLogger(__name__)
@@ -126,11 +127,18 @@ async def rag_query_node(state: ConversationState) -> dict[str, Any]:
     modelo = state.get("model_to_use") or settings.model or get_settings().OPENAI_CHAT_MODEL
     llm = get_chat_model(modelo, temperature=settings.temperature)
 
-    mensajes: list[dict[str, str]] = []
-    sistema = con_idioma(settings.system_prompt, state.get("detected_language"))
-    if sistema:
-        mensajes.append({"role": "system", "content": sistema})
-    mensajes.append({"role": "user", "content": prompt})
+    # Rol `system`: el prompt del tenant, las reglas de grounding y la regla de datos no
+    # confiables. Rol `user`: solo los bloques de datos (fragmentos, ejemplos, pregunta).
+    sistema = con_idioma(
+        "\n\n".join(
+            p for p in (settings.system_prompt, RAGService.REGLAS_GROUNDING, REGLA_DATOS) if p
+        ),
+        state.get("detected_language"),
+    )
+    mensajes: list[dict[str, str]] = [
+        {"role": "system", "content": sistema},
+        {"role": "user", "content": prompt},
+    ]
 
     respuesta = await llm.ainvoke(mensajes)
     texto = response_text(respuesta).strip()

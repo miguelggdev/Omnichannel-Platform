@@ -40,6 +40,7 @@ from pydantic import TypeAdapter, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import Settings, get_settings
+from app.core.rate_limit import client_ip, dentro_del_limite
 from app.schemas.webchat import (
     ButtonReplyFrame,
     HelloFrame,
@@ -217,7 +218,12 @@ async def _ingerir(
 
 
 async def _leer(
-    websocket: WebSocket, client_id: UUID, visitor_id: str, nombre: str | None, settings: Settings
+    websocket: WebSocket,
+    client_id: UUID,
+    visitor_id: str,
+    nombre: str | None,
+    settings: Settings,
+    ip: str = "unknown",
 ) -> None:
     """Lee frames del visitante hasta que se desconecte, se agote el tiempo o falle.
 
@@ -227,6 +233,7 @@ async def _leer(
         visitor_id: Visitante autenticado.
         nombre: Nombre dado en el `hello`.
         settings: Configuracion.
+        ip: IP del visitante, para el limite por IP.
     """
     while True:
         try:
@@ -262,8 +269,12 @@ async def _leer(
                 frame_de_error("message_too_long", "El mensaje es demasiado largo")
             )
             continue
+        # Por visitante y por IP: un visitante nuevo por conexion (sin sesion) no reinicia el
+        # contador de la IP.
         if not await _dentro_del_limite(
             client_id, visitor_id, settings.WEBCHAT_MAX_MESSAGES_PER_MINUTE
+        ) or not await dentro_del_limite(
+            f"webchat-ip:{client_id}:{ip}", settings.WEBCHAT_MAX_MESSAGES_PER_IP_PER_MINUTE, 60
         ):
             await websocket.send_json(
                 frame_de_error("rate_limited", "Demasiados mensajes, espera un momento")
@@ -349,10 +360,23 @@ async def webchat_endpoint(websocket: WebSocket, channel_token: str) -> None:
         await websocket.close(code=CLOSE_HELLO_INVALIDO)
         return
 
+    ip = client_ip(websocket)
     visitor_id = verificar_sesion(hello.session, client_id)
     if visitor_id is not None:
         token = hello.session
     else:
+        # Cada sesion nueva es un visitante nuevo con su propio limite: sin tope por IP, un
+        # script abria una conexion por mensaje y nunca llegaba al limite por visitante.
+        if not await dentro_del_limite(
+            f"webchat-sesion-ip:{client_id}:{ip}",
+            settings.WEBCHAT_MAX_SESSIONS_PER_IP_PER_HOUR,
+            3600,
+        ):
+            await websocket.send_json(
+                frame_de_error("rate_limited", "Demasiadas sesiones nuevas, espera un rato")
+            )
+            await websocket.close(code=CLOSE_DEMASIADAS_CONEXIONES)
+            return
         sesion = emitir_sesion(client_id)
         visitor_id, token = sesion.visitor_id, sesion.token
         # Un `last_message_id` sin sesion valida no da derecho a recuperar nada.
@@ -382,7 +406,7 @@ async def webchat_endpoint(websocket: WebSocket, channel_token: str) -> None:
 
         ya_enviados = frozenset(str(f["message_id"]) for f in perdidos)
         tareas = [
-            asyncio.create_task(_leer(websocket, client_id, visitor_id, hello.name, settings)),
+            asyncio.create_task(_leer(websocket, client_id, visitor_id, hello.name, settings, ip)),
             asyncio.create_task(_reenviar(websocket, pubsub, ya_enviados)),
         ]
         hechas, _ = await asyncio.wait(tareas, return_when=asyncio.FIRST_COMPLETED)

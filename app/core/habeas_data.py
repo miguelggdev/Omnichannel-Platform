@@ -57,6 +57,8 @@ from app.models.clinical_record import (
     PatientConsent,
     fin_de_retencion,
 )
+from app.models.contact import Contact
+from app.services.tenant_refs import existe_en_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -259,6 +261,12 @@ class HabeasDataCompliance:
             raise HabeasDataError(f"Categoria invalida. Validas: {list(SENSITIVE_DATA_CATEGORIES)}")
         tipo, _ = normalizar_documento(document_type, document_number)
         hash_documento = hash_paciente(client_id, document_type, document_number)
+        # La FK de `contact_id` se comprueba sin RLS: un id de otro tenant pasaria y quedaria
+        # un consentimiento enlazado a un contacto ajeno.
+        if contact_id is not None and not await existe_en_tenant(
+            session, Contact, client_id, contact_id
+        ):
+            raise HabeasDataError("El contacto no existe")
 
         vigente = await _consentimiento_vigente(session, client_id, hash_documento, data_category)
         if vigente is not None:

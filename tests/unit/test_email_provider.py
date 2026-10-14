@@ -456,6 +456,30 @@ def _basic(secreto: str) -> str:
     return "Basic " + base64.b64encode(secreto.encode()).decode()
 
 
+class TestEntradasHostiles:
+    """El parseo de un email de cualquiera no puede costar tiempo cuadratico."""
+
+    def test_muchos_script_sin_cerrar_es_lineal(self) -> None:
+        import time
+
+        html = "<script>" * 20_000 + "hola"
+        inicio = time.perf_counter()
+        assert email_module._html_a_texto(html) == ""
+        assert time.perf_counter() - inicio < 1
+
+    def test_quita_script_y_style_y_conserva_el_resto(self) -> None:
+        html = "<p>Hola</p><SCRIPT>alert(1)</script ><style>p{}</STYLE>adios"
+        assert email_module._html_a_texto(html) == "Hola\nadios"
+
+    def test_muchos_divisores_de_outlook_es_lineal(self) -> None:
+        import time
+
+        texto = "Hola\n" + "_" * 12 + "\n" + ("_" * 12 + "\n") * 50_000
+        inicio = time.perf_counter()
+        email_module.recortar_cita(texto)
+        assert time.perf_counter() - inicio < 1
+
+
 class TestValidateSignature:
     """El Inbound Parse no va firmado: se autentica con Basic auth en la URL."""
 

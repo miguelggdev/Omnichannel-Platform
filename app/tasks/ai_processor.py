@@ -77,6 +77,11 @@ def _initial_state(
     Returns:
         Estado completo, con todos los campos inicializados.
     """
+    # Un mensaje enorme encarece cada nodo del grafo (OWASP LLM10): se recorta al entrar.
+    maximo = get_settings().AI_MAX_INPUT_CHARS
+    texto = message_data.get("text")
+    if isinstance(texto, str) and len(texto) > maximo:
+        message_data = {**message_data, "text": texto[:maximo]}
     return ConversationState(
         client_id=client_id,
         conversation_id=conversation_id,

@@ -57,7 +57,8 @@ def _preparar(
     Returns:
         Tupla `(sesion, redis)` para inspeccionar en el test.
     """
-    sesion = FakeSession(resultados=[budget])
+    # Primero el INSERT ... ON CONFLICT que asegura la fila del mes; despues el SELECT.
+    sesion = FakeSession(resultados=[None, budget])
     parchear_tenant_session(monkeypatch, nodo, sesion)
     fake_redis = redis or FakeRedis()
     monkeypatch.setattr(nodo, "get_redis", lambda: fake_redis)
@@ -220,8 +221,9 @@ class TestRegistroDeConsumo:
         assert logs[0].total_tokens == 150
         assert logs[0].operation == "rag_query"
 
-        # El UPDATE es el unico statement que pasa por session.execute() en este flujo.
-        [update_stmt] = sesion.executed
+        # Antes del UPDATE se asegura la fila del mes (sin ella el UPDATE no sumaba nada).
+        [insert_mes, update_stmt] = sesion.executed
+        assert "ON CONFLICT (client_id, month) DO NOTHING" in str(insert_mes)
         parametros = update_stmt.compile().params
         assert parametros["used_tokens_1"] == 150
         assert parametros["client_id_1"] == client_id

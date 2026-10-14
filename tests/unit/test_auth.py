@@ -25,6 +25,7 @@ from app.core.security import (
     decode_jwt,
     hash_password,
 )
+from tests.unit.rate_limit_doubles import FakeRedis
 
 
 def _make_user_mock(
@@ -229,6 +230,14 @@ async def client():
 @asynccontextmanager
 async def _noop_lifespan(app):
     yield
+
+
+@pytest.fixture(autouse=True)
+def redis_limites(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
+    """Redis en memoria para los limites de login: cada test empieza sin intentos."""
+    doble = FakeRedis()
+    monkeypatch.setattr("app.core.rate_limit.get_redis", lambda: doble)
+    return doble
 
 
 class TestHealthEndpoint:
@@ -684,3 +693,142 @@ class TestRefreshEndpoint:
 
         assert resp.status_code == 401
         assert resp.json()["error_code"] == "INVALID_TOKEN"
+
+
+class TestLimitesDeLogin:
+    """Fuerza bruta: limite por IP y bloqueo temporal del email tras varios fallos (ADR-088)."""
+
+    @pytest.mark.asyncio
+    async def test_tras_n_fallos_el_email_queda_bloqueado_sin_llegar_a_bcrypt(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "LOGIN_MAX_FAILURES_PER_EMAIL", 3)
+        cuerpo = {"email": "admin@tenant.com", "password": "WrongPassword99"}
+        with _login_falso(_fila_auth(password="SecurePassword123")):
+            codigos = [
+                (await client.post("/api/v1/auth/login", json=cuerpo)).status_code for _ in range(3)
+            ]
+            with patch("app.api.v1.auth._verificar_password") as bcrypt:
+                bloqueado = await client.post(
+                    "/api/v1/auth/login",
+                    json={"email": "ADMIN@tenant.com", "password": "SecurePassword123"},
+                )
+
+        assert codigos == [401, 401, 401]
+        assert bloqueado.status_code == 429
+        assert bloqueado.json()["error_code"] == "RATE_LIMITED"
+        bcrypt.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_el_bloqueo_es_por_email_no_global(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "LOGIN_MAX_FAILURES_PER_EMAIL", 1)
+        with _login_falso(_fila_auth(password="SecurePassword123")):
+            await client.post(
+                "/api/v1/auth/login",
+                json={"email": "otro@tenant.com", "password": "WrongPassword99"},
+            )
+            resp = await client.post(
+                "/api/v1/auth/login",
+                json={"email": "admin@tenant.com", "password": "SecurePassword123"},
+            )
+
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_un_login_correcto_borra_los_fallos(
+        self, client: AsyncClient, redis_limites: FakeRedis
+    ) -> None:
+        with _login_falso(_fila_auth(password="SecurePassword123")):
+            await client.post(
+                "/api/v1/auth/login",
+                json={"email": "admin@tenant.com", "password": "WrongPassword99"},
+            )
+            assert any(k.startswith("ratelimit:login-fallos:") for k in redis_limites.datos)
+            await client.post(
+                "/api/v1/auth/login",
+                json={"email": "admin@tenant.com", "password": "SecurePassword123"},
+            )
+
+        assert not any(k.startswith("ratelimit:login-fallos:") for k in redis_limites.datos)
+
+    @pytest.mark.asyncio
+    async def test_el_email_no_se_guarda_en_claro_en_redis(
+        self, client: AsyncClient, redis_limites: FakeRedis
+    ) -> None:
+        with _login_falso(None):
+            await client.post(
+                "/api/v1/auth/login",
+                json={"email": "secreto@tenant.com", "password": "WrongPassword99"},
+            )
+
+        assert redis_limites.datos
+        assert not any("secreto" in k for k in redis_limites.datos)
+
+    @pytest.mark.asyncio
+    async def test_limite_por_ip(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "LOGIN_MAX_PER_IP_PER_MINUTE", 2)
+        with _login_falso(None):
+            codigos = [
+                (
+                    await client.post(
+                        "/api/v1/auth/login",
+                        json={"email": f"u{i}@tenant.com", "password": "WrongPassword99"},
+                    )
+                ).status_code
+                for i in range(3)
+            ]
+
+        assert codigos == [401, 401, 429]
+
+    @pytest.mark.asyncio
+    async def test_sin_redis_el_login_sigue_funcionando(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Falla abierto: una caida de Redis no deja a todos fuera."""
+        monkeypatch.setattr("app.core.rate_limit.get_redis", lambda: FakeRedis(caido=True))
+        with _login_falso(_fila_auth(password="SecurePassword123")):
+            resp = await client.post(
+                "/api/v1/auth/login",
+                json={"email": "admin@tenant.com", "password": "SecurePassword123"},
+            )
+
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_limite_de_refresh_por_ip(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "REFRESH_MAX_PER_IP_PER_MINUTE", 1)
+        await client.post("/api/v1/auth/refresh", json={"refresh_token": "x"})
+        resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": "x"})
+
+        assert resp.status_code == 429
+
+
+class TestErroresDeValidacion:
+    @pytest.mark.asyncio
+    async def test_el_422_no_devuelve_la_contrasena(self, client: AsyncClient) -> None:
+        """El handler de FastAPI repetia el `input`: un email mal formado devolvia el password."""
+        resp = await client.post(
+            "/api/v1/auth/login",
+            json={"email": "no-es-un-email", "password": "MiPasswordSecreta123"},
+        )
+
+        assert resp.status_code == 422
+        assert "MiPasswordSecreta123" not in resp.text
+        cuerpo = resp.json()
+        assert cuerpo["error_code"] == "VALIDATION_ERROR"
+        assert cuerpo["message"].startswith("email:")
+        assert all(set(d) == {"loc", "msg", "type"} for d in cuerpo["detail"])

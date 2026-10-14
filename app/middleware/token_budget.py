@@ -6,7 +6,8 @@ LLM (`intent_router`, `rag_query`) despues de cada respuesta.
 Cada registro hace tres cosas, en este orden:
 
 1. Escribe una fila en `token_usage_logs` (detalle por llamada).
-2. Suma el consumo a `token_budgets` del mes en curso, si el tenant tiene fila.
+2. Suma el consumo a `token_budgets` del mes en curso (creando la fila del mes si
+   falta, ADR-088: antes, sin fila, el consumo no se contaba y no habia limite).
 3. Invalida la cache de Redis que lee `token_budget_check_node`, para que el
    siguiente mensaje vea el consumo real y no el de hasta 60s atras.
 
@@ -34,7 +35,7 @@ from uuid import UUID
 
 from sqlalchemy import update
 
-from app.agents.nodes.token_budget import cache_key
+from app.agents.nodes.token_budget import asegurar_presupuesto_del_mes, cache_key
 from app.core.database import tenant_session
 from app.core.metrics import record_tokens
 from app.models.token_budget import TokenBudget
@@ -138,6 +139,7 @@ class TokenBudgetGuard:
                 # ultimo pisa al otro, subcontando el consumo real. El incremento
                 # tiene que pasar dentro de la sentencia SQL, no en Python.
                 month = datetime.now(timezone.utc).strftime("%Y-%m")
+                await asegurar_presupuesto_del_mes(session, tenant_id, month)
                 await session.execute(
                     update(TokenBudget)
                     .where(TokenBudget.client_id == tenant_id, TokenBudget.month == month)

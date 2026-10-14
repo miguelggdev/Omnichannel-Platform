@@ -191,8 +191,13 @@ class TestConContexto:
         await nodo.rag_query_node(estado())
 
         mensajes = modelo.llamadas[0]
-        assert mensajes[0] == {"role": "system", "content": "Eres formal."}
-        assert mensajes[1]["content"] == "PROMPT CON CONTEXTO"
+        assert mensajes[0]["role"] == "system"
+        # El prompt del tenant va primero; despues las reglas de grounding y de datos no
+        # confiables, que ya no viajan en el mensaje del usuario (auditoria LLM01).
+        assert mensajes[0]["content"].startswith("Eres formal.\n\n")
+        assert nodo.RAGService.REGLAS_GROUNDING in mensajes[0]["content"]
+        assert "DATOS no confiables" in mensajes[0]["content"]
+        assert mensajes[1] == {"role": "user", "content": "PROMPT CON CONTEXTO"}
 
     async def test_respeta_el_modelo_degradado_del_estado(
         self, monkeypatch: pytest.MonkeyPatch

@@ -40,6 +40,7 @@ from app.core.events import EVENT_APPOINTMENT_CREATED, EventEmitter
 from app.models.contact import Contact
 from app.models.service_type import Appointment, ServiceType
 from app.services.calendar import GoogleCalendarService
+from app.services.channel_identity import identidad_verificada
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,66 @@ def _contact_id(config: RunnableConfig) -> UUID:
         UUID del contacto real de la conversación en curso.
     """
     return UUID(config["configurable"]["contact_id"])
+
+
+#: Respuesta de las tools que leen o cambian citas existentes en un canal sin identidad.
+CANAL_NO_VERIFICADO = (
+    "Por este canal no puedo consultar, cambiar ni cancelar citas porque no permite confirmar "
+    "quien escribe. Escribenos por WhatsApp o pide ayuda a un agente."
+)
+
+
+def _canal_verificado(config: RunnableConfig) -> bool:
+    """Si el canal identifica de verdad al contacto (un `From` de email o un caller ID no).
+
+    Crear una cita no lo exige (es para quien escribe); ver, mover o cancelar las suyas si:
+    un remitente suplantado podria leer o anular las citas de otra persona (auditoria de
+    seguridad, LLM06).
+    """
+    return identidad_verificada(config.get("configurable", {}).get("channel"))
+
+
+async def _cita_del_contacto(
+    session: Any, client_id: UUID, contact_id: UUID, appointment_id: str
+) -> Appointment | None:
+    """La cita con ese id **del contacto de la conversacion**, o `None`.
+
+    El id lo escribe el modelo, que lo copia de lo que dice el cliente: sin filtrar por
+    contacto, cualquiera que conociera el UUID de una cita ajena del mismo tenant podia
+    moverla o cancelarla (IDOR via LLM). Un id mal formado tampoco revienta la tool.
+    """
+    try:
+        cita_id = UUID(str(appointment_id).strip())
+    except ValueError:
+        return None
+    cita: Appointment | None = (
+        await session.execute(
+            select(Appointment).where(
+                Appointment.id == cita_id,
+                Appointment.client_id == client_id,
+                Appointment.contact_id == contact_id,
+            )
+        )
+    ).scalar_one_or_none()
+    return cita
+
+
+def _tramos_nuevos(
+    viejo_inicio: datetime, viejo_fin: datetime, nuevo_inicio: datetime, nuevo_fin: datetime
+) -> list[tuple[datetime, datetime]]:
+    """Partes del horario nuevo que la propia cita no ocupa ya.
+
+    Al mover una cita media hora, el horario nuevo se solapa con el viejo: preguntar a Calendar
+    por el rango entero daria "ocupado" por la propia cita.
+    """
+    if nuevo_fin <= viejo_inicio or nuevo_inicio >= viejo_fin:
+        return [(nuevo_inicio, nuevo_fin)]
+    tramos = []
+    if nuevo_inicio < viejo_inicio:
+        tramos.append((nuevo_inicio, viejo_inicio))
+    if nuevo_fin > viejo_fin:
+        tramos.append((viejo_fin, nuevo_fin))
+    return tramos
 
 
 def _localizar(momento: datetime, timezone: str) -> datetime:
@@ -286,7 +347,10 @@ async def modify_appointment(
         appointment_id: UUID de la cita a modificar.
         new_datetime_iso: Nueva fecha y hora en formato ISO 8601.
     """
+    if not _canal_verificado(config):
+        return CANAL_NO_VERIFICADO
     client_id = _client_id(config)
+    contact_id = _contact_id(config)
 
     try:
         new_start = datetime.fromisoformat(new_datetime_iso)
@@ -294,10 +358,14 @@ async def modify_appointment(
         return f"'{new_datetime_iso}' no es una fecha/hora ISO 8601 válida."
 
     async with tenant_session(client_id) as session:
-        stmt = select(Appointment).where(
-            Appointment.id == UUID(appointment_id), Appointment.client_id == client_id
+        # El mismo candado por tenant que `create_appointment` (BUG-023): mover una cita es
+        # reservar un horario, y sin el recheck dos conversaciones podian solaparse.
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:clave))").bindparams(
+                clave=f"appointments:{client_id}"
+            )
         )
-        appointment = (await session.execute(stmt)).scalar_one_or_none()
+        appointment = await _cita_del_contacto(session, client_id, contact_id, appointment_id)
         if appointment is None:
             return "No encontré esa cita."
         if appointment.status == "cancelled":
@@ -317,6 +385,12 @@ async def modify_appointment(
         new_end = new_start + timedelta(
             minutes=service_type.duration_minutes if service_type else 60
         )
+
+        for inicio, fin in _tramos_nuevos(
+            appointment.starts_at, appointment.ends_at, new_start, new_end
+        ):
+            if await calendar.has_conflict(inicio, fin):
+                return "Ese horario ya no está disponible. ¿Quieres que revise otros horarios?"
 
         if appointment.google_event_id:
             await calendar.modify_event(
@@ -341,13 +415,13 @@ async def cancel_appointment(appointment_id: str, reason: str, config: RunnableC
         appointment_id: UUID de la cita a cancelar.
         reason: Motivo de la cancelación.
     """
+    if not _canal_verificado(config):
+        return CANAL_NO_VERIFICADO
     client_id = _client_id(config)
+    contact_id = _contact_id(config)
 
     async with tenant_session(client_id) as session:
-        stmt = select(Appointment).where(
-            Appointment.id == UUID(appointment_id), Appointment.client_id == client_id
-        )
-        appointment = (await session.execute(stmt)).scalar_one_or_none()
+        appointment = await _cita_del_contacto(session, client_id, contact_id, appointment_id)
         if appointment is None:
             return "No encontré esa cita."
         if appointment.status == "cancelled":
@@ -358,7 +432,7 @@ async def cancel_appointment(appointment_id: str, reason: str, config: RunnableC
             await calendar.cancel_event(appointment.google_event_id)
 
         appointment.status = "cancelled"
-        appointment.cancelled_reason = reason
+        appointment.cancelled_reason = (reason or "")[:500]
 
     return f"Cita cancelada. Motivo registrado: {reason}. Puedo agendar una nueva si lo deseas."
 
@@ -371,6 +445,8 @@ async def list_appointments(date_from: str, date_to: str, config: RunnableConfig
         date_from: Fecha de inicio en formato YYYY-MM-DD.
         date_to: Fecha de fin en formato YYYY-MM-DD.
     """
+    if not _canal_verificado(config):
+        return CANAL_NO_VERIFICADO
     client_id = _client_id(config)
     contact_id = _contact_id(config)
 

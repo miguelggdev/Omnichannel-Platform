@@ -26,6 +26,7 @@ from app.core.database import tenant_session
 from app.models.client import Client
 from app.services.clinical_privacy import CONTENIDO_CLINICO_PROTEGIDO
 from app.services.i18n import DEFAULT_LANGUAGE, get_system_message, normalizar_idioma
+from app.services.prompt_safety import sanear_respuesta
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ async def respond_node(state: ConversationState) -> dict[str, Any]:
     contact_id = UUID(state["contact_id"])
     channel = state["channel"]
 
-    texto = (state.get("response_text") or "").strip()
+    texto = sanear_respuesta(state.get("response_text"))
     if not texto:
         texto = await _texto_por_intent(
             client_id, state.get("intent"), state.get("detected_language")

@@ -707,6 +707,35 @@ class TestWorkerDeIngesta:
         assert len(marcados) == 1
         assert "no genero ningun chunk" in marcados[0][2]
 
+    def test_documento_rechazado_por_un_tope_marca_failed_sin_reintentar(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Una bomba zip o un PDF enorme no se reprocesa en cada reintento (ADR-088)."""
+        from app.services.document_pipeline import DocumentRejectedError
+
+        async def rechazado(*args: Any, **kwargs: Any) -> None:
+            raise DocumentRejectedError("El archivo descomprime a un tamano no admitido")
+
+        marcados: list[tuple[Any, ...]] = []
+
+        async def marcar(document_id: Any, client_id: Any, error: str) -> None:
+            marcados.append((document_id, client_id, error))
+
+        monkeypatch.setattr(ingestion_module, "_run_pipeline", rechazado)
+        monkeypatch.setattr(ingestion_module, "_mark_document_failed", marcar)
+
+        class TaskSelf:
+            request = type("R", (), {"retries": 0})()
+            max_retries = 2
+
+            def retry(self, exc: Exception | None = None) -> Exception:
+                raise AssertionError("no debe reintentarse")
+
+        resultado = self.cuerpo(TaskSelf(), str(uuid.uuid4()), str(uuid.uuid4()))
+
+        assert resultado == {"status": "failed"}
+        assert "descomprime" in marcados[0][2]
+
     def test_timeout_marca_failed_sin_reintentar(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Si no cupo en 9 minutos, otro intento tampoco va a caber."""
         from celery.exceptions import SoftTimeLimitExceeded

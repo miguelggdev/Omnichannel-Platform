@@ -29,6 +29,7 @@ from typing import Any
 
 from app.agents.nodes._llm import extract_usage, get_chat_model, response_text
 from app.middleware.token_budget import TokenBudgetGuard
+from app.services.prompt_safety import REGLA_DATOS, Delimitador
 
 logger = logging.getLogger(__name__)
 
@@ -129,19 +130,26 @@ async def responder_con_tools(
             continue
         resultados.append(str(resultado))
 
+    # Los resultados repiten datos que no controla el negocio (nombres de perfil de otros
+    # contactos, razon social de la DIAN, lo que el propio cliente dicto): van como DATOS en un
+    # bloque delimitado del rol `user`, nunca con la autoridad del rol `system` (LLM01).
+    delimitador = Delimitador()
+    datos = "\n\n".join(
+        delimitador.bloque("resultado_herramienta", resultado, 4000) for resultado in resultados
+    )
     llm_final = get_chat_model(modelo, temperature=temperatura)
     final = await llm_final.ainvoke(
         [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": mensaje},
             {
                 "role": "system",
                 "content": (
-                    "Resultados de las operaciones realizadas:\n" + "\n\n".join(resultados) + "\n\n"
-                    "Redacta la respuesta para el usuario a partir de estos resultados. "
-                    "No inventes datos que no aparezcan arriba."
+                    f"{system_prompt}\n\n{REGLA_DATOS}\n\nRedacta la respuesta para el usuario a "
+                    "partir de los resultados de las operaciones. No inventes datos que no "
+                    "aparezcan en ellos."
                 ),
             },
+            {"role": "user", "content": mensaje},
+            {"role": "user", "content": "Resultados de las operaciones realizadas:\n" + datos},
         ]
     )
     await _registrar_consumo(final, client_id, conversation_id, modelo, operacion)

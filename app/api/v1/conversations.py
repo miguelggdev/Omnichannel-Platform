@@ -303,6 +303,20 @@ async def change_conversation_status(
     async with tenant_session(client_id) as session:
         conversation = await _get_conversation_or_404(session, conversation_id, client_id)
 
+        # Un `agent` solo mueve las suyas o las libres, como al responder (POST /messages):
+        # sin esto podia quitarle la conversacion a un companero o cerrarsela.
+        asignada = conversation.assigned_user_id
+        if (
+            user["role"] == "agent"
+            and asignada is not None
+            and str(asignada) != str(user["user_id"])
+        ):
+            raise AppException(
+                status_code=403,
+                error_code=FORBIDDEN,
+                message="La conversacion esta asignada a otra persona del equipo",
+            )
+
         # Hay que guardarlo antes: despues de transition() el objeto ya trae el
         # estado nuevo y devolverlo como "previous" seria mentir.
         estado_anterior = conversation.status

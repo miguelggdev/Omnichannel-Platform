@@ -137,7 +137,8 @@ class MetaProvider(MessagingProvider):
         Returns:
             True si la firma coincide.
         """
-        if not signature.startswith("sha256="):
+        # Sin secreto configurado, el HMAC con clave vacia lo puede calcular cualquiera.
+        if not secret or not signature.startswith("sha256="):
             return False
         expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
         return hmac.compare_digest(signature[len("sha256=") :], expected)
@@ -181,7 +182,9 @@ class MetaProvider(MessagingProvider):
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{self._base_url}/me/messages",
-                params={"access_token": channel_config["page_access_token"]},
+                # En la cabecera, no en la URL: la URL acaba en logs y en el texto de
+                # `HTTPStatusError` (raise_for_status) con el token dentro.
+                headers={"Authorization": f"Bearer {channel_config['page_access_token']}"},
                 json=message_payload,
                 timeout=30.0,
             )
@@ -228,7 +231,9 @@ class MetaProvider(MessagingProvider):
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{self._base_url}/me/messages",
-                params={"access_token": channel_config["page_access_token"]},
+                # En la cabecera, no en la URL: la URL acaba en logs y en el texto de
+                # `HTTPStatusError` (raise_for_status) con el token dentro.
+                headers={"Authorization": f"Bearer {channel_config['page_access_token']}"},
                 json=message_payload,
                 timeout=30.0,
             )

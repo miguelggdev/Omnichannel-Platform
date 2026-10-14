@@ -103,6 +103,8 @@ services:
       - WEBCHAT_MAX_MESSAGE_CHARS=${WEBCHAT_MAX_MESSAGE_CHARS:-4000}
       - WEBCHAT_MAX_FRAME_BYTES=${WEBCHAT_MAX_FRAME_BYTES:-16384}
       - WEBCHAT_MAX_CONNECTIONS_PER_VISITOR=${WEBCHAT_MAX_CONNECTIONS_PER_VISITOR:-5}
+      - WEBCHAT_MAX_MESSAGES_PER_IP_PER_MINUTE=${WEBCHAT_MAX_MESSAGES_PER_IP_PER_MINUTE:-60}
+      - WEBCHAT_MAX_SESSIONS_PER_IP_PER_HOUR=${WEBCHAT_MAX_SESSIONS_PER_IP_PER_HOUR:-30}
       - WEBCHAT_HELLO_TIMEOUT_SECONDS=${WEBCHAT_HELLO_TIMEOUT_SECONDS:-10}
       - WEBCHAT_IDLE_TIMEOUT_SECONDS=${WEBCHAT_IDLE_TIMEOUT_SECONDS:-120}
       - WEBCHAT_REPLAY_LIMIT=${WEBCHAT_REPLAY_LIMIT:-50}
@@ -147,7 +149,9 @@ services:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`api.localhost`)"
+      # Sin /internal (metricas, health detallado): Prometheus y el healthcheck van por la red
+      # interna, y desde fuera no se debe ver el estado ni las metricas por tenant (ADR-088).
+      - "traefik.http.routers.api.rule=Host(`api.localhost`) && !PathPrefix(`/internal`)"
       - "traefik.http.routers.api.entrypoints=websecure"
       - "traefik.http.routers.api.tls=true"
       - "traefik.http.routers.api.middlewares=rate-limit@file,security-headers@file,compress@file"

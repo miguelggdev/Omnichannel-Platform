@@ -18,6 +18,7 @@ verificacion de Meta funciona, y solo el POST depende de la entrega de Dev A.
 Los tests sustituyen `_resolve_provider` para aislarse del proveedor real.
 """
 
+import hmac
 import json
 import logging
 from typing import Any
@@ -336,7 +337,12 @@ async def verify_webhook(provider: str, channel: str, request: Request) -> Respo
         expected = get_settings().META_WEBHOOK_VERIFY_TOKEN
 
         # `expected` vacio significa sin configurar: nunca debe validar por accidente.
-        if mode == "subscribe" and expected and token == expected:
+        if (
+            mode == "subscribe"
+            and expected
+            and token
+            and hmac.compare_digest(token.encode(), expected.encode())
+        ):
             return Response(content=challenge, media_type="text/plain")
 
         logger.warning("Verificacion de webhook Meta fallida (channel=%s)", channel)
