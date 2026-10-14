@@ -42,7 +42,7 @@ function pintar(ui: React.ReactElement) {
   const p = Buffer.from(JSON.stringify({ user_id: "u", client_id: MI_TENANT, email: "a@b.c", role: "super_admin" }))
     .toString("base64")
     .replace(/=+$/, "");
-  useAuthStore.getState().setTokens(`x.${p}.y`, "r");
+  useAuthStore.getState().setTokens(`x.${p}.y`);
   return render(<NextIntlClientProvider locale="es" messages={es}>{ui}</NextIntlClientProvider>);
 }
 

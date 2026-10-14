@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.config import get_settings
 from app.core.database import tenant_session
 from app.core.exceptions import CONFLICT, AppException
-from app.core.security import create_access_token, create_refresh_token, hash_password
+from app.core.security import create_access_token, hash_password
 from app.models.agent_config import AgentConfig
 from app.models.client import Client
 from app.models.token_budget import TokenBudget
@@ -134,7 +134,6 @@ async def register_new_client(payload: OnboardingRequest) -> OnboardingResponse:
         client_id=client_id,
         user_id=user_id,
         access_token=create_access_token(token_data),
-        refresh_token=create_refresh_token(token_data),
     )
 
 

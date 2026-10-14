@@ -16,4 +16,6 @@ def _limitador_en_memoria(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
     """
     doble = FakeRedis()
     monkeypatch.setattr("app.core.rate_limit.get_redis", lambda: doble)
+    # La rotacion de refresh tokens (ADR-089) marca cada uso en el mismo Redis.
+    monkeypatch.setattr("app.core.session_cookie.get_redis", lambda: doble)
     return doble

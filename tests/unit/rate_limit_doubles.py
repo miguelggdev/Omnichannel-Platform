@@ -1,4 +1,4 @@
-"""Doble de Redis para `app/core/rate_limit.py`: transaccion `SET NX EX` + `INCR`, `GET`, `DEL`."""
+"""Doble de Redis para los limites y la rotacion de sesiones: `SET NX EX` + `INCR`, `GET`, `DEL`."""
 
 from typing import Any
 
@@ -67,6 +67,19 @@ class FakeRedis:
         """Devuelve un pipeline; el limitador siempre lo pide transaccional."""
         assert transaction is True
         return FakePipeline(self)
+
+    async def set(
+        self, clave: str, valor: int, ex: int | None = None, nx: bool = False
+    ) -> bool | None:
+        """`SET` con `EX` y `NX` (la marca de uso de un refresh token)."""
+        if self.caido:
+            raise ConnectionError("redis caido")
+        if nx and clave in self.datos:
+            return None
+        self.datos[clave] = int(valor)
+        if ex is not None:
+            self.ttl[clave] = ex
+        return True
 
     async def get(self, clave: str) -> str | None:
         """`GET` con el valor como texto, como con `decode_responses=True`."""

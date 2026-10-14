@@ -78,15 +78,13 @@ class OnboardingResponse(BaseModel):
     Attributes:
         client_id: Tenant nuevo.
         user_id: Administrador creado.
-        access_token: JWT de acceso.
-        refresh_token: JWT de renovacion.
+        access_token: JWT de acceso. El refresh va en la cookie `httpOnly` (ADR-089).
         token_type: Siempre `bearer`.
     """
 
     client_id: UUID
     user_id: UUID
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"  # noqa: S105  # nosec B105
 
 

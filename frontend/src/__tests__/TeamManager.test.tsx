@@ -45,7 +45,7 @@ function tokenDe(role: UserRole): string {
 }
 
 function pintar(rol: UserRole = "admin") {
-  useAuthStore.getState().setTokens(tokenDe(rol), "r");
+  useAuthStore.getState().setTokens(tokenDe(rol));
   render(
     <NextIntlClientProvider locale="es" messages={es}>
       <TeamManager />

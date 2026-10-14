@@ -115,6 +115,10 @@ class _SesionDeLogin:
         """Devuelve la fila prefijada."""
         return self.fila
 
+    def scalar_one_or_none(self) -> int:
+        """`UPDATE ... RETURNING token_version` de `last_login_at`: version 0."""
+        return 0
+
 
 class _FilaRefresh:
     """Fila que devuelve `_REFRESH_LOOKUP`: estado actual de usuario y tenant."""
@@ -125,12 +129,14 @@ class _FilaRefresh:
         client_is_active: bool = True,
         role: str = "admin",
         email: str = "test@test.com",
+        token_version: int = 0,
     ) -> None:
         """Construye la fila con ambos activos, rol admin y el email de los tests."""
         self.user_is_active = user_is_active
         self.client_is_active = client_is_active
         self.role = role
         self.email = email
+        self.token_version = token_version
 
 
 class _SesionDeRefresh:
@@ -232,11 +238,26 @@ async def _noop_lifespan(app):
     yield
 
 
+async def _refrescar(client: AsyncClient, refresh: str):
+    """Llama a `/auth/refresh` con el refresh en su cookie, como el navegador."""
+    client.cookies.set("refresh_token", refresh)
+    return await client.post("/api/v1/auth/refresh")
+
+
+def _cookie_de_refresh(resp: object) -> str | None:
+    """Valor del `Set-Cookie: refresh_token=...` de una respuesta (vacio si se borra)."""
+    for cabecera in resp.headers.get_list("set-cookie"):  # type: ignore[attr-defined]
+        if cabecera.startswith("refresh_token="):
+            return cabecera.split(";", 1)[0].split("=", 1)[1].strip('"')
+    return None
+
+
 @pytest.fixture(autouse=True)
 def redis_limites(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
     """Redis en memoria para los limites de login: cada test empieza sin intentos."""
     doble = FakeRedis()
     monkeypatch.setattr("app.core.rate_limit.get_redis", lambda: doble)
+    monkeypatch.setattr("app.core.session_cookie.get_redis", lambda: doble)
     return doble
 
 
@@ -293,8 +314,17 @@ class TestLoginEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert "access_token" in data
-        assert "refresh_token" in data
         assert data["token_type"] == "bearer"
+        # El refresh va en una cookie que JavaScript no puede leer (ADR-089).
+        assert "refresh_token" not in data
+        cookie = next(
+            c for c in resp.headers.get_list("set-cookie") if c.startswith("refresh_token=")
+        )
+        atributos = cookie.lower()
+        assert "httponly" in atributos
+        assert "secure" in atributos
+        assert "samesite=strict" in atributos
+        assert "path=/api/v1/auth" in atributos
 
     @pytest.mark.asyncio
     async def test_login_una_sola_consulta_sin_contexto_de_tenant(
@@ -529,38 +559,31 @@ class TestRefreshEndpoint:
             "email": "test@test.com",
             "role": "admin",
         }
-        refresh = create_refresh_token(token_data)
+        refresh = create_refresh_token(token_data["user_id"], token_data["client_id"], 0)
 
         with patch("app.api.v1.auth.tenant_session", _refresh_falso(_FilaRefresh())):
-            resp = await client.post(
-                "/api/v1/auth/refresh",
-                json={"refresh_token": refresh},
-            )
+            resp = await _refrescar(client, refresh)
 
         assert resp.status_code == 200
         data = resp.json()
         assert "access_token" in data
-        assert data["refresh_token"] == refresh
+        assert "refresh_token" not in data
+        rotado = _cookie_de_refresh(resp)
+        assert rotado
+        assert rotado != refresh
 
     @pytest.mark.asyncio
     async def test_refresh_lleva_el_rol_actual_de_la_base_no_el_del_token_viejo(
         self, client: AsyncClient
     ) -> None:
         """Un admin degradado a agent no conserva el rol admin al refrescar."""
-        refresh = create_refresh_token(
-            {
-                "user_id": str(uuid.uuid4()),
-                "client_id": str(uuid.uuid4()),
-                "email": "viejo@test.com",
-                "role": "admin",
-            }
-        )
+        refresh = create_refresh_token(str(uuid.uuid4()), str(uuid.uuid4()), 0)
 
         with patch(
             "app.api.v1.auth.tenant_session",
             _refresh_falso(_FilaRefresh(role="agent", email="nuevo@test.com")),
         ):
-            resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
+            resp = await _refrescar(client, refresh)
 
         assert resp.status_code == 200
         claims = decode_jwt(resp.json()["access_token"])
@@ -575,13 +598,10 @@ class TestRefreshEndpoint:
             "email": "test@test.com",
             "role": "admin",
         }
-        refresh = create_refresh_token(token_data)
+        refresh = create_refresh_token(token_data["user_id"], token_data["client_id"], 0)
 
         with patch("app.api.v1.auth.tenant_session", _refresh_falso(None)):
-            resp = await client.post(
-                "/api/v1/auth/refresh",
-                json={"refresh_token": refresh},
-            )
+            resp = await _refrescar(client, refresh)
 
         assert resp.status_code == 401
         assert resp.json()["error_code"] == "INVALID_TOKEN"
@@ -595,15 +615,12 @@ class TestRefreshEndpoint:
             "email": "test@test.com",
             "role": "admin",
         }
-        refresh = create_refresh_token(token_data)
+        refresh = create_refresh_token(token_data["user_id"], token_data["client_id"], 0)
 
         with patch(
             "app.api.v1.auth.tenant_session", _refresh_falso(_FilaRefresh(user_is_active=False))
         ):
-            resp = await client.post(
-                "/api/v1/auth/refresh",
-                json={"refresh_token": refresh},
-            )
+            resp = await _refrescar(client, refresh)
 
         assert resp.status_code == 401
         assert resp.json()["error_code"] == "FORBIDDEN"
@@ -617,16 +634,13 @@ class TestRefreshEndpoint:
             "email": "test@test.com",
             "role": "admin",
         }
-        refresh = create_refresh_token(token_data)
+        refresh = create_refresh_token(token_data["user_id"], token_data["client_id"], 0)
 
         with patch(
             "app.api.v1.auth.tenant_session",
             _refresh_falso(_FilaRefresh(client_is_active=False)),
         ):
-            resp = await client.post(
-                "/api/v1/auth/refresh",
-                json={"refresh_token": refresh},
-            )
+            resp = await _refrescar(client, refresh)
 
         assert resp.status_code == 401
         assert resp.json()["error_code"] == "FORBIDDEN"
@@ -645,7 +659,7 @@ class TestRefreshEndpoint:
             "email": "test@test.com",
             "role": "admin",
         }
-        refresh = create_refresh_token(token_data)
+        refresh = create_refresh_token(token_data["user_id"], token_data["client_id"], 0)
         recibidos: list[dict] = []
         sentencias: list[str] = []
 
@@ -660,10 +674,7 @@ class TestRefreshEndpoint:
             yield _SesionEspia(_FilaRefresh())
 
         with patch("app.api.v1.auth.tenant_session", _cm):
-            resp = await client.post(
-                "/api/v1/auth/refresh",
-                json={"refresh_token": refresh},
-            )
+            resp = await _refrescar(client, refresh)
 
         assert resp.status_code == 200
         assert recibidos == [
@@ -686,10 +697,7 @@ class TestRefreshEndpoint:
         }
         access = create_access_token(token_data)
 
-        resp = await client.post(
-            "/api/v1/auth/refresh",
-            json={"refresh_token": access},
-        )
+        resp = await _refrescar(client, access)
 
         assert resp.status_code == 401
         assert resp.json()["error_code"] == "INVALID_TOKEN"
@@ -832,3 +840,154 @@ class TestErroresDeValidacion:
         assert cuerpo["error_code"] == "VALIDATION_ERROR"
         assert cuerpo["message"].startswith("email:")
         assert all(set(d) == {"loc", "msg", "type"} for d in cuerpo["detail"])
+
+
+class TestSesionPorCookie:
+    """Refresh en cookie `httpOnly`, de un solo uso, revocable (ADR-089)."""
+
+    def _ids(self) -> tuple[str, str]:
+        return str(uuid.uuid4()), str(uuid.uuid4())
+
+    @pytest.mark.asyncio
+    async def test_sin_cookie_es_401(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/auth/refresh")
+
+        assert resp.status_code == 401
+        assert resp.json()["error_code"] == "INVALID_TOKEN"
+
+    @pytest.mark.asyncio
+    async def test_el_refresh_en_el_cuerpo_ya_no_se_acepta(self, client: AsyncClient) -> None:
+        user_id, client_id = self._ids()
+        refresh = create_refresh_token(user_id, client_id, 0)
+
+        with patch("app.api.v1.auth.tenant_session", _refresh_falso(_FilaRefresh())):
+            resp = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
+
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_la_rotacion_entrega_un_refresh_nuevo_con_la_misma_version(
+        self, client: AsyncClient
+    ) -> None:
+        user_id, client_id = self._ids()
+        refresh = create_refresh_token(user_id, client_id, 4)
+
+        with patch("app.api.v1.auth.tenant_session", _refresh_falso(_FilaRefresh(token_version=4))):
+            resp = await _refrescar(client, refresh)
+
+        nuevo = decode_jwt(_cookie_de_refresh(resp) or "")
+        assert resp.status_code == 200
+        assert nuevo["ver"] == 4
+        assert nuevo["jti"] != decode_jwt(refresh)["jti"]
+
+    @pytest.mark.asyncio
+    async def test_una_version_vieja_no_refresca_y_borra_la_cookie(
+        self, client: AsyncClient
+    ) -> None:
+        """Tras un logout de todos los dispositivos o un cambio de contrasena."""
+        user_id, client_id = self._ids()
+        refresh = create_refresh_token(user_id, client_id, 0)
+
+        with patch("app.api.v1.auth.tenant_session", _refresh_falso(_FilaRefresh(token_version=1))):
+            resp = await _refrescar(client, refresh)
+
+        assert resp.status_code == 401
+        assert _cookie_de_refresh(resp) == ""
+
+    @pytest.mark.asyncio
+    async def test_reusar_un_refresh_ya_rotado_revoca_todas_las_sesiones(
+        self, client: AsyncClient, redis_limites: FakeRedis, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Indicio de robo: el refresh viejo vuelve a llegar fuera del margen."""
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "REFRESH_REUSE_GRACE_SECONDS", 0)
+        user_id, client_id = self._ids()
+        refresh = create_refresh_token(user_id, client_id, 0)
+        sentencias: list[str] = []
+
+        class _SesionEspia(_SesionDeRefresh):
+            async def execute(self, stmt: object = None, params: object = None):
+                sentencias.append(str(stmt))
+                return await super().execute(stmt, params)
+
+        @asynccontextmanager
+        async def _cm(client_id, user_id=None):
+            yield _SesionEspia(_FilaRefresh())
+
+        with patch("app.api.v1.auth.tenant_session", _cm):
+            primero = await _refrescar(client, refresh)
+            # Que el primer uso ya quede fuera del margen.
+            jti = decode_jwt(refresh)["jti"]
+            redis_limites.datos[f"refresh-usado:{jti}"] -= 60
+            segundo = await _refrescar(client, refresh)
+
+        assert primero.status_code == 200
+        assert segundo.status_code == 401
+        assert any("token_version = token_version + 1" in s for s in sentencias)
+
+    @pytest.mark.asyncio
+    async def test_dos_pestanas_a_la_vez_no_se_tratan_como_robo(self, client: AsyncClient) -> None:
+        user_id, client_id = self._ids()
+        refresh = create_refresh_token(user_id, client_id, 0)
+
+        with patch("app.api.v1.auth.tenant_session", _refresh_falso(_FilaRefresh())):
+            a = await _refrescar(client, refresh)
+            b = await _refrescar(client, refresh)
+
+        assert (a.status_code, b.status_code) == (200, 200)
+
+    @pytest.mark.asyncio
+    async def test_logout_anula_el_refresh_y_borra_la_cookie(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "REFRESH_REUSE_GRACE_SECONDS", -1)
+        user_id, client_id = self._ids()
+        refresh = create_refresh_token(user_id, client_id, 0)
+        client.cookies.set("refresh_token", refresh)
+
+        salida = await client.post("/api/v1/auth/logout")
+        with patch("app.api.v1.auth.tenant_session", _refresh_falso(_FilaRefresh())):
+            despues = await _refrescar(client, refresh)
+
+        assert salida.status_code == 204
+        assert _cookie_de_refresh(salida) == ""
+        assert despues.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_logout_sin_cookie_tambien_responde_204(self, client: AsyncClient) -> None:
+        resp = await client.post("/api/v1/auth/logout")
+
+        assert resp.status_code == 204
+
+    @pytest.mark.asyncio
+    async def test_logout_all_exige_sesion_y_sube_la_version(self, client: AsyncClient) -> None:
+        user_id, client_id = self._ids()
+        sin_token = await client.post("/api/v1/auth/logout-all")
+
+        sentencias: list[tuple[str, dict]] = []
+
+        class _Espia(_SesionDeRefresh):
+            async def execute(self, stmt: object = None, params: object = None):
+                sentencias.append((str(stmt), dict(params or {})))
+                return self
+
+        @asynccontextmanager
+        async def _cm(client_id, user_id=None):
+            yield _Espia(None)
+
+        access = create_access_token(
+            {"user_id": user_id, "client_id": client_id, "email": "a@b.co", "role": "agent"}
+        )
+        with patch("app.api.v1.auth.tenant_session", _cm):
+            resp = await client.post(
+                "/api/v1/auth/logout-all", headers={"Authorization": f"Bearer {access}"}
+            )
+
+        assert sin_token.status_code == 401
+        assert resp.status_code == 204
+        [(sql, params)] = sentencias
+        assert "token_version = token_version + 1" in sql
+        assert params == {"user_id": uuid.UUID(user_id), "client_id": uuid.UUID(client_id)}

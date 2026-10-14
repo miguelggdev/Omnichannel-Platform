@@ -10,10 +10,10 @@ from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import jwt
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
 from sqlalchemy import text
 
 from app.core.config import get_settings
@@ -303,6 +303,9 @@ class TestVerificacion:
                     "client_id": datos["client_id"],
                     "email": datos["email"],
                     "type": "email_verification",
+                    "iss": s.JWT_ISSUER,
+                    "aud": s.JWT_AUDIENCE,
+                    "iat": datetime.now(timezone.utc) - timedelta(hours=1),
                     "exp": datetime.now(timezone.utc) - timedelta(minutes=1),
                 },
                 s.JWT_SECRET,

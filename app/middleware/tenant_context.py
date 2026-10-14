@@ -41,6 +41,8 @@ PUBLIC_PATHS: set[str] = {
     "/api/openapi.json",
     "/api/v1/auth/login",
     "/api/v1/auth/refresh",
+    # Con la cookie del refresh, sin access token (puede haber caducado). ADR-089.
+    "/api/v1/auth/logout",
     # Auto-registro y verificacion de email (Sprint 15): no hay sesion todavia.
     "/api/v1/onboarding/register",
     "/api/v1/onboarding/verify-email",

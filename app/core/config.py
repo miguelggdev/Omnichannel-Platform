@@ -54,8 +54,17 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://redis:6379/0"
 
     # JWT
+    # Secreto PROPIO de la plataforma: no reutilizar el JWT secret de Supabase (ADR-089).
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
+    # Emisor y audiencia de nuestros tokens: un JWT de otro emisor no los trae y se rechaza.
+    JWT_ISSUER: str = "omnichannel-api"
+    JWT_AUDIENCE: str = "omnichannel-app"
+    # Cookie del refresh token (ADR-089). `Secure` siempre salvo desarrollo por http que no
+    # sea localhost (los navegadores ya aceptan cookies `Secure` en http://localhost).
+    AUTH_COOKIE_SECURE: bool = True
+    # Margen en que reusar un refresh ya rotado no se trata como robo (dos pestanas a la vez).
+    REFRESH_REUSE_GRACE_SECONDS: int = 10
     JWT_EXPIRATION_MINUTES: int = 30
     JWT_REFRESH_EXPIRATION_DAYS: int = 7
 
@@ -329,6 +338,14 @@ class Settings(BaseSettings):
             raise ValueError("JWT_SECRET debe tener al menos 32 caracteres")
         return v
 
+    @field_validator("JWT_ALGORITHM")
+    @classmethod
+    def jwt_algorithm_hmac(cls, v: str) -> str:
+        """Solo algoritmos HMAC: `none` o uno asimetrico con una clave HMAC es inseguro."""
+        if v not in ("HS256", "HS384", "HS512"):
+            raise ValueError("JWT_ALGORITHM debe ser HS256, HS384 o HS512")
+        return v
+
     @field_validator("ENCRYPTION_KEY")
     @classmethod
     def encryption_key_min_length(cls, v: str) -> str:
@@ -358,6 +375,8 @@ class Settings(BaseSettings):
             valor = str(getattr(self, nombre)).lower()
             if any(marca in valor for marca in marcas):
                 raise ValueError(f"{nombre} tiene un valor de ejemplo; genera uno aleatorio")
+        if not self.AUTH_COOKIE_SECURE:
+            raise ValueError("AUTH_COOKIE_SECURE debe ser true en produccion")
         if "*" in self.CORS_ORIGINS:
             raise ValueError("CORS_ORIGINS no puede ser '*' en produccion (van credenciales)")
         return self

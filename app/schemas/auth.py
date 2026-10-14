@@ -16,24 +16,15 @@ class LoginRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    """Respuesta con tokens JWT.
+    """Respuesta con el access token.
+
+    El refresh token ya no va en el cuerpo: viaja en la cookie `httpOnly` que pone la propia
+    respuesta (ADR-089), para que JavaScript no pueda leerlo.
 
     Attributes:
         access_token: Token de acceso JWT.
-        refresh_token: Token de refresco JWT.
         token_type: Tipo de token (siempre 'bearer').
     """
 
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"  # noqa: S105
-
-
-class RefreshRequest(BaseModel):
-    """Request para renovar access token.
-
-    Attributes:
-        refresh_token: Token de refresco JWT válido.
-    """
-
-    refresh_token: str

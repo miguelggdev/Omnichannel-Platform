@@ -43,7 +43,7 @@ export function UserMenu() {
             {t("preferences")}
           </Link>
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={logout}>
+        <DropdownMenuItem onSelect={() => void logout()}>
           <LogOut className="me-2 h-4 w-4" aria-hidden />
           {t("logout")}
         </DropdownMenuItem>

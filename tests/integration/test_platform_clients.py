@@ -255,14 +255,7 @@ async def test_suspender_corta_el_login_y_el_refresh_y_reactivar_los_devuelve(
     plataforma: tuple[Tenant, Tenant, Tenant],
 ) -> None:
     operador, activo, _ = plataforma
-    refresh = create_refresh_token(
-        {
-            "user_id": str(activo.user_id),
-            "client_id": str(activo.client_id),
-            "email": activo.email,
-            "role": "admin",
-        }
-    )
+    refresh = create_refresh_token(str(activo.user_id), str(activo.client_id), 0)
 
     async with _cliente(operador) as c:
         r = await c.put(
@@ -278,7 +271,7 @@ async def test_suspender_corta_el_login_y_el_refresh_y_reactivar_los_devuelve(
         login = await anon.post(
             "/api/v1/auth/login", json={"email": activo.email, "password": PASSWORD}
         )
-        renovar = await anon.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
+        renovar = await anon.post("/api/v1/auth/refresh", cookies={"refresh_token": refresh})
     assert login.status_code == 401
     assert renovar.status_code == 401
 
@@ -292,7 +285,7 @@ async def test_suspender_corta_el_login_y_el_refresh_y_reactivar_los_devuelve(
         login = await anon.post(
             "/api/v1/auth/login", json={"email": activo.email, "password": PASSWORD}
         )
-        renovar = await anon.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
+        renovar = await anon.post("/api/v1/auth/refresh", cookies={"refresh_token": refresh})
     assert login.status_code == 200, login.text
     assert renovar.status_code == 200
 

@@ -10,7 +10,7 @@ from app.schemas.agent_config import (
     AgentConfigResponse,
     AgentConfigUpdate,
 )
-from app.schemas.auth import LoginRequest, RefreshRequest, TokenResponse
+from app.schemas.auth import LoginRequest, TokenResponse
 from app.schemas.client import ClientCreate, ClientListResponse, ClientResponse, ClientUpdate
 from app.schemas.common import ErrorResponse, PaginatedResponse, PaginationParams
 from app.schemas.contact import ContactCreate, ContactListResponse, ContactResponse, ContactUpdate
@@ -58,7 +58,6 @@ __all__ = [
     "MessageUpdate",
     "PaginatedResponse",
     "PaginationParams",
-    "RefreshRequest",
     "TokenResponse",
     "UserCreate",
     "UserListResponse",

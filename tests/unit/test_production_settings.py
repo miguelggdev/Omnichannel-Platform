@@ -54,3 +54,19 @@ class TestDocsEnProduccion:
     def test_en_desarrollo_si(self, monkeypatch: pytest.MonkeyPatch) -> None:
         rutas = self._rutas(monkeypatch, "development")
         assert {"/api/docs", "/api/openapi.json"} <= rutas
+
+
+class TestSesion:
+    def test_la_cookie_sin_secure_no_arranca_en_produccion(self) -> None:
+        with pytest.raises(ValidationError, match="AUTH_COOKIE_SECURE"):
+            _settings(AUTH_COOKIE_SECURE=False)
+
+    def test_en_desarrollo_se_puede_quitar_secure(self) -> None:
+        assert (
+            _settings(APP_ENV="development", AUTH_COOKIE_SECURE=False).AUTH_COOKIE_SECURE is False
+        )
+
+    @pytest.mark.parametrize("algoritmo", ["none", "RS256", "ES256", "hs256"])
+    def test_solo_algoritmos_hmac(self, algoritmo: str) -> None:
+        with pytest.raises(ValidationError, match="JWT_ALGORITHM"):
+            _settings(JWT_ALGORITHM=algoritmo)

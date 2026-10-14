@@ -19,7 +19,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
 
 from app.core.config import get_settings
@@ -34,7 +34,8 @@ from app.core.exceptions import (
     JWTInvalidError,
 )
 from app.core.rate_limit import client_ip, hit
-from app.core.security import decode_jwt
+from app.core.security import create_refresh_token, decode_jwt
+from app.core.session_cookie import poner_cookie
 from app.models.user import User
 from app.schemas.onboarding import (
     OnboardingRequest,
@@ -88,12 +89,15 @@ async def _encolar_verificacion(client_id: UUID, user_id: UUID, email: str) -> N
 
 
 @router.post("/register", response_model=OnboardingResponse, status_code=201)
-async def register(request: Request, payload: OnboardingRequest) -> OnboardingResponse:
+async def register(
+    request: Request, payload: OnboardingRequest, response: Response
+) -> OnboardingResponse:
     """Registra un negocio nuevo y a su administrador.
 
     Args:
         request: Peticion, para limitar por IP.
         payload: Datos del formulario.
+        response: Respuesta, para la cookie del refresh token (ADR-089).
 
     Returns:
         Ids del tenant y del usuario, y la sesion lista para usar.
@@ -108,6 +112,10 @@ async def register(request: Request, payload: OnboardingRequest) -> OnboardingRe
     )
     respuesta = await register_new_client(payload)
     await _encolar_verificacion(respuesta.client_id, respuesta.user_id, payload.admin_email.lower())
+    # Usuario recien creado: su `token_version` es 0.
+    poner_cookie(
+        response, create_refresh_token(str(respuesta.user_id), str(respuesta.client_id), 0)
+    )
     return respuesta
 
 
