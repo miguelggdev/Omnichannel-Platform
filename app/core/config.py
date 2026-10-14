@@ -251,6 +251,18 @@ class Settings(BaseSettings):
     # menos tiempo: el proveedor puede conocer la empresa manana.
     ENRICHMENT_CACHE_TTL_SECONDS: int = 30 * 24 * 3600
     ENRICHMENT_NEGATIVE_CACHE_TTL_SECONDS: int = 24 * 3600
+    # Proveedores de enriquecimiento activos, por orden de prioridad (nombres registrados con
+    # `@register_provider`). Vacio = ninguno: enriquecer responde "sin proveedor". Sin proveedor
+    # elegido todavia (PROGRESS.md, decisiones del producto).
+    ENRICHMENT_PROVIDERS: list[str] = []
+    # Consultar tambien a la PERSONA (envia email y LinkedIn a un tercero). Apagado hasta tener la
+    # respuesta de la consulta legal sobre transferencia de datos (ADR-085, addendum).
+    ENRICHMENT_PERSON_ENABLED: bool = False
+    # Peticiones de enriquecimiento por tenant y hora: cada una gasta creditos del proveedor.
+    ENRICHMENT_MAX_PER_TENANT_PER_HOUR: int = 200
+    # AI score de leads (Sprint 17): modelo, y peticiones por tenant y hora (cada una gasta tokens).
+    LEAD_AI_SCORE_MODEL: str = "gpt-4o-mini"
+    LEAD_AI_SCORE_MAX_PER_TENANT_PER_HOUR: int = 60
 
     # Observabilidad (Sprint 8)
     # Vacio = tracing deshabilitado. Es el valor por defecto a proposito: sin
