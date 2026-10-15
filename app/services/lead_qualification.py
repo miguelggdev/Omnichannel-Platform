@@ -182,4 +182,8 @@ async def calificar_automaticamente(session: AsyncSession, lead: Lead) -> str | 
         automatic=True,
         rule_min_score=regla.min_score,
     )
+    # Import perezoso: el servicio de secuencias importa servicios que dependen de este.
+    from app.services.lead_sequence_triggers import disparar_inscripciones
+
+    await disparar_inscripciones(session, lead, "stage_changed")
     return str(destino.slug)

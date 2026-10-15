@@ -467,6 +467,7 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
                 channel=message_channel,
                 conversation_id=conversation.id,
                 instante=timestamp,
+                texto=normalized.text,
             )
 
         await persist_dedup(client_id, message_channel, external_id, session=session)
