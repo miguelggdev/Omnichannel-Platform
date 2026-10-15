@@ -117,6 +117,12 @@ celery_app.conf.update(
             "schedule": 3600.0,  # cada hora
             "options": {"queue": "bulk"},
         },
+        "process-lead-sequences": {
+            # Sprint 18: avanza las inscripciones a secuencias de follow-up que ya les toca.
+            "task": "app.tasks.bulk_process_lead_sequences",
+            "schedule": 60.0,
+            "options": {"queue": "bulk"},
+        },
         "dispatch-scheduled-campaigns": {
             # Saca las campanas `scheduled` cuya `scheduled_for` ya llego. Un
             # minuto es la resolucion con la que se puede programar un envio.
