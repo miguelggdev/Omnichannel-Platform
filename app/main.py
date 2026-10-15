@@ -32,6 +32,8 @@ from app.api.v1.feature_flags import router as feature_flags_router
 from app.api.v1.lead_module import platform_router as lead_module_platform_router
 from app.api.v1.lead_module import router as lead_module_router
 from app.api.v1.lead_scoring_config import router as lead_scoring_config_router
+from app.api.v1.lead_sequences import leads_router as lead_sequences_leads_router
+from app.api.v1.lead_sequences import router as lead_sequences_router
 from app.api.v1.lead_sources import router as lead_sources_router
 from app.api.v1.lead_stages import router as lead_stages_router
 from app.api.v1.leads import router as leads_router
@@ -202,6 +204,8 @@ def create_app() -> FastAPI:
         lead_module_platform_router, prefix="/api/v1/platform", tags=["platform", "leads"]
     )
     app.include_router(leads_router, prefix="/api/v1/leads", tags=["leads"])
+    app.include_router(lead_sequences_leads_router, prefix="/api/v1/leads", tags=["leads"])
+    app.include_router(lead_sequences_router, prefix="/api/v1/lead-sequences", tags=["leads"])
     app.include_router(capture_router, prefix="/api/v1/capture", tags=["leads"])
     app.include_router(lead_stages_router, prefix="/api/v1/lead-pipeline-stages", tags=["leads"])
     app.include_router(lead_sources_router, prefix="/api/v1/lead-sources", tags=["leads"])

@@ -263,6 +263,11 @@ class Settings(BaseSettings):
     # AI score de leads (Sprint 17): modelo, y peticiones por tenant y hora (cada una gasta tokens).
     LEAD_AI_SCORE_MODEL: str = "gpt-4o-mini"
     LEAD_AI_SCORE_MAX_PER_TENANT_PER_HOUR: int = 60
+    # Secuencias de follow-up (Sprint 18): modelo de los mensajes en modo `ai`, inscripciones que
+    # procesa cada pasada por tenant, y mensajes manuales por usuario y hora.
+    LEAD_SEQUENCE_AI_MODEL: str = "gpt-4o-mini"
+    LEAD_SEQUENCE_BATCH_SIZE: int = 100
+    LEAD_MANUAL_MESSAGES_PER_USER_PER_HOUR: int = 60
 
     # Observabilidad (Sprint 8)
     # Vacio = tracing deshabilitado. Es el valor por defecto a proposito: sin

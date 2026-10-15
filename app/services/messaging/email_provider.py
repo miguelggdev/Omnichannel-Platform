@@ -473,7 +473,8 @@ class EmailProvider(MessagingProvider):
         Args:
             to: Direccion del destinatario.
             content: Contenido. `metadata` puede traer `subject`, `in_reply_to` y
-                `references` para que el cliente de correo lo agrupe en el hilo.
+                `references` para que el cliente de correo lo agrupe en el hilo, o
+                `new_thread=True` para un correo que abre uno (asunto tal cual, sin `Re:`).
             channel_config: Debe traer `smtp_host` y `from_email`; opcionales
                 `smtp_port`, `smtp_user`, `smtp_password`, `from_name`.
 
@@ -497,10 +498,16 @@ class EmailProvider(MessagingProvider):
         mensaje = EmailMessage()
         mensaje["From"] = f"{channel_config.get('from_name') or 'Soporte'} <{from_email}>"
         mensaje["To"] = destino
-        mensaje["Subject"] = self._asunto(meta.get("subject"))
+        nuevo_hilo = bool(meta.get("new_thread"))
+        mensaje["Subject"] = (
+            _limpiar_cabecera(str(meta.get("subject") or ""))[:MAX_SUBJECT_CHARS]
+            if nuevo_hilo
+            else self._asunto(meta.get("subject"))
+        ) or "Mensaje de nuestro equipo"
         mensaje["Message-ID"] = message_id
-        # RFC 3834: evita que un autorespondedor del otro lado nos conteste.
-        mensaje["Auto-Submitted"] = "auto-replied"
+        # RFC 3834: evita que un autorespondedor del otro lado nos conteste. Un correo que abre
+        # un hilo (secuencias de seguimiento) no responde a nadie: es `auto-generated`.
+        mensaje["Auto-Submitted"] = "auto-generated" if nuevo_hilo else "auto-replied"
 
         en_respuesta_a = _limpiar_cabecera(str(meta.get("in_reply_to") or ""))
         if en_respuesta_a:

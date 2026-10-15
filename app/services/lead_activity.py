@@ -145,6 +145,7 @@ async def registrar_mensaje_entrante(
     channel: str,
     conversation_id: UUID,
     instante: datetime,
+    texto: str | None = None,
 ) -> None:
     """Anota que el contacto de un lead escribio: sube `last_activity_at` y deja rastro acotado.
 
@@ -160,7 +161,11 @@ async def registrar_mensaje_entrante(
         channel: Canal del mensaje.
         conversation_id: Conversacion.
         instante: Momento del mensaje.
+        texto: Contenido del mensaje; con el se clasifica la respuesta a las secuencias del lead.
     """
+    await _procesar_respuesta_a_secuencias(
+        session, client_id=client_id, lead_id=lead_id, texto=texto, canal=channel, instante=instante
+    )
     try:
         async with session.begin_nested():
             lead = (
@@ -205,6 +210,45 @@ async def registrar_mensaje_entrante(
             await session.flush()
     except Exception:
         logger.exception("No se pudo registrar el mensaje entrante del lead %s", lead_id)
+
+
+async def _procesar_respuesta_a_secuencias(
+    session: AsyncSession,
+    *,
+    client_id: UUID,
+    lead_id: UUID,
+    texto: str | None,
+    canal: str,
+    instante: datetime,
+) -> None:
+    """Saca al lead de sus secuencias si el mensaje es una respuesta (aislado, sin propagar).
+
+    Va **antes** y aparte de la anotacion del mensaje: esa se salta si otra transaccion tiene el
+    lead bloqueado, y una respuesta no debe perderse por eso.
+
+    Args:
+        session: Sesion de la transaccion del mensaje, con el tenant fijado.
+        client_id: Tenant.
+        lead_id: Lead que escribio.
+        texto: Contenido del mensaje.
+        canal: Canal.
+        instante: Momento del mensaje.
+    """
+    # Import perezoso: estos servicios importan este modulo (registrar_actividad).
+    from app.services.lead_sequence_replies import procesar_respuesta
+
+    try:
+        async with session.begin_nested():
+            await procesar_respuesta(
+                session,
+                client_id=client_id,
+                lead_id=lead_id,
+                texto=texto,
+                canal=canal,
+                ahora=instante,
+            )
+    except Exception:
+        logger.exception("No se pudo procesar la respuesta del lead %s a sus secuencias", lead_id)
 
 
 async def _recalcular_comportamiento(session: AsyncSession, lead: Lead) -> None:

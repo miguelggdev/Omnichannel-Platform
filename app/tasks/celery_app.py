@@ -33,6 +33,7 @@ TASK_MODULES = (
     "app.tasks.voice_tasks",
     "app.tasks.onboarding_tasks",
     "app.tasks.enrichment_tasks",
+    "app.tasks.lead_sequence_tasks",
 )
 
 celery_app.conf.update(imports=TASK_MODULES)

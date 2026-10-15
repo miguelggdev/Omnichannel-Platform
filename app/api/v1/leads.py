@@ -68,6 +68,7 @@ from app.models.lead_activity import (
 )
 from app.models.lead_pipeline_stage import LeadPipelineStage
 from app.models.lead_score import SCORE_AI, TRIGGER_RECALC
+from app.models.lead_sequence import EXIT_LEAD_CLOSED, EXIT_LEAD_DELETED
 from app.models.lead_source import LeadSource
 from app.models.user import User
 from app.schemas.common import PaginatedResponse
@@ -117,6 +118,7 @@ from app.services.lead_score_service import (
     recalcular_fit,
     scores_detallados,
 )
+from app.services.lead_sequence_triggers import disparar_inscripciones, sacar_de_secuencias
 
 logger = logging.getLogger(__name__)
 
@@ -758,6 +760,7 @@ async def create_lead(
                 source_id=data.source_id,
             )
             await asignar_automaticamente(session, lead)
+            await disparar_inscripciones(session, lead, "lead_created")
 
             contacto_id = await contacto_inequivoco(session, client_id, data.email, data.phone)
             if contacto_id is not None:
@@ -933,6 +936,7 @@ async def delete_lead(
         registrar_actividad(
             session, client_id=client_id, lead_id=lead.id, tipo=ACTIVITY_DELETED, user_id=_uid(user)
         )
+        await sacar_de_secuencias(session, lead, EXIT_LEAD_DELETED)
     logger.info("Lead %s borrado (soft) por %s (tenant %s)", lead_id, user["user_id"], client_id)
 
 
@@ -1012,6 +1016,10 @@ async def move_stage(
             to_stage=etapa.slug,
             status=lead.status,
         )
+        if lead.status == "active":
+            await disparar_inscripciones(session, lead, "stage_changed")
+        else:
+            await sacar_de_secuencias(session, lead, EXIT_LEAD_CLOSED)
         return await _responder(session, lead)
 
 
@@ -1344,6 +1352,7 @@ async def recalc_lead_score(
                 forzar_historial=True,
             ):
                 calculados.append(SCORE_AI)
+                await disparar_inscripciones(session, lead, "score_changed")
             else:
                 omitidos[SCORE_AI] = "suppressed"
         await calificar_automaticamente(session, lead)

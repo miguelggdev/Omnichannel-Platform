@@ -536,6 +536,50 @@ def smtp(monkeypatch: pytest.MonkeyPatch) -> _Smtp:
 class TestSendMessage:
     """`send_message` responde en el hilo, en texto plano y sin abrir bucles."""
 
+    async def test_correo_que_abre_un_hilo_no_es_una_respuesta(
+        self, provider: EmailProvider, smtp: _Smtp
+    ) -> None:
+        """`new_thread`: asunto tal cual (sin `Re:`) y `Auto-Submitted: auto-generated`."""
+        contenido = MessageContent(
+            text="Hola, te escribimos de Empresa.",
+            metadata={"subject": "Gracias por tu interes", "new_thread": True},
+        )
+
+        await provider.send_message("juan@example.com", contenido, CONFIG)
+
+        m = smtp.mensaje
+        assert m is not None
+        assert m["Subject"] == "Gracias por tu interes"
+        assert m["Auto-Submitted"] == "auto-generated"
+        assert m["In-Reply-To"] is None
+
+    async def test_hilo_nuevo_sin_asunto_usa_uno_generico(
+        self, provider: EmailProvider, smtp: _Smtp
+    ) -> None:
+        """Nunca sale un correo sin asunto ni con `Re:` inventado."""
+        contenido = MessageContent(text="Hola", metadata={"subject": None, "new_thread": True})
+
+        await provider.send_message("juan@example.com", contenido, CONFIG)
+
+        assert smtp.mensaje is not None
+        assert smtp.mensaje["Subject"] == "Mensaje de nuestro equipo"
+
+    async def test_hilo_nuevo_no_deja_inyectar_cabeceras_en_el_asunto(
+        self, provider: EmailProvider, smtp: _Smtp
+    ) -> None:
+        """Un asunto con saltos de linea se aplana (inyeccion de cabeceras)."""
+        contenido = MessageContent(
+            text="Hola",
+            metadata={"subject": "Hola\r\nBcc: victima@example.com", "new_thread": True},
+        )
+
+        await provider.send_message("juan@example.com", contenido, CONFIG)
+
+        m = smtp.mensaje
+        assert m is not None
+        assert m["Bcc"] is None
+        assert "\n" not in m["Subject"]
+
     async def test_respuesta_en_el_hilo(self, provider: EmailProvider, smtp: _Smtp) -> None:
         """Asunto con `Re:`, `In-Reply-To` y `References`: el cliente lo agrupa."""
         contenido = MessageContent(

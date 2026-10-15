@@ -222,6 +222,18 @@ def aplicar_score(
     return fila
 
 
+async def _disparar_si_cambio(session: AsyncSession, lead: Lead, fila: LeadScore | None) -> None:
+    """Si el score cambio de verdad, deja que las secuencias con disparador `score_changed` entren.
+
+    Import perezoso: el servicio de secuencias importa servicios que dependen de este.
+    """
+    if fila is None or fila.previous_score == fila.score:
+        return
+    from app.services.lead_sequence_triggers import disparar_inscripciones
+
+    await disparar_inscripciones(session, lead, "score_changed")
+
+
 async def recalcular_fit(
     session: AsyncSession,
     lead: Lead,
@@ -268,7 +280,7 @@ async def recalcular_fit(
         ),
         icp,
     )
-    return aplicar_score(
+    fila = aplicar_score(
         session,
         lead,
         SCORE_FIT,
@@ -278,6 +290,8 @@ async def recalcular_fit(
         user_id=user_id,
         forzar_historial=forzar_historial,
     )
+    await _disparar_si_cambio(session, lead, fila)
+    return fila
 
 
 async def recalcular_behavioral(
@@ -310,7 +324,7 @@ async def recalcular_behavioral(
     if pesos is None:
         pesos = await pesos_del_tenant(session, lead.client_id)
     senales = await recolectar_senales(session, lead, ahora)
-    return aplicar_score(
+    fila = aplicar_score(
         session,
         lead,
         SCORE_BEHAVIORAL,
@@ -320,6 +334,8 @@ async def recalcular_behavioral(
         user_id=user_id,
         forzar_historial=forzar_historial,
     )
+    await _disparar_si_cambio(session, lead, fila)
+    return fila
 
 
 async def scores_detallados(session: AsyncSession, lead: Lead) -> LeadScoresDetail:
