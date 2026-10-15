@@ -184,6 +184,21 @@ async def _get_token_usage(client_id: str) -> dict[str, int]:
     return usage
 
 
+async def presupuesto_agotado(client_id: UUID) -> bool:
+    """Si el tenant ya gasto todo su presupuesto de tokens del mes.
+
+    Para procesos fuera del grafo (p. ej. el AI score de leads) que gastan tokens del tenant y
+    no deben ejecutarse con el presupuesto agotado. Un tenant sin limite (`0`) nunca lo esta.
+
+    Args:
+        client_id: Tenant.
+
+    Returns:
+        `True` si el consumo llego al 100%.
+    """
+    return _usage_pct(await _get_token_usage(str(client_id))) >= THRESHOLD_EXCEEDED_PCT
+
+
 def _usage_pct(usage: dict[str, int]) -> float:
     """Calcula el porcentaje de presupuesto consumido.
 

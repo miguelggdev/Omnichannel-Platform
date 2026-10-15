@@ -30,6 +30,7 @@ class Client(Base):
         lead_management_enabled: Si el módulo de leads está activo (ADR-021).
         icp_config: Perfil de cliente ideal para el FIT score (Sprint 17).
         lead_scoring_weights: Pesos `fit`/`behavioral`/`ai` del score total (suman 100).
+        lead_automation_config: Calificacion automatica y asignacion de leads (Sprint 17).
         theme_config: Configuración de tema visual (ADR-025).
         suspension_date: Fecha programada de suspensión por falta de pago.
         payment_alert_config: Config de alertas de pago escalonadas (ADR-015).
@@ -75,6 +76,10 @@ class Client(Base):
         JSONB,
         server_default='{"fit": 40, "behavioral": 30, "ai": 30}',
         nullable=False,
+    )
+    # Calificacion automatica y asignacion de leads (Sprint 17, migracion 032).
+    lead_automation_config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default="{}", nullable=False
     )
 
     # Theme (ADR-025)

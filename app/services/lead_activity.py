@@ -199,6 +199,37 @@ async def registrar_mensaje_entrante(
                     channel=channel,
                     conversation_id=conversation_id,
                 )
+                # A lo sumo una vez cada 30 minutos por lead, como la anotacion: el calculo lee
+                # mensajes y respuestas, y no debe correr con cada mensaje de una conversacion.
+                await _recalcular_comportamiento(session, lead)
             await session.flush()
     except Exception:
         logger.exception("No se pudo registrar el mensaje entrante del lead %s", lead_id)
+
+
+async def _recalcular_comportamiento(session: AsyncSession, lead: Lead) -> None:
+    """Recalcula el score de comportamiento del lead y evalua la calificacion automatica.
+
+    Aislado en su propio SAVEPOINT y sin propagar errores: un fallo aqui no puede costar ni el
+    mensaje del cliente ni la anotacion de actividad que se acaba de escribir.
+
+    Args:
+        session: Sesion de la transaccion del mensaje, con el tenant fijado.
+        lead: Lead enlazado al contacto, ya bloqueado por la transaccion.
+    """
+    # Import perezoso: estos servicios importan este modulo (registrar_actividad).
+    from app.models.lead_score import TRIGGER_INBOUND_MESSAGE
+    from app.services.lead_qualification import calificar_automaticamente
+    from app.services.lead_score_service import recalcular_behavioral
+
+    try:
+        async with session.begin_nested():
+            await recalcular_behavioral(
+                session,
+                lead,
+                trigger=TRIGGER_INBOUND_MESSAGE,
+                ahora=datetime.now(timezone.utc),
+            )
+            await calificar_automaticamente(session, lead)
+    except Exception:
+        logger.exception("No se pudo recalcular el comportamiento del lead %s", lead.id)
