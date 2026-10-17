@@ -295,6 +295,7 @@ class ScheduledCallResponse(BaseModel):
     duration_minutes: int
     timezone: str
     ai_voice_provider: str | None
+    calendar_event_id: str | None
     outcome: str | None
     notes: str | None
     confirmed_at: datetime | None
