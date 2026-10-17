@@ -141,6 +141,7 @@ class ScheduledCall(TenantBaseModel):
     ai_voice_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, server_default="{}", nullable=False
     )
+    calendar_event_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     outcome: Mapped[str | None] = mapped_column(String(30), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     reminder_24h_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

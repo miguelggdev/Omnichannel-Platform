@@ -63,6 +63,10 @@ ACTIVITY_DEAL_CREATED = "deal_created"
 ACTIVITY_DEAL_STAGE_CHANGED = "deal_stage_changed"
 ACTIVITY_CALL_SCHEDULED = "call_scheduled"
 ACTIVITY_CALL_STATUS_CHANGED = "call_status_changed"
+#: Recordatorio de una llamada enviado al lead (`reminder`: 24h|1h, `channel`).
+ACTIVITY_CALL_REMINDER_SENT = "call_reminder_sent"
+#: Recordatorio que no se pudo entregar por ningun canal (codigo del fallo, sin detalle).
+ACTIVITY_CALL_REMINDER_FAILED = "call_reminder_failed"
 
 
 class LeadActivity(TenantBaseModel):

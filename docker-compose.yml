@@ -114,6 +114,8 @@ services:
       - LEAD_SEQUENCE_AI_MODEL=${LEAD_SEQUENCE_AI_MODEL:-gpt-4o-mini}
       - LEAD_SEQUENCE_BATCH_SIZE=${LEAD_SEQUENCE_BATCH_SIZE:-100}
       - LEAD_MANUAL_MESSAGES_PER_USER_PER_HOUR=${LEAD_MANUAL_MESSAGES_PER_USER_PER_HOUR:-60}
+      - VOICE_AI_AUTO_START=${VOICE_AI_AUTO_START:-false}
+      - VOICE_AI_START_GRACE_MINUTES=${VOICE_AI_START_GRACE_MINUTES:-15}
       - WEBCHAT_HELLO_TIMEOUT_SECONDS=${WEBCHAT_HELLO_TIMEOUT_SECONDS:-10}
       - WEBCHAT_IDLE_TIMEOUT_SECONDS=${WEBCHAT_IDLE_TIMEOUT_SECONDS:-120}
       - WEBCHAT_REPLAY_LIMIT=${WEBCHAT_REPLAY_LIMIT:-50}
@@ -529,6 +531,9 @@ services:
       # Sprint 18: secuencias de follow-up (modo `ai` y tamano de cada pasada).
       - LEAD_SEQUENCE_AI_MODEL=${LEAD_SEQUENCE_AI_MODEL:-gpt-4o-mini}
       - LEAD_SEQUENCE_BATCH_SIZE=${LEAD_SEQUENCE_BATCH_SIZE:-100}
+      # Sprint 19: llamadas agendadas con voz IA y recordatorios.
+      - VOICE_AI_AUTO_START=${VOICE_AI_AUTO_START:-false}
+      - VOICE_AI_START_GRACE_MINUTES=${VOICE_AI_START_GRACE_MINUTES:-15}
       # Sprint 10: bulk_clone_tenant_from_template copia archivos de Storage
       # al clonar los documentos del tenant nuevo (ver tenant_cloner.py).
       - SUPABASE_URL=${SUPABASE_URL}

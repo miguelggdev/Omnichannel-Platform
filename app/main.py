@@ -27,8 +27,10 @@ from app.api.v1.clinical import router as clinical_router
 from app.api.v1.contacts import router as contacts_router
 from app.api.v1.conversations import router as conversations_router
 from app.api.v1.csat import router as csat_router
+from app.api.v1.deals import router as deals_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.feature_flags import router as feature_flags_router
+from app.api.v1.lead_analytics import router as lead_analytics_router
 from app.api.v1.lead_module import platform_router as lead_module_platform_router
 from app.api.v1.lead_module import router as lead_module_router
 from app.api.v1.lead_scoring_config import router as lead_scoring_config_router
@@ -46,6 +48,7 @@ from app.api.v1.platform_security import router as platform_security_router
 from app.api.v1.preferences import router as preferences_router
 from app.api.v1.quick_replies import router as quick_replies_router
 from app.api.v1.sandbox import router as sandbox_router
+from app.api.v1.scheduled_calls import router as scheduled_calls_router
 from app.api.v1.tags import contact_tags_router
 from app.api.v1.tags import router as tags_router
 from app.api.v1.templates import router as templates_router
@@ -206,6 +209,9 @@ def create_app() -> FastAPI:
     app.include_router(leads_router, prefix="/api/v1/leads", tags=["leads"])
     app.include_router(lead_sequences_leads_router, prefix="/api/v1/leads", tags=["leads"])
     app.include_router(lead_sequences_router, prefix="/api/v1/lead-sequences", tags=["leads"])
+    app.include_router(deals_router, prefix="/api/v1/deals", tags=["leads"])
+    app.include_router(lead_analytics_router, prefix="/api/v1/analytics", tags=["leads"])
+    app.include_router(scheduled_calls_router, prefix="/api/v1/scheduled-calls", tags=["leads"])
     app.include_router(capture_router, prefix="/api/v1/capture", tags=["leads"])
     app.include_router(lead_stages_router, prefix="/api/v1/lead-pipeline-stages", tags=["leads"])
     app.include_router(lead_sources_router, prefix="/api/v1/lead-sources", tags=["leads"])

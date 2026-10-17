@@ -268,6 +268,10 @@ class Settings(BaseSettings):
     LEAD_SEQUENCE_AI_MODEL: str = "gpt-4o-mini"
     LEAD_SEQUENCE_BATCH_SIZE: int = 100
     LEAD_MANUAL_MESSAGES_PER_USER_PER_HOUR: int = 60
+    # Llamadas agendadas (Sprint 19): iniciar solas, a su hora, las de voz IA (apagado por defecto:
+    # llamar a una persona es una decision que se toma con conciencia) y cuanto se espera.
+    VOICE_AI_AUTO_START: bool = False
+    VOICE_AI_START_GRACE_MINUTES: int = 15
 
     # Observabilidad (Sprint 8)
     # Vacio = tracing deshabilitado. Es el valor por defecto a proposito: sin

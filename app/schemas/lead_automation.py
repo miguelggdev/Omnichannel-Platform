@@ -5,6 +5,8 @@
 con `extra="forbid"`: una clave mal escrita es un error, no una regla que no hace nada.
 """
 
+import re
+from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -80,6 +82,71 @@ class AssignmentConfig(BaseModel):
         return v
 
 
+_CHAT_TELEGRAM = re.compile(r"^(-?[0-9]{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$")
+_MONEDA = re.compile(r"^[A-Z]{3}$")
+MAX_UMBRALES = 10
+MAX_UMBRAL = Decimal("9999999999.99")
+
+
+class DealAlertsConfig(BaseModel):
+    """Alerta por Telegram cuando se gana un deal grande.
+
+    El umbral es **por moneda**: 5.000 USD y 5.000 COP no se comparan. Una moneda sin umbral no
+    alerta. El aviso sale por el bot de canal de la plataforma (`TELEGRAM_CHANNEL_BOT_TOKEN`) al
+    chat del tenant; el bot debe estar en ese chat.
+
+    Attributes:
+        enabled: Si esta activa (apagada por defecto).
+        telegram_chat_id: Id numerico del chat o grupo (`-100123...`) o `@canal`.
+        thresholds: Moneda ISO -> valor minimo (inclusive) del deal ganado.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    telegram_chat_id: str | None = Field(default=None, max_length=40)
+    thresholds: dict[str, Decimal] = Field(default_factory=dict, max_length=MAX_UMBRALES)
+
+    @field_validator("telegram_chat_id")
+    @classmethod
+    def _chat_valido(cls, v: str | None) -> str | None:
+        """Un id numerico o un `@canal`."""
+        if v is not None and not _CHAT_TELEGRAM.match(v):
+            raise ValueError("telegram_chat_id debe ser un id numerico o un @canal")
+        return v
+
+    @field_validator("thresholds")
+    @classmethod
+    def _umbrales_validos(cls, v: dict[str, Decimal]) -> dict[str, Decimal]:
+        """Monedas ISO en mayusculas y umbrales positivos."""
+        for moneda, umbral in v.items():
+            if not _MONEDA.match(moneda):
+                raise ValueError(f"Moneda no valida: {moneda!r} (ISO 4217 en mayusculas)")
+            if not Decimal(0) < umbral <= MAX_UMBRAL:
+                raise ValueError("Los umbrales deben ser mayores que 0")
+        return v
+
+    @model_validator(mode="after")
+    def _completa(self) -> "DealAlertsConfig":
+        """Activarla exige chat y al menos un umbral."""
+        if self.enabled and (not self.telegram_chat_id or not self.thresholds):
+            raise ValueError("Para activar la alerta indica telegram_chat_id y algun umbral")
+        return self
+
+
+class CallRemindersConfig(BaseModel):
+    """Recordatorios de llamadas agendadas.
+
+    Attributes:
+        whatsapp_template: Plantilla de WhatsApp aprobada por Meta para avisar a un lead que no
+            escribio en las ultimas 24 h (sin ella, el recordatorio sale por email).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    whatsapp_template: str | None = Field(default=None, min_length=1, max_length=512)
+
+
 class LeadAutomationConfig(BaseModel):
     """Configuracion completa de automatizacion de leads del tenant."""
 
@@ -87,6 +154,8 @@ class LeadAutomationConfig(BaseModel):
 
     qualification: QualificationConfig = Field(default_factory=QualificationConfig)
     assignment: AssignmentConfig = Field(default_factory=AssignmentConfig)
+    deal_alerts: DealAlertsConfig = Field(default_factory=DealAlertsConfig)
+    call_reminders: CallRemindersConfig = Field(default_factory=CallRemindersConfig)
 
 
 class EnrichResponse(BaseModel):
