@@ -11,7 +11,7 @@
 - **Sprint 8 CERRADO:** Dev B mergeado en [PR #18](https://github.com/miguelggdev/Omnichannel-Platform/pull/18), Dev A mergeado en [PR #22](https://github.com/miguelggdev/Omnichannel-Platform/pull/22). Las 4 features de `specs/sprint-08-addendum-ops.md` siguen sin asignar a nadie en la matriz.
 - **Sprint 7 CERRADO:** mergeado a `main` completo (Dev B en PR #16, Dev A en [PR #19](https://github.com/miguelggdev/Omnichannel-Platform/pull/19), BUG-016 en PR #17). Ya no aplican los 503 de ADR-038: `contact_unifier.py`, `calendar_tools.py`, `scheduling.py`, `agent_action_log.py` y sus migraciones (004/005) están en `main`.
 - **BUG-025 CERRADO:** el login (`POST /api/v1/auth/login`) ya funciona contra un rol sujeto a RLS real (`app_user`, `NOBYPASSRLS`) — `public.auth_lookup_user()` (migración `007_auth_lookup_function`), función `SECURITY DEFINER` acotada a un email exacto. Ver ADR-046 y BUG-025 en MEMORY.md.
-- **Última actualización:** 2026-10-14
+- **Última actualización:** 2026-10-17 — **Sprints 16 a 19 cerrados en código** (Dev A y Dev B; PRs #65, #66, #68, #69, #70, #71 y #72, los de Dev B hechos por la sesión de Claude sin review de Dev B). Lo que queda está en "Lead Management: pendientes" y "Seguridad: plan pendiente".
 - **Sesión 66** — **Sprint 19, slice Dev B (ADR-092)** (rama `claude/sprint-19-dev-b`, hecho por la sesión de Claude a petición del usuario; el [PR #71](https://github.com/miguelggdev/Omnichannel-Platform/pull/71) del Sprint 18 quedó **mergeado en `main`** sin review de Dev B). API de deals y de llamadas agendadas (huecos, calendario de Google opcional, estados, reprogramar, iniciar), **voz IA sobre el canal de Twilio del Sprint 13** (reservar/llamar/anotar, enlace con la grabación al terminar, inicio automático apagado por defecto), recordatorios de 24 h y 1 h con aviso al agente, **analítica** (`/analytics/leads|pipeline|revenue|channels`) con pre-cálculo diario en Redis y **alerta de Telegram** al ganar un deal grande (umbral por moneda). Migración 033. 91 unitarios + 207 de integración nuevos, 54 mutaciones comprobadas. Pendiente: Vapi/Bland, calendario por persona, guion de voz por llamada, panel.
 - **Sesión 65** — **Sprint 18, slice Dev B (ADR-091)** (rama `claude/sprint-18-dev-b`, hecho por la sesión de Claude a petición del usuario; el [PR #70](https://github.com/miguelggdev/Omnichannel-Platform/pull/70) del Sprint 17 quedó **mergeado en `main`** sin review de Dev B). API de secuencias (CRUD, plantillas, inscribir/sacar/pausar/reanudar, Kanban de follow-up, mensaje manual), tarea de Beat que avanza las inscripciones (una por transacción, `SKIP LOCKED`), envío por canal con fallos clasificados y pie de baja, **modo IA** (sin datos de contacto al modelo, contra el presupuesto de tokens), **detección de respuestas** (por reglas; la baja persiste), disparadores aislados y salida al borrar o cerrar un lead. **Sin migración.** 86 unitarios + 113 de integración nuevos, 33 mutaciones comprobadas. Pendiente: tracking de email (apertura/clic/`email_replied`), RAG en el modo IA, "positiva → agendar" (Sprint 19).
 - **Sesión 64** — **Sprint 17, slice Dev B (ADR-090)** (rama `claude/sprint-17-dev-b`, hecho por la sesión de Claude a petición del usuario). Tarea de Celery de enriquecimiento y de recálculo del FIT por lotes al cambiar el ICP, endpoints `/enrich`, `/score`, `/score/recalc`, `/assign`, `/clients/icp` y `/clients/lead-automation`, recálculo del comportamiento al escribir el lead (aislado), **AI score** (gpt-4o-mini, bajo demanda, sin datos de contacto al modelo, contra el presupuesto de tokens), **calificación automática** por umbrales (solo hacia delante, nunca sobre un movimiento manual) y **asignación round-robin** con candado por tenant. Migración 032. **Sin proveedor de enriquecimiento real** (decisión del usuario: aún no hay contrato ni respuesta legal) y la persona sigue apagada. 54 + 21 tests nuevos, 18 mutaciones comprobadas.
@@ -537,13 +537,13 @@ Leyendo el log, no el checkmark. **Los 9 jobs en verde:**
 | 14 | Sandbox, Multi-idioma & Feature Flags | ✅ Completado | Fase 3. 14a flags (ADR-076), 14b multi-idioma (ADR-077), 14c sandbox (ADR-078), mergeados en [PR #57](https://github.com/miguelggdev/Omnichannel-Platform/pull/57) y [PR #58](https://github.com/miguelggdev/Omnichannel-Platform/pull/58) |
 | 15 | Frontend Foundation & Panel Admin | ✅ Completado en código | Fase 4. **Fase 1 hecha (ADR-079):** esqueleto Next.js 15, login JWT, tema, 6 idiomas, layout responsive, conversaciones, contactos, base de conocimiento, respuestas rápidas, preferencias y sandbox/flags. **Fase 2 hecha en código (ADR-080):** respuesta desde el chat, equipo, analítica y dashboard con gráficos, perfil del negocio, clientes/Celery/sistema del super admin y onboarding público. **Cierre hecho (ADR-081):** página security, reenvío de verificación y subida de logo. **Pendiente:** imagen Docker sin verificar (el build no tiene red en este entorno) |
 | 16 | Lead Capture & Pipeline Foundation | ✅ Completado en código | Cimientos (ADR-082), API (ADR-083) y cierre (ADR-084): historial, Excel, Phantombuster, actividad del contacto. Pendiente solo probar con servicios reales (Dev B) |
-| 17 | Enrichment & Qualification | 🔄 En progreso | **Dev A hecho (ADR-085):** `lead_scores` (027), ICP, FIT, comportamiento, aplicación de scores con historial y motor de enriquecimiento (interfaz de proveedores, caché, fusión). **Pendiente Dev B:** proveedores reales, tarea de Celery, endpoints (`/enrich`, `/score`, `/score/recalc`, `/clients/icp`, `/assign`), AI score, autocalificación y asignación |
+| 17 | Enrichment & Qualification | ✅ Completado en código | **Dev A (ADR-085):** `lead_scores` (027), ICP, FIT, comportamiento, aplicación de scores con historial y motor de enriquecimiento. **Dev B (ADR-090, [PR #70](https://github.com/miguelggdev/Omnichannel-Platform/pull/70)):** endpoints de enriquecimiento, score, ICP y asignación (round-robin), tarea de Celery, AI score bajo demanda y autocalificación. Pendiente: proveedores reales (decisiones 1-2), scraping web (3), asignación por territorio o carga y AI score periódico |
 | 18 | AI Follow-up & Sequences | ✅ Completado en código | **Dev A (ADR-086):** tablas #32-34 (028), schemas de pasos y grafo, motor puro, smart timing, plantillas predefinidas, servicio de inscripciones y RGPD. **Dev B (ADR-091):** API (CRUD, plantillas, enroll, Kanban, mensaje manual), Celery Beat, envío multi-canal con fallos clasificados, modo IA, detección de respuestas y disparadores. Pendiente: tracking de email (`email_opened`/`link_clicked`/`email_replied`), RAG/few-shot en el modo IA y "positiva → agendar" (Sprint 19) |
 | 19 | Scheduling + Voice + Deals + Analytics | ✅ Completado en código | **Dev A (ADR-087):** `deals` y `scheduled_calls` (029), reglas de etapa y sincronización con el lead, pipeline e ingresos por moneda, agenda (huecos, solapes, recordatorios), interfaz de voz IA y RGPD. **Dev B (ADR-092):** API de deals y de llamadas, Google Calendar opcional, voz IA sobre Twilio, recordatorios y aviso al agente, analítica con pre-cálculo y alerta de Telegram (migración 033). Pendiente: Vapi/Bland, calendario por persona, panel |
 
 ---
 
-## Lead Management: pendientes (Sprints 17-19, actualizado 2026-10-09)
+## Lead Management: pendientes (Sprints 17-19, actualizado 2026-10-17)
 
 ### Decisiones del producto (usuario)
 1. **Proveedor de enriquecimiento** (Apollo, Hunter, Clearbit/HubSpot u otro): cobertura en LATAM, costo por consulta, límites, y que consulte empresa sin datos de la persona. Revisar su contrato antes (pregunta 7 de la consulta legal).
@@ -552,8 +552,8 @@ Leyendo el log, no el checkmark. **Los 9 jobs en verde:**
 4. ~~**AI score**~~ — **decidido (sesión 64):** gpt-4o-mini, solo bajo demanda, cuenta contra el `TokenBudget`, pesos 40/30/30 (los que ya existían).
 5. ~~**Calificación automática**~~ — **decidido (sesión 64):** umbrales por tenant (apagada por defecto) y nunca deshace un movimiento manual.
 6. ~~**Asignación de leads**~~ — **decidido (sesión 64):** round-robin entre agentes y supervisores activos. Territorio y carga, sin hacer.
-7. **Proveedor de voz IA (Sprint 19):** Vapi/Bland (spec) o el canal propio sobre Twilio del Sprint 13. Hay solo interfaz (`VoiceCallProvider`). Implica la misma pregunta legal de transferencia de datos (teléfono y conversación) y la de grabar llamadas.
-8. **Umbral de la alerta de Telegram por deal ganado (Sprint 19):** por moneda (no se suman monedas).
+7. ~~**Proveedor de voz IA (Sprint 19)**~~ — **hecho con Twilio (ADR-092):** sobre el canal de voz del Sprint 13. Vapi/Bland quedan sin hacer y exigirían la misma pregunta legal de transferencia de datos y de grabación.
+8. ~~**Umbral de la alerta de Telegram por deal ganado**~~ — **hecho (ADR-092):** por moneda y configurable por tenant (`deal_alerts.thresholds`); sin umbral para una moneda no alerta.
 
 ### Consulta legal (bloquea el enriquecimiento de personas)
 - [Consulta legal: enriquecimiento de datos de leads](https://claude.ai/code/artifact/8241c736-fbc4-4828-a52c-8841223206b0) — 11 preguntas: transmisión/transferencia internacional (Ley 1581, Decreto 1377), autorización del titular y quién la obtiene (encargado/responsable), perfiles de Phantombuster sin autorización, listas importadas, dominios de empresas unipersonales, exigencias al proveedor, conservación, perfilado, RGPD.
@@ -561,8 +561,26 @@ Leyendo el log, no el checkmark. **Los 9 jobs en verde:**
 
 ### Código de Dev B sin hacer
 - **Sprint 17 (ADR-085, ADR-090):** hecho casi todo en la sesión 64. **Falta:** proveedores reales de enriquecimiento (necesita las decisiones 1-2), scraping web de la empresa (decisión 3), asignación por territorio o carga y AI score automático/periódico.
-- **Sprint 19 (ADR-087, ADR-092):** hecho casi todo en la sesión 66. **Falta:** un proveedor de voz distinto de Twilio (Vapi/Bland), voz IA para tenants que no sean el del canal de voz, un guion distinto por llamada, calendario de Google por persona (OAuth), y el panel.
+- **Sprint 19 (ADR-087, ADR-092):** hecho casi todo en la sesión 66. **Falta:** un proveedor de voz distinto de Twilio (Vapi/Bland), voz IA para tenants que no sean el del canal de voz, un guion distinto por llamada, calendario de Google por persona (OAuth), confirmación automática de la llamada por respuesta del lead, y el panel.
+- **Frontend de Lead Management:** ninguna pantalla de leads, secuencias, deals, llamadas o analítica de leads (el Sprint 15 solo cubre el panel base).
 - **Sprint 18 (ADR-086, ADR-091):** hecho casi todo en la sesión 65. **Falta:** tracking de email (apertura, clic y `email_replied` para un lead sin contacto enlazado), RAG y few-shot del modo `ai`, clasificar respuestas con IA, la acción "respuesta positiva → agendar" (necesita la agenda del Sprint 19) y completar una tarea desde el panel (hoy solo `resume`).
+
+### Para desplegar (checklist de los Sprints 16-19)
+- Aplicar las migraciones **030 a 033**. Antes de la 030: crear el rol de la app en Supabase con `NOBYPASSRLS` y fijar `APP_DB_ROLE` (ver Seguridad, punto 1).
+- `JWT_SECRET` propio y aleatorio (no el de Supabase); los usuarios deben volver a iniciar sesión una vez.
+- Beat en marcha: hay tareas nuevas en la cola `bulk` (secuencias, recordatorios de llamadas, pre-cálculo de analítica).
+- Alertas de deals: `TELEGRAM_CHANNEL_BOT_TOKEN` y el bot añadido al chat del tenant (`deal_alerts.telegram_chat_id`).
+- Plantillas de WhatsApp aprobadas por Meta para el primer mensaje fuera de ventana: `whatsapp_template` en los pasos de secuencia y en `call_reminders.whatsapp_template`.
+- Voz IA: `VOICE_PUBLIC_BASE_URL` y credenciales de Twilio; `VOICE_AI_AUTO_START` sigue apagado por defecto.
+- Variables nuevas a revisar en `.env.example`: `LEAD_SEQUENCE_*`, `LEAD_MANUAL_MESSAGES_PER_USER_PER_HOUR`, `VOICE_AI_*`.
+- `operator_contact_ids` en los tenants que usen el agente financiero.
+- Google Calendar es opcional: un `calendar_id` por tenant (`agent_configs.config.scheduling`) o `GOOGLE_CALENDAR_ID`.
+
+### Limitaciones conocidas (por diseño)
+- El calendario de Google es uno por tenant: un evento ajeno bloquea el horario de todas las personas.
+- La voz IA solo funciona para el tenant del canal de voz (`DEFAULT_CLIENT_ID`).
+- Analítica y pipeline nunca suman monedas distintas.
+- El clasificador de respuestas de secuencias es por reglas, sin IA.
 
 ### A confirmar con Dev B
 - **Migración 028 editada tras su primera versión** (CHECK `ck_lead_enrollment_due`). Si alguna base ya aplicó la 028 original (local, staging, Supabase Cloud), allí falta el CHECK y Alembic no lo añadirá: hacer `downgrade 027` + `upgrade` o una migración 029 que lo cree si no existe.
