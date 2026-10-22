@@ -600,7 +600,7 @@ Lo que la auditoría encontró y **no** es un cambio de código acotado. Ordenad
 6. **Configurar `operator_contact_ids`** de los tenants que usen el agente financiero (sin lista, nadie factura por chat).
 
 **Pronto**
-7. CSP con nonce en el frontend (la de Traefik, `script-src 'self'`, bloquea los scripts en línea de Next: verificar contra el despliegue real). ~~Esquemas de `media_url`~~ — el frontend solo enlaza `http(s)` (2026-10-22); falta validarlo también en el backend al guardar.
+7. ~~CSP con nonce en el frontend~~ — **hecho (2026-10-22):** `frontend/src/middleware.ts` + `lib/csp.ts`; el router del frontend usa `security-headers-web` (sin CSP en Traefik, que bloqueaba los scripts de Next). Verificado con `next build` + servidor: la respuesta lleva la CSP y los 38 `<script>` de `/login` llevan nonce. **Falta probar en un navegador real** (hidratación, tema, toasts). ~~Esquemas de `media_url`~~ — hecho en el frontend (`urlSegura`) y en el backend (`sanear_media_url`: solo `http`, `https` y `telegram-file`; un valor inválido descarta el adjunto, no el mensaje).
    - ~~Next 15.5.27 con RCE crítico (SVG en optimización de imágenes) y DoS~~ — actualizado a 15.5.28 (2026-10-22). Quedan avisos altos en `tailwindcss`/`postcss` (herramientas de build, no entran al navegador).
 8. Cifrar `messages.content`, `raw_payload` y las cabeceras de `tenant_webhooks`; redactar datos en los access logs.
 9. `audit_logs`: `REVOKE UPDATE, DELETE` y cubrir las tablas que faltan con el trigger.
