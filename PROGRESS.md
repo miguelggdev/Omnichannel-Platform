@@ -600,7 +600,8 @@ Lo que la auditoría encontró y **no** es un cambio de código acotado. Ordenad
 6. **Configurar `operator_contact_ids`** de los tenants que usen el agente financiero (sin lista, nadie factura por chat).
 
 **Pronto**
-7. CSP con nonce en el frontend; allowlist de esquemas en `media_url` (solo `https:`).
+7. CSP con nonce en el frontend (la de Traefik, `script-src 'self'`, bloquea los scripts en línea de Next: verificar contra el despliegue real). ~~Esquemas de `media_url`~~ — el frontend solo enlaza `http(s)` (2026-10-22); falta validarlo también en el backend al guardar.
+   - ~~Next 15.5.27 con RCE crítico (SVG en optimización de imágenes) y DoS~~ — actualizado a 15.5.28 (2026-10-22). Quedan avisos altos en `tailwindcss`/`postcss` (herramientas de build, no entran al navegador).
 8. Cifrar `messages.content`, `raw_payload` y las cabeceras de `tenant_webhooks`; redactar datos en los access logs.
 9. `audit_logs`: `REVOKE UPDATE, DELETE` y cubrir las tablas que faltan con el trigger.
 10. Redis separado para Celery y para caché/límites, con política de desalojo adecuada; contraseña en `redis-exporter`; Alertmanager.
