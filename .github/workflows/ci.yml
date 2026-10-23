@@ -352,14 +352,48 @@ jobs:
           "
 
   # ─── Stage 8: Frontend (Sprint 15+) ────────────────────────────────────────
+  # Corre cuando el cambio toca el frontend (o este workflow), sin depender del titulo del PR.
+  changes:
+    name: "Detect Changes"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      frontend: ${{ steps.filtro.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Frontend changed?
+        id: filtro
+        env:
+          BASE_PR: ${{ github.event.pull_request.base.sha }}
+          HEAD_PR: ${{ github.event.pull_request.head.sha }}
+          BEFORE_PUSH: ${{ github.event.before }}
+          HEAD_PUSH: ${{ github.sha }}
+        run: |
+          if [[ -n "$BASE_PR" ]]; then
+            base="$BASE_PR"; head="$HEAD_PR"
+          else
+            base="$BEFORE_PUSH"; head="$HEAD_PUSH"
+          fi
+          # Sin base valida (rama nueva, push forzado): ante la duda, se corre.
+          if [[ -z "$base" ]] || [[ "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$base" "$head" | grep -qE '^(frontend/|\.github/workflows/ci\.yml$)'; then
+            echo "frontend=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend=false" >> "$GITHUB_OUTPUT"
+          fi
+
   frontend:
     name: "Frontend Checks"
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: |
-      contains(github.event.pull_request.title, 'frontend') ||
-      contains(github.event.pull_request.title, 'sprint-15') ||
-      contains(github.event.head_commit.message, 'frontend')
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -396,7 +430,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
-    needs: [lint, typecheck, test-unit, test-integration, security, migration-check, docker-build]
+    needs: [lint, typecheck, test-unit, test-integration, security, migration-check, docker-build, frontend]
     steps:
       - name: Check all jobs
         run: |
@@ -406,7 +440,8 @@ jobs:
              [[ "${{ needs.test-integration.result }}" != "success" ]] || \
              [[ "${{ needs.security.result }}" != "success" ]] || \
              [[ "${{ needs.migration-check.result }}" != "success" ]] || \
-             [[ "${{ needs.docker-build.result }}" != "success" ]]; then
+             [[ "${{ needs.docker-build.result }}" != "success" ]] || \
+             { [[ "${{ needs.frontend.result }}" != "success" ]] && [[ "${{ needs.frontend.result }}" != "skipped" ]]; }; then
             echo "::error::Uno o más jobs del CI fallaron. PR no puede mergearse."
             exit 1
           fi
