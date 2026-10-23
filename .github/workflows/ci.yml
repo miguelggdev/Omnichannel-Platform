@@ -15,7 +15,8 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # En main no se cancela: un push posterior no debe ocultar cambios del anterior.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   PYTHON_VERSION: "3.11"
@@ -357,36 +358,27 @@ jobs:
     name: "Detect Changes"
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       frontend: ${{ steps.filtro.outputs.frontend }}
     steps:
+      # Solo necesario en push (en PR el filtro usa la API de GitHub).
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        if: github.event_name == 'push'
 
-      - name: Frontend changed?
+      # En PR compara contra el merge-base (equivalente a tres puntos).
+      - uses: dorny/paths-filter@v3
         id: filtro
-        env:
-          BASE_PR: ${{ github.event.pull_request.base.sha }}
-          HEAD_PR: ${{ github.event.pull_request.head.sha }}
-          BEFORE_PUSH: ${{ github.event.before }}
-          HEAD_PUSH: ${{ github.sha }}
-        run: |
-          if [[ -n "$BASE_PR" ]]; then
-            base="$BASE_PR"; head="$HEAD_PR"
-          else
-            base="$BEFORE_PUSH"; head="$HEAD_PUSH"
-          fi
-          # Sin base valida (rama nueva, push forzado): ante la duda, se corre.
-          if [[ -z "$base" ]] || [[ "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-            echo "frontend=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if git diff --name-only "$base" "$head" | grep -qE '^(frontend/|\.github/workflows/ci\.yml$)'; then
-            echo "frontend=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "frontend=false" >> "$GITHUB_OUTPUT"
-          fi
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+              - 'contracts/**'
+              - 'docker-compose.yml'
+              - 'traefik/**'
+              - '.github/workflows/ci.yml'
 
   frontend:
     name: "Frontend Checks"
@@ -430,18 +422,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
-    needs: [lint, typecheck, test-unit, test-integration, security, migration-check, docker-build, frontend]
+    needs: [changes, lint, typecheck, test-unit, test-integration, security, migration-check, docker-build, frontend]
     steps:
       - name: Check all jobs
         run: |
-          if [[ "${{ needs.lint.result }}" != "success" ]] || \
+          if [[ "${{ needs.changes.result }}" != "success" ]] || \
+             [[ "${{ needs.lint.result }}" != "success" ]] || \
              [[ "${{ needs.typecheck.result }}" != "success" ]] || \
              [[ "${{ needs.test-unit.result }}" != "success" ]] || \
              [[ "${{ needs.test-integration.result }}" != "success" ]] || \
              [[ "${{ needs.security.result }}" != "success" ]] || \
              [[ "${{ needs.migration-check.result }}" != "success" ]] || \
              [[ "${{ needs.docker-build.result }}" != "success" ]] || \
-             { [[ "${{ needs.frontend.result }}" != "success" ]] && [[ "${{ needs.frontend.result }}" != "skipped" ]]; }; then
+             { [[ "${{ needs.frontend.result }}" != "success" ]] && \
+               { [[ "${{ needs.frontend.result }}" != "skipped" ]] || [[ "${{ needs.changes.outputs.frontend }}" == "true" ]]; }; }; then
             echo "::error::Uno o más jobs del CI fallaron. PR no puede mergearse."
             exit 1
           fi
