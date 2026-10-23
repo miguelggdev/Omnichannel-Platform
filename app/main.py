@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, cast
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.internal.health import router as health_router
@@ -26,10 +27,15 @@ from app.api.v1.clinical import router as clinical_router
 from app.api.v1.contacts import router as contacts_router
 from app.api.v1.conversations import router as conversations_router
 from app.api.v1.csat import router as csat_router
+from app.api.v1.deals import router as deals_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.feature_flags import router as feature_flags_router
+from app.api.v1.lead_analytics import router as lead_analytics_router
 from app.api.v1.lead_module import platform_router as lead_module_platform_router
 from app.api.v1.lead_module import router as lead_module_router
+from app.api.v1.lead_scoring_config import router as lead_scoring_config_router
+from app.api.v1.lead_sequences import leads_router as lead_sequences_leads_router
+from app.api.v1.lead_sequences import router as lead_sequences_router
 from app.api.v1.lead_sources import router as lead_sources_router
 from app.api.v1.lead_stages import router as lead_stages_router
 from app.api.v1.leads import router as leads_router
@@ -42,6 +48,7 @@ from app.api.v1.platform_security import router as platform_security_router
 from app.api.v1.preferences import router as preferences_router
 from app.api.v1.quick_replies import router as quick_replies_router
 from app.api.v1.sandbox import router as sandbox_router
+from app.api.v1.scheduled_calls import router as scheduled_calls_router
 from app.api.v1.tags import contact_tags_router
 from app.api.v1.tags import router as tags_router
 from app.api.v1.templates import router as templates_router
@@ -56,10 +63,12 @@ from app.core.exceptions import (
     AppException,
     app_exception_handler,
     unhandled_exception_handler,
+    validation_exception_handler,
 )
 from app.core.logging import setup_logging
 from app.core.telemetry import instrument_fastapi, setup_telemetry, shutdown_telemetry
 from app.middleware.audit import AuditContextMiddleware
+from app.middleware.body_limit import BodySizeLimitMiddleware
 from app.middleware.observability import ObservabilityMiddleware
 from app.middleware.public_capture_cors import PublicCaptureCORSMiddleware
 from app.middleware.tenant_context import TenantContextMiddleware
@@ -139,13 +148,15 @@ def create_app() -> FastAPI:
     Returns:
         Instancia configurada de FastAPI.
     """
+    # En produccion no se publica el mapa de la API (OWASP API9): Swagger, ReDoc y el esquema.
+    docs = get_settings().APP_ENV != "production"
     app = FastAPI(
         title="Omnichannel Conversational AI",
         description="Plataforma SaaS omnicanal multi-tenant de IA conversacional",
         version="1.0.0",
-        docs_url="/api/docs",
-        redoc_url="/api/redoc",
-        openapi_url="/api/openapi.json",
+        docs_url="/api/docs" if docs else None,
+        redoc_url="/api/redoc" if docs else None,
+        openapi_url="/api/openapi.json" if docs else None,
         lifespan=lifespan,
         # FastAPI >= 0.142 trae telemetria propia; la instrumentacion del proyecto
         # es `instrument_fastapi()` (una traza por request, sin /health ni
@@ -175,10 +186,16 @@ def create_app() -> FastAPI:
     # Lo ultimo registrado es lo primero que ejecuta: va por fuera del CORSMiddleware global
     # para que el preflight de la captura publica no lo rechace ese (ver su docstring).
     app.add_middleware(PublicCaptureCORSMiddleware)
+    # Por fuera de todo: el tope del cuerpo se aplica antes de que nadie lo lea (ADR-088).
+    app.add_middleware(BodySizeLimitMiddleware)
 
     # ── Exception handlers ──
     app.add_exception_handler(AppException, app_exception_handler)  # type: ignore[arg-type]
     app.add_exception_handler(Exception, unhandled_exception_handler)
+    app.add_exception_handler(
+        RequestValidationError,
+        validation_exception_handler,  # type: ignore[arg-type]
+    )
 
     # ── Routers ──
     app.include_router(health_router, prefix="/internal", tags=["internal"])
@@ -190,9 +207,15 @@ def create_app() -> FastAPI:
         lead_module_platform_router, prefix="/api/v1/platform", tags=["platform", "leads"]
     )
     app.include_router(leads_router, prefix="/api/v1/leads", tags=["leads"])
+    app.include_router(lead_sequences_leads_router, prefix="/api/v1/leads", tags=["leads"])
+    app.include_router(lead_sequences_router, prefix="/api/v1/lead-sequences", tags=["leads"])
+    app.include_router(deals_router, prefix="/api/v1/deals", tags=["leads"])
+    app.include_router(lead_analytics_router, prefix="/api/v1/analytics", tags=["leads"])
+    app.include_router(scheduled_calls_router, prefix="/api/v1/scheduled-calls", tags=["leads"])
     app.include_router(capture_router, prefix="/api/v1/capture", tags=["leads"])
     app.include_router(lead_stages_router, prefix="/api/v1/lead-pipeline-stages", tags=["leads"])
     app.include_router(lead_sources_router, prefix="/api/v1/lead-sources", tags=["leads"])
+    app.include_router(lead_scoring_config_router, prefix="/api/v1/clients", tags=["leads"])
     # Los webhooks NO pasan por TenantContextMiddleware: se autentican por firma
     # HMAC. El prefijo debe coincidir con WEBHOOK_PATHS_PREFIX del middleware.
     app.include_router(webhooks_router, prefix="/api/v1/webhooks", tags=["webhooks"])

@@ -130,10 +130,25 @@ async def get_raw_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Verifica la conectividad con la base de datos al iniciar la app."""
+    """Verifica la conectividad y que el rol de la app no salte la RLS.
+
+    `FORCE ROW LEVEL SECURITY` no aplica a un rol `SUPERUSER` o `BYPASSRLS`: con uno de esos,
+    todo el aislamiento entre tenants dependeria solo de los filtros `client_id` del codigo.
+    No se impide el arranque (el rol por defecto de Supabase lo tiene, y cambiarlo es una
+    decision de despliegue), pero queda en el log como CRITICAL en cada arranque.
+    """
     async with AsyncSessionLocal() as session:
-        await session.execute(text("SELECT 1"))
+        fila = (
+            await session.execute(
+                text("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user")
+            )
+        ).first()
     logger.info("Conexión a base de datos verificada (Supavisor)")
+    if fila is not None and (fila[0] or fila[1]):
+        logger.critical(
+            "El rol de base de datos de la app es SUPERUSER o BYPASSRLS: la RLS no le aplica. "
+            "Usa un rol propio con NOBYPASSRLS (ver ADR-088)."
+        )
 
 
 async def dispose_db() -> None:

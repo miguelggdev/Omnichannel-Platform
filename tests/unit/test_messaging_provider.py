@@ -290,6 +290,14 @@ class TestYCloudProvider:
 
         assert not await ycloud.YCloudProvider().validate_signature(body, ajena, WEBHOOK_SECRET)
 
+    async def test_secreto_sin_configurar_nunca_valida(self) -> None:
+        """Con `YCLOUD_WEBHOOK_SECRET` vacio cualquiera calcula el HMAC con clave vacia."""
+        body = json.dumps(YCLOUD_TEXT).encode()
+
+        assert not await ycloud.YCloudProvider().validate_signature(
+            body, _firma_ycloud(body, ""), ""
+        )
+
     async def test_cuerpo_alterado_no_valida(self) -> None:
         """Si el cuerpo cambia despues de firmar, la firma deja de valer."""
         body = json.dumps(YCLOUD_TEXT).encode()

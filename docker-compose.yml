@@ -55,6 +55,8 @@ services:
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
       - JWT_EXPIRATION_MINUTES=${JWT_EXPIRATION_MINUTES:-30}
       - JWT_REFRESH_EXPIRATION_DAYS=${JWT_REFRESH_EXPIRATION_DAYS:-7}
+      - AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE:-true}
+      - REFRESH_REUSE_GRACE_SECONDS=${REFRESH_REUSE_GRACE_SECONDS:-10}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_CHAT_MODEL=${OPENAI_CHAT_MODEL:-gpt-4o}
@@ -103,6 +105,17 @@ services:
       - WEBCHAT_MAX_MESSAGE_CHARS=${WEBCHAT_MAX_MESSAGE_CHARS:-4000}
       - WEBCHAT_MAX_FRAME_BYTES=${WEBCHAT_MAX_FRAME_BYTES:-16384}
       - WEBCHAT_MAX_CONNECTIONS_PER_VISITOR=${WEBCHAT_MAX_CONNECTIONS_PER_VISITOR:-5}
+      - WEBCHAT_MAX_MESSAGES_PER_IP_PER_MINUTE=${WEBCHAT_MAX_MESSAGES_PER_IP_PER_MINUTE:-60}
+      - WEBCHAT_MAX_SESSIONS_PER_IP_PER_HOUR=${WEBCHAT_MAX_SESSIONS_PER_IP_PER_HOUR:-30}
+      - ENRICHMENT_PROVIDERS=${ENRICHMENT_PROVIDERS:-[]}
+      - ENRICHMENT_MAX_PER_TENANT_PER_HOUR=${ENRICHMENT_MAX_PER_TENANT_PER_HOUR:-200}
+      - LEAD_AI_SCORE_MODEL=${LEAD_AI_SCORE_MODEL:-gpt-4o-mini}
+      - LEAD_AI_SCORE_MAX_PER_TENANT_PER_HOUR=${LEAD_AI_SCORE_MAX_PER_TENANT_PER_HOUR:-60}
+      - LEAD_SEQUENCE_AI_MODEL=${LEAD_SEQUENCE_AI_MODEL:-gpt-4o-mini}
+      - LEAD_SEQUENCE_BATCH_SIZE=${LEAD_SEQUENCE_BATCH_SIZE:-100}
+      - LEAD_MANUAL_MESSAGES_PER_USER_PER_HOUR=${LEAD_MANUAL_MESSAGES_PER_USER_PER_HOUR:-60}
+      - VOICE_AI_AUTO_START=${VOICE_AI_AUTO_START:-false}
+      - VOICE_AI_START_GRACE_MINUTES=${VOICE_AI_START_GRACE_MINUTES:-15}
       - WEBCHAT_HELLO_TIMEOUT_SECONDS=${WEBCHAT_HELLO_TIMEOUT_SECONDS:-10}
       - WEBCHAT_IDLE_TIMEOUT_SECONDS=${WEBCHAT_IDLE_TIMEOUT_SECONDS:-120}
       - WEBCHAT_REPLAY_LIMIT=${WEBCHAT_REPLAY_LIMIT:-50}
@@ -147,7 +160,9 @@ services:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`api.localhost`)"
+      # Sin /internal (metricas, health detallado): Prometheus y el healthcheck van por la red
+      # interna, y desde fuera no se debe ver el estado ni las metricas por tenant (ADR-088).
+      - "traefik.http.routers.api.rule=Host(`api.localhost`) && !PathPrefix(`/internal`)"
       - "traefik.http.routers.api.entrypoints=websecure"
       - "traefik.http.routers.api.tls=true"
       - "traefik.http.routers.api.middlewares=rate-limit@file,security-headers@file,compress@file"
@@ -188,7 +203,7 @@ services:
       - "traefik.http.routers.frontend.rule=Host(`app.localhost`)"
       - "traefik.http.routers.frontend.entrypoints=websecure"
       - "traefik.http.routers.frontend.tls=true"
-      - "traefik.http.routers.frontend.middlewares=security-headers@file,compress@file"
+      - "traefik.http.routers.frontend.middlewares=security-headers-web@file,compress@file"
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
       - "traefik.http.services.frontend.loadbalancer.healthcheck.path=/api/health"
       - "traefik.http.services.frontend.loadbalancer.healthcheck.interval=10s"
@@ -513,6 +528,12 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
       - DEFAULT_CLIENT_ID=${DEFAULT_CLIENT_ID}
+      # Sprint 18: secuencias de follow-up (modo `ai` y tamano de cada pasada).
+      - LEAD_SEQUENCE_AI_MODEL=${LEAD_SEQUENCE_AI_MODEL:-gpt-4o-mini}
+      - LEAD_SEQUENCE_BATCH_SIZE=${LEAD_SEQUENCE_BATCH_SIZE:-100}
+      # Sprint 19: llamadas agendadas con voz IA y recordatorios.
+      - VOICE_AI_AUTO_START=${VOICE_AI_AUTO_START:-false}
+      - VOICE_AI_START_GRACE_MINUTES=${VOICE_AI_START_GRACE_MINUTES:-15}
       # Sprint 10: bulk_clone_tenant_from_template copia archivos de Storage
       # al clonar los documentos del tenant nuevo (ver tenant_cloner.py).
       - SUPABASE_URL=${SUPABASE_URL}
@@ -595,6 +616,8 @@ services:
       - OTEL_SERVICE_NAME=omnichannel-worker-lead-enrichment
       - ENRICHMENT_CACHE_TTL_SECONDS=${ENRICHMENT_CACHE_TTL_SECONDS:-2592000}
       - ENRICHMENT_NEGATIVE_CACHE_TTL_SECONDS=${ENRICHMENT_NEGATIVE_CACHE_TTL_SECONDS:-86400}
+      - ENRICHMENT_PROVIDERS=${ENRICHMENT_PROVIDERS:-[]}
+      - ENRICHMENT_PERSON_ENABLED=${ENRICHMENT_PERSON_ENABLED:-false}
       - OTEL_TRACES_SAMPLER_RATIO=${OTEL_TRACES_SAMPLER_RATIO:-1.0}
       - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
     tmpfs:

@@ -11,6 +11,10 @@ PATCH  /api/v1/leads/{id}/stage         mueve de etapa (ganado/perdido/descalifi
 PUT    /api/v1/leads/{id}/contact       enlaza con un contacto existente
 POST   /api/v1/leads/{id}/contact       crea un contacto a partir del lead y lo enlaza
 DELETE /api/v1/leads/{id}/contact       suelta el enlace
+POST   /api/v1/leads/{id}/enrich        encola el enriquecimiento (202; Celery, cola `lead_enrichment`)
+GET    /api/v1/leads/{id}/score         scores vigentes y ultimo calculo de cada tipo
+POST   /api/v1/leads/{id}/score/recalc  recalcula FIT y comportamiento (y el AI score si se pide)
+POST   /api/v1/leads/{id}/assign        asigna a un usuario o por round-robin
 
 Decisiones:
 
@@ -35,10 +39,19 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.database import tenant_session
 from app.core.dependencies import require_leads_module
 from app.core.encryption import blind_index
-from app.core.exceptions import DUPLICATE, NOT_FOUND, VALIDATION_ERROR, AppException
+from app.core.exceptions import (
+    CONFLICT,
+    DUPLICATE,
+    FORBIDDEN,
+    NOT_FOUND,
+    VALIDATION_ERROR,
+    AppException,
+)
+from app.core.rate_limit import hit
 from app.models.contact import Contact
 from app.models.lead import Lead, canonicalizar_linkedin, normalizar_telefono_de_lead
 from app.models.lead_activity import (
@@ -54,6 +67,8 @@ from app.models.lead_activity import (
     ACTIVITY_UPDATED,
 )
 from app.models.lead_pipeline_stage import LeadPipelineStage
+from app.models.lead_score import SCORE_AI, TRIGGER_RECALC
+from app.models.lead_sequence import EXIT_LEAD_CLOSED, EXIT_LEAD_DELETED
 from app.models.lead_source import LeadSource
 from app.models.user import User
 from app.schemas.common import PaginatedResponse
@@ -69,7 +84,16 @@ from app.schemas.lead import (
     LeadUpdate,
     StageResponse,
 )
+from app.schemas.lead_automation import (
+    AssignRequest,
+    EnrichResponse,
+    ScoreRecalcRequest,
+    ScoreRecalcResponse,
+)
+from app.schemas.lead_scoring import LeadScoresDetail
 from app.services.lead_activity import listar_actividades, registrar_actividad
+from app.services.lead_ai_score import preparar_ai_score, valorar
+from app.services.lead_assignment import asignar, asignar_automaticamente, siguiente_round_robin
 from app.services.lead_batch import insertar_lote
 from app.services.lead_contact_sync import (
     ContactoYaVinculadoError,
@@ -86,6 +110,15 @@ from app.services.lead_import import (
     parsear_archivo,
 )
 from app.services.lead_pipeline import DISQUALIFIED_SLUG, FIRST_STAGE_SLUG
+from app.services.lead_qualification import calificar_automaticamente
+from app.services.lead_score_service import (
+    aplicar_score,
+    pesos_del_tenant,
+    recalcular_behavioral,
+    recalcular_fit,
+    scores_detallados,
+)
+from app.services.lead_sequence_triggers import disparar_inscripciones, sacar_de_secuencias
 
 logger = logging.getLogger(__name__)
 
@@ -726,6 +759,8 @@ async def create_lead(
                 stage=etapa.slug,
                 source_id=data.source_id,
             )
+            await asignar_automaticamente(session, lead)
+            await disparar_inscripciones(session, lead, "lead_created")
 
             contacto_id = await contacto_inequivoco(session, client_id, data.email, data.phone)
             if contacto_id is not None:
@@ -901,6 +936,7 @@ async def delete_lead(
         registrar_actividad(
             session, client_id=client_id, lead_id=lead.id, tipo=ACTIVITY_DELETED, user_id=_uid(user)
         )
+        await sacar_de_secuencias(session, lead, EXIT_LEAD_DELETED)
     logger.info("Lead %s borrado (soft) por %s (tenant %s)", lead_id, user["user_id"], client_id)
 
 
@@ -980,6 +1016,10 @@ async def move_stage(
             to_stage=etapa.slug,
             status=lead.status,
         )
+        if lead.status == "active":
+            await disparar_inscripciones(session, lead, "stage_changed")
+        else:
+            await sacar_de_secuencias(session, lead, EXIT_LEAD_CLOSED)
         return await _responder(session, lead)
 
 
@@ -1156,3 +1196,222 @@ async def lead_activities(
             page_size=page_size,
             total_pages=(total + page_size - 1) // page_size,
         )
+
+
+# ── Enriquecimiento, scores y asignacion (Sprint 17) ─────────────────────────────────────────
+
+COLA_NO_DISPONIBLE = "QUEUE_UNAVAILABLE"
+
+
+@router.post("/{lead_id}/enrich", response_model=EnrichResponse, status_code=202)
+async def enrich_lead(
+    lead_id: UUID,
+    user: dict[str, Any] = Depends(require_leads_module(*_WRITE_ROLES)),
+) -> EnrichResponse:
+    """Encola el enriquecimiento del lead (empresa por dominio; la persona solo si esta activado).
+
+    Cada peticion gasta creditos del proveedor: hay un limite por tenant y hora
+    (`ENRICHMENT_MAX_PER_TENANT_PER_HOUR`) y solo una por lead cada minuto. El trabajo lo hace la
+    tarea `app.tasks.enrichment_enrich_lead` (cola `lead_enrichment`); el resultado queda en el
+    historial del lead (`enriched` / `enrichment_empty`) y recalcula su FIT.
+
+    Args:
+        lead_id: Lead a enriquecer.
+        user: Usuario autenticado.
+
+    Returns:
+        202 con `status="queued"`.
+
+    Raises:
+        AppException: 404 si el lead no existe; 409 si no hay proveedor configurado; 429 por los
+            limites; 503 si no se pudo encolar o Redis no responde.
+    """
+    client_id: UUID = user["client_id"]
+    ajustes = get_settings()
+    if not ajustes.ENRICHMENT_PROVIDERS:
+        raise AppException(
+            status_code=409,
+            error_code=CONFLICT,
+            message="No hay ningun proveedor de enriquecimiento configurado",
+        )
+    async with tenant_session(client_id) as session:
+        await _lead_o_404(session, lead_id, client_id)
+    await hit(f"enrich-tenant:{client_id}", ajustes.ENRICHMENT_MAX_PER_TENANT_PER_HOUR, 3600)
+    await hit(f"enrich-lead:{client_id}:{lead_id}", 1, 60)
+
+    from app.tasks.enrichment_tasks import enrich_lead as tarea
+
+    try:
+        tarea.delay(str(client_id), str(lead_id), str(_uid(user)))
+    except Exception as exc:
+        logger.exception("No se pudo encolar el enriquecimiento del lead %s", lead_id)
+        raise AppException(
+            status_code=503,
+            error_code=COLA_NO_DISPONIBLE,
+            message="No se pudo encolar el enriquecimiento; intentalo de nuevo",
+        ) from exc
+    return EnrichResponse(lead_id=lead_id)
+
+
+@router.get("/{lead_id}/score", response_model=LeadScoresDetail)
+async def get_lead_score(
+    lead_id: UUID,
+    user: dict[str, Any] = Depends(require_leads_module(*_READ_ROLES)),
+) -> LeadScoresDetail:
+    """Scores vigentes del lead, los pesos del tenant y el ultimo calculo de cada tipo.
+
+    Args:
+        lead_id: Lead.
+        user: Usuario autenticado.
+
+    Returns:
+        El detalle (`latest` solo trae los tipos con historial).
+
+    Raises:
+        AppException: 404 si el lead no existe.
+    """
+    client_id: UUID = user["client_id"]
+    async with tenant_session(client_id) as session:
+        lead = await _lead_o_404(session, lead_id, client_id)
+        return await scores_detallados(session, lead)
+
+
+@router.post("/{lead_id}/score/recalc", response_model=ScoreRecalcResponse)
+async def recalc_lead_score(
+    lead_id: UUID,
+    data: ScoreRecalcRequest | None = None,
+    user: dict[str, Any] = Depends(require_leads_module(*_WRITE_ROLES)),
+) -> ScoreRecalcResponse:
+    """Recalcula FIT y comportamiento del lead (y su AI score con `include_ai`).
+
+    Es un recalculo pedido a mano: deja fila en el historial aunque el valor no cambie. El AI score
+    gasta tokens del tenant (limite por hora y presupuesto del mes) y la llamada al modelo se
+    hace **fuera** de la transaccion de la base. Al terminar se evalua la calificacion
+    automatica.
+
+    Args:
+        lead_id: Lead.
+        data: `include_ai` (por defecto `false`).
+        user: Usuario autenticado.
+
+    Returns:
+        Que se recalculo, que se omitio y por que, y los valores vigentes.
+
+    Raises:
+        AppException: 404 si el lead no existe; 429 por el limite del AI score.
+    """
+    client_id: UUID = user["client_id"]
+    uid = _uid(user)
+    incluir_ai = bool(data and data.include_ai)
+    omitidos: dict[str, str] = {}
+    resultado_ai = None
+
+    if incluir_ai:
+        await hit(
+            f"lead-ai:{client_id}", get_settings().LEAD_AI_SCORE_MAX_PER_TENANT_PER_HOUR, 3600
+        )
+        async with tenant_session(client_id) as session:
+            lead = await _lead_o_404(session, lead_id, client_id)
+            preparado, motivo = await preparar_ai_score(session, lead)
+        if preparado is not None:
+            resultado_ai, motivo = await valorar(preparado)
+        if motivo is not None:
+            omitidos[SCORE_AI] = motivo
+
+    async with tenant_session(client_id, user_id=uid) as session:
+        lead = await _lead_o_404(session, lead_id, client_id)
+        pesos = await pesos_del_tenant(session, client_id)
+        calculados: list[str] = []
+        if await recalcular_fit(
+            session, lead, trigger=TRIGGER_RECALC, user_id=uid, pesos=pesos, forzar_historial=True
+        ):
+            calculados.append("fit")
+        else:
+            omitidos["fit"] = "no_icp_or_suppressed"
+        if await recalcular_behavioral(
+            session,
+            lead,
+            trigger=TRIGGER_RECALC,
+            ahora=_ahora(),
+            user_id=uid,
+            pesos=pesos,
+            forzar_historial=True,
+        ):
+            calculados.append("behavioral")
+        else:
+            omitidos["behavioral"] = "suppressed"
+        if resultado_ai is not None and SCORE_AI not in omitidos:
+            if aplicar_score(
+                session,
+                lead,
+                SCORE_AI,
+                resultado_ai,
+                trigger=TRIGGER_RECALC,
+                pesos=pesos,
+                user_id=uid,
+                forzar_historial=True,
+            ):
+                calculados.append(SCORE_AI)
+                await disparar_inscripciones(session, lead, "score_changed")
+            else:
+                omitidos[SCORE_AI] = "suppressed"
+        await calificar_automaticamente(session, lead)
+        return ScoreRecalcResponse(
+            lead_id=lead.id,
+            recalculated=calculados,
+            skipped=omitidos,
+            fit_score=lead.fit_score,
+            behavioral_score=lead.behavioral_score,
+            ai_score=lead.ai_score,
+            total_score=lead.total_score,
+        )
+
+
+@router.post("/{lead_id}/assign", response_model=LeadResponse)
+async def assign_lead(
+    lead_id: UUID,
+    data: AssignRequest,
+    user: dict[str, Any] = Depends(require_leads_module(*_WRITE_ROLES)),
+) -> LeadResponse:
+    """Asigna el lead a un usuario concreto o al siguiente del round-robin.
+
+    Un `agent` solo puede quedarse el lead el mismo; repartir a otros (o por round-robin) es de
+    `supervisor`, `admin` y `super_admin`. El usuario debe existir en el tenant, estar activo y
+    poder atender leads.
+
+    Args:
+        lead_id: Lead.
+        data: `strategy="user"` con `user_id`, o `strategy="round_robin"`.
+        user: Usuario autenticado.
+
+    Returns:
+        El lead con su nuevo responsable.
+
+    Raises:
+        AppException: 404 si el lead no existe; 403 si un agente intenta asignar a otro; 400 si el
+            usuario no es valido o no hay nadie elegible para el round-robin.
+    """
+    client_id: UUID = user["client_id"]
+    uid = _uid(user)
+    if user["role"] == "agent" and (data.strategy != "user" or data.user_id != uid):
+        raise AppException(
+            status_code=403,
+            error_code=FORBIDDEN,
+            message="Un agente solo puede asignarse leads a si mismo",
+        )
+    async with tenant_session(client_id, user_id=uid) as session:
+        lead = await _lead_o_404(session, lead_id, client_id)
+        if data.strategy == "round_robin":
+            elegido = await siguiente_round_robin(session, client_id)
+            if elegido is None:
+                raise AppException(
+                    status_code=400,
+                    error_code=VALIDATION_ERROR,
+                    message="No hay agentes activos entre los que repartir",
+                )
+        else:
+            elegido = data.user_id
+            await _validar_referencias(session, client_id, assigned_user_id=elegido)
+        asignar(session, lead, elegido, actor_id=uid)
+        await session.flush()
+        return await _responder(session, lead)

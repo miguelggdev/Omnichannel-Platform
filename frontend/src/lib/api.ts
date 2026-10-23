@@ -19,15 +19,17 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 let refreshing: Promise<string> | null = null;
 
-/** Renueva el access token. Las peticiones que fallan a la vez comparten una sola renovacion. */
-function refreshAccessToken(): Promise<string> {
+/**
+ * Pide un access token nuevo. El refresh token va solo, en su cookie `httpOnly` (mismo origen),
+ * y el backend lo rota en cada llamada. Las peticiones que fallan a la vez comparten una sola
+ * renovacion: dos renovaciones con la misma cookie parecerian un robo.
+ */
+export function refreshAccessToken(): Promise<string> {
   if (!refreshing) {
-    const refreshToken = useAuthStore.getState().refreshToken;
-    if (!refreshToken) return Promise.reject(new Error("sin refresh token"));
     refreshing = axios
-      .post<TokenResponse>("/api/v1/auth/refresh", { refresh_token: refreshToken })
+      .post<TokenResponse>("/api/v1/auth/refresh")
       .then(({ data }) => {
-        useAuthStore.getState().setTokens(data.access_token, data.refresh_token);
+        useAuthStore.getState().setTokens(data.access_token);
         return data.access_token;
       })
       .finally(() => {

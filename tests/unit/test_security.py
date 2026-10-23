@@ -84,16 +84,36 @@ class TestJWT:
         assert payload["type"] == "access"
 
     def test_create_refresh_token(self) -> None:
-        """create_refresh_token genera un token con type=refresh."""
-        token = create_refresh_token(self.SAMPLE_DATA)
+        """El refresh lleva identidad, version de sesion y un `jti` propio; ni rol ni email."""
+        datos = self.SAMPLE_DATA
+        token = create_refresh_token(datos["user_id"], datos["client_id"], 3)
         payload = decode_jwt(token)
         assert payload["type"] == "refresh"
-        assert payload["user_id"] == self.SAMPLE_DATA["user_id"]
+        assert payload["user_id"] == datos["user_id"]
+        assert payload["ver"] == 3
+        assert payload["jti"]
+        assert "role" not in payload
+        assert "email" not in payload
+
+    def test_cada_refresh_tiene_su_jti(self) -> None:
+        datos = self.SAMPLE_DATA
+        a = decode_jwt(create_refresh_token(datos["user_id"], datos["client_id"], 0))
+        b = decode_jwt(create_refresh_token(datos["user_id"], datos["client_id"], 0))
+        assert a["jti"] != b["jti"]
+
+    def test_los_tokens_llevan_iss_aud_e_iat(self) -> None:
+        from app.core.config import get_settings
+
+        payload = decode_jwt(create_access_token(self.SAMPLE_DATA))
+        assert payload["iss"] == get_settings().JWT_ISSUER
+        assert payload["aud"] == get_settings().JWT_AUDIENCE
+        assert "iat" in payload
 
     def test_access_and_refresh_are_different(self) -> None:
         """Access y refresh tokens son diferentes."""
-        access = create_access_token(self.SAMPLE_DATA)
-        refresh = create_refresh_token(self.SAMPLE_DATA)
+        datos = self.SAMPLE_DATA
+        access = create_access_token(datos)
+        refresh = create_refresh_token(datos["user_id"], datos["client_id"], 0)
         assert access != refresh
 
     def test_decode_invalid_token_raises(self) -> None:

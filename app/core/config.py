@@ -7,7 +7,7 @@ DATABASE_URL_DIRECT es SOLO para migraciones Alembic (conexión directa, puerto 
 
 from functools import lru_cache
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,8 +54,17 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://redis:6379/0"
 
     # JWT
+    # Secreto PROPIO de la plataforma: no reutilizar el JWT secret de Supabase (ADR-089).
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"
+    # Emisor y audiencia de nuestros tokens: un JWT de otro emisor no los trae y se rechaza.
+    JWT_ISSUER: str = "omnichannel-api"
+    JWT_AUDIENCE: str = "omnichannel-app"
+    # Cookie del refresh token (ADR-089). `Secure` siempre salvo desarrollo por http que no
+    # sea localhost (los navegadores ya aceptan cookies `Secure` en http://localhost).
+    AUTH_COOKIE_SECURE: bool = True
+    # Margen en que reusar un refresh ya rotado no se trata como robo (dos pestanas a la vez).
+    REFRESH_REUSE_GRACE_SECONDS: int = 10
     JWT_EXPIRATION_MINUTES: int = 30
     JWT_REFRESH_EXPIRATION_DAYS: int = 7
 
@@ -102,6 +111,9 @@ class Settings(BaseSettings):
     WEBCHAT_MAX_FRAME_BYTES: int = 16 * 1024
     WEBCHAT_MAX_MESSAGES_PER_MINUTE: int = 20
     WEBCHAT_MAX_CONNECTIONS_PER_VISITOR: int = 5
+    # Por IP (ADR-088): sin sesion cada conexion es un visitante nuevo con su propio limite.
+    WEBCHAT_MAX_MESSAGES_PER_IP_PER_MINUTE: int = 60
+    WEBCHAT_MAX_SESSIONS_PER_IP_PER_HOUR: int = 30
     WEBCHAT_HELLO_TIMEOUT_SECONDS: float = 10.0
     # Sin ningun frame (el widget manda `ping` cada ~25 s) se cierra la conexion.
     WEBCHAT_IDLE_TIMEOUT_SECONDS: float = 120.0
@@ -208,7 +220,26 @@ class Settings(BaseSettings):
     ONBOARDING_ENABLED: bool = False
     ONBOARDING_MAX_PER_IP_PER_HOUR: int = 5
     ONBOARDING_FREE_TOKEN_BUDGET: int = 50_000
+    # Presupuesto mensual de un tenant que nunca tuvo uno (ADR-088). Un mes nuevo hereda el
+    # presupuesto del anterior; solo sin historia se usa este. 0 = sin limite (no recomendado:
+    # sin fila, el consumo era ilimitado desde el segundo mes y cualquiera podia agotar la
+    # cuenta de OpenAI con mensajes).
+    TOKEN_BUDGET_DEFAULT_MONTHLY: int = 1_000_000
+    # Mensajes de un mismo contacto que pasan a la IA (o a transcripcion) por ventana. Por
+    # encima, el mensaje se guarda pero no se contesta: un bot o un atacante no puede quemar
+    # el presupuesto del tenant ni la cuenta de OpenAI desde un solo numero (OWASP LLM10).
+    AI_MAX_MESSAGES_PER_CONTACT: int = 20
+    AI_CONTACT_WINDOW_SECONDS: int = 600
+    # Longitud maxima del texto de un mensaje que entra al grafo de IA.
+    AI_MAX_INPUT_CHARS: int = 4000
     EMAIL_VERIFICATION_TTL_HOURS: int = 24
+    # Login y refresh (OWASP API4/ASVS 2.2): intentos por IP y minuto, y fallos por email en la
+    # ventana antes de bloquear ese email. Fallan abierto si Redis no responde: dejar a todos
+    # sin entrar por una caida de Redis es peor que unos minutos sin freno.
+    LOGIN_MAX_PER_IP_PER_MINUTE: int = 20
+    LOGIN_MAX_FAILURES_PER_EMAIL: int = 10
+    LOGIN_FAILURE_WINDOW_SECONDS: int = 900
+    REFRESH_MAX_PER_IP_PER_MINUTE: int = 60
 
     # Captura publica de leads (`POST /capture/{token}`, Sprint 16): limites por minuto.
     # El de IP corta antes de tocar la base, incluso con tokens que no existen.
@@ -220,6 +251,27 @@ class Settings(BaseSettings):
     # menos tiempo: el proveedor puede conocer la empresa manana.
     ENRICHMENT_CACHE_TTL_SECONDS: int = 30 * 24 * 3600
     ENRICHMENT_NEGATIVE_CACHE_TTL_SECONDS: int = 24 * 3600
+    # Proveedores de enriquecimiento activos, por orden de prioridad (nombres registrados con
+    # `@register_provider`). Vacio = ninguno: enriquecer responde "sin proveedor". Sin proveedor
+    # elegido todavia (PROGRESS.md, decisiones del producto).
+    ENRICHMENT_PROVIDERS: list[str] = []
+    # Consultar tambien a la PERSONA (envia email y LinkedIn a un tercero). Apagado hasta tener la
+    # respuesta de la consulta legal sobre transferencia de datos (ADR-085, addendum).
+    ENRICHMENT_PERSON_ENABLED: bool = False
+    # Peticiones de enriquecimiento por tenant y hora: cada una gasta creditos del proveedor.
+    ENRICHMENT_MAX_PER_TENANT_PER_HOUR: int = 200
+    # AI score de leads (Sprint 17): modelo, y peticiones por tenant y hora (cada una gasta tokens).
+    LEAD_AI_SCORE_MODEL: str = "gpt-4o-mini"
+    LEAD_AI_SCORE_MAX_PER_TENANT_PER_HOUR: int = 60
+    # Secuencias de follow-up (Sprint 18): modelo de los mensajes en modo `ai`, inscripciones que
+    # procesa cada pasada por tenant, y mensajes manuales por usuario y hora.
+    LEAD_SEQUENCE_AI_MODEL: str = "gpt-4o-mini"
+    LEAD_SEQUENCE_BATCH_SIZE: int = 100
+    LEAD_MANUAL_MESSAGES_PER_USER_PER_HOUR: int = 60
+    # Llamadas agendadas (Sprint 19): iniciar solas, a su hora, las de voz IA (apagado por defecto:
+    # llamar a una persona es una decision que se toma con conciencia) y cuanto se espera.
+    VOICE_AI_AUTO_START: bool = False
+    VOICE_AI_START_GRACE_MINUTES: int = 15
 
     # Observabilidad (Sprint 8)
     # Vacio = tracing deshabilitado. Es el valor por defecto a proposito: sin
@@ -307,6 +359,14 @@ class Settings(BaseSettings):
             raise ValueError("JWT_SECRET debe tener al menos 32 caracteres")
         return v
 
+    @field_validator("JWT_ALGORITHM")
+    @classmethod
+    def jwt_algorithm_hmac(cls, v: str) -> str:
+        """Solo algoritmos HMAC: `none` o uno asimetrico con una clave HMAC es inseguro."""
+        if v not in ("HS256", "HS384", "HS512"):
+            raise ValueError("JWT_ALGORITHM debe ser HS256, HS384 o HS512")
+        return v
+
     @field_validator("ENCRYPTION_KEY")
     @classmethod
     def encryption_key_min_length(cls, v: str) -> str:
@@ -314,6 +374,33 @@ class Settings(BaseSettings):
         if len(v) < 32:
             raise ValueError("ENCRYPTION_KEY debe tener al menos 32 caracteres")
         return v
+
+    @model_validator(mode="after")
+    def produccion_sin_valores_de_ejemplo(self) -> "Settings":
+        """En produccion, rechaza secretos de ejemplo y CORS abierto con credenciales.
+
+        Los validadores de longitud aceptan `your_encryption_key_min_32_chars_here` del
+        `.env.example`: un despliegue que olvide cambiarlo firmaria JWT con un secreto publico.
+
+        Returns:
+            La propia configuracion.
+
+        Raises:
+            ValueError: Si `APP_ENV=production` y un secreto parece de ejemplo, o
+                `CORS_ORIGINS` admite cualquier origen.
+        """
+        if self.APP_ENV != "production":
+            return self
+        marcas = ("your_", "your-", "changeme", "change-me", "placeholder", "example", "test-")
+        for nombre in ("JWT_SECRET", "ENCRYPTION_KEY"):
+            valor = str(getattr(self, nombre)).lower()
+            if any(marca in valor for marca in marcas):
+                raise ValueError(f"{nombre} tiene un valor de ejemplo; genera uno aleatorio")
+        if not self.AUTH_COOKIE_SECURE:
+            raise ValueError("AUTH_COOKIE_SECURE debe ser true en produccion")
+        if "*" in self.CORS_ORIGINS:
+            raise ValueError("CORS_ORIGINS no puede ser '*' en produccion (van credenciales)")
+        return self
 
     @field_validator("DATABASE_URL")
     @classmethod

@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from app.core.config import get_settings
 from app.tasks import ai_processor as tarea
 from tests.unit.agent_doubles import estado
 
@@ -119,6 +120,17 @@ class TestEstadoInicial:
         assert state["requires_handoff"] is False
         assert state["budget_status"] == "ok"
         assert state["message"] == {"text": "Hola"}
+
+    def test_recorta_un_texto_enorme_sin_tocar_el_original(self) -> None:
+        """Un mensaje de 50.000 caracteres no entra entero al grafo (OWASP LLM10)."""
+        original = {"text": "a" * 50_000, "channel": "whatsapp"}
+        maximo = get_settings().AI_MAX_INPUT_CHARS
+
+        state = tarea._initial_state("c", "v", "k", "whatsapp", original)
+
+        assert len(state["message"]["text"]) == maximo
+        assert state["message"]["channel"] == "whatsapp"
+        assert len(original["text"]) == 50_000
 
 
 class TestInvocacion:

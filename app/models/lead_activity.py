@@ -44,6 +44,16 @@ ACTIVITY_LINK_CLICKED = "link_clicked"
 ACTIVITY_SEQUENCE_ENROLLED = "sequence_enrolled"
 ACTIVITY_SEQUENCE_EXITED = "sequence_exited"
 ACTIVITY_SEQUENCE_COMPLETED = "sequence_completed"
+#: Un paso `message` enviado (ids, canal y posicion; nunca el texto: ese es del mensaje).
+ACTIVITY_SEQUENCE_MESSAGE_SENT = "sequence_message_sent"
+#: Un envio que fallo (codigo del fallo, sin el detalle del proveedor).
+ACTIVITY_SEQUENCE_SEND_FAILED = "sequence_send_failed"
+#: Un paso `task`: lo que debe hacer una persona (el titulo es texto del tenant).
+ACTIVITY_SEQUENCE_TASK = "sequence_task"
+#: La respuesta del lead a una secuencia, ya clasificada (`reply_kind`).
+ACTIVITY_SEQUENCE_REPLY = "sequence_reply"
+#: Mensaje escrito a mano por una persona (`POST /leads/{id}/message`).
+ACTIVITY_MESSAGE_SENT = "message_sent"
 #: Respuesta del lead que no llega como mensaje de un contacto (p. ej. un email contestado a un
 #: lead sin contacto enlazado). La anota la deteccion de respuestas (Dev B); las secuencias la
 #: cuentan como `replied`.
@@ -53,6 +63,10 @@ ACTIVITY_DEAL_CREATED = "deal_created"
 ACTIVITY_DEAL_STAGE_CHANGED = "deal_stage_changed"
 ACTIVITY_CALL_SCHEDULED = "call_scheduled"
 ACTIVITY_CALL_STATUS_CHANGED = "call_status_changed"
+#: Recordatorio de una llamada enviado al lead (`reminder`: 24h|1h, `channel`).
+ACTIVITY_CALL_REMINDER_SENT = "call_reminder_sent"
+#: Recordatorio que no se pudo entregar por ningun canal (codigo del fallo, sin detalle).
+ACTIVITY_CALL_REMINDER_FAILED = "call_reminder_failed"
 
 
 class LeadActivity(TenantBaseModel):

@@ -29,7 +29,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.nodes._state import ConversationState
 from app.agents.nodes._tenant import get_agent_settings
@@ -115,6 +116,39 @@ async def _write_cache(client_id: str, usage: dict[str, int]) -> None:
         logger.warning("Redis no disponible al cachear el presupuesto de %s", client_id)
 
 
+async def asegurar_presupuesto_del_mes(session: AsyncSession, client_id: UUID, month: str) -> None:
+    """Crea la fila de `token_budgets` del mes si no existe (ADR-088).
+
+    Antes nadie la creaba despues del mes del alta: sin fila, el guard leia "sin limite" y
+    `record_usage` no sumaba nada, asi que desde el segundo mes el consumo era ilimitado. Ahora
+    el mes nuevo hereda `total_budget` y `model_default` del ultimo mes con fila; sin historia,
+    `TOKEN_BUDGET_DEFAULT_MONTHLY`. `ON CONFLICT` con el UNIQUE de la migracion 030: dos
+    mensajes a la vez no crean dos filas.
+
+    Args:
+        session: Sesion con el contexto del tenant fijado.
+        client_id: Tenant.
+        month: Mes `YYYY-MM`.
+    """
+    await session.execute(
+        text("""
+            INSERT INTO token_budgets (client_id, month, total_budget, used_tokens, model_default)
+            SELECT :c, :m,
+                   COALESCE(anterior.total_budget, :defecto),
+                   0,
+                   COALESCE(anterior.model_default, 'gpt-4o')
+            FROM (SELECT 1) AS uno
+            LEFT JOIN LATERAL (
+                SELECT total_budget, model_default FROM token_budgets
+                WHERE client_id = :c AND month < :m
+                ORDER BY month DESC LIMIT 1
+            ) AS anterior ON true
+            ON CONFLICT (client_id, month) DO NOTHING
+        """),
+        {"c": client_id, "m": month, "defecto": get_settings().TOKEN_BUDGET_DEFAULT_MONTHLY},
+    )
+
+
 async def _get_token_usage(client_id: str) -> dict[str, int]:
     """Obtiene el consumo de tokens del mes en curso.
 
@@ -130,6 +164,7 @@ async def _get_token_usage(client_id: str) -> dict[str, int]:
 
     month = datetime.now(timezone.utc).strftime("%Y-%m")
     async with tenant_session(UUID(client_id)) as session:
+        await asegurar_presupuesto_del_mes(session, UUID(client_id), month)
         # client_id explicito ademas de RLS (BUG-020/022, ver MEMORY.md): mismo
         # criterio que el resto del proyecto para no depender solo de la politica.
         stmt = select(TokenBudget).where(
@@ -147,6 +182,21 @@ async def _get_token_usage(client_id: str) -> dict[str, int]:
 
     await _write_cache(client_id, usage)
     return usage
+
+
+async def presupuesto_agotado(client_id: UUID) -> bool:
+    """Si el tenant ya gasto todo su presupuesto de tokens del mes.
+
+    Para procesos fuera del grafo (p. ej. el AI score de leads) que gastan tokens del tenant y
+    no deben ejecutarse con el presupuesto agotado. Un tenant sin limite (`0`) nunca lo esta.
+
+    Args:
+        client_id: Tenant.
+
+    Returns:
+        `True` si el consumo llego al 100%.
+    """
+    return _usage_pct(await _get_token_usage(str(client_id))) >= THRESHOLD_EXCEEDED_PCT
 
 
 def _usage_pct(usage: dict[str, int]) -> float:

@@ -8,6 +8,7 @@ import logging
 from typing import Any
 
 from fastapi import Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
@@ -110,5 +111,42 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         content={
             "error_code": INTERNAL_ERROR,
             "message": "Error interno del servidor",
+        },
+    )
+
+
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Handler para errores de validacion (422) que no repite lo que se envio.
+
+    El de FastAPI devuelve cada error con su `input`: un login con un email mal formado
+    devolvia la contrasena, y un cuerpo de un webhook o de un formulario devolvia datos
+    personales en la respuesta (y en cualquier log o proxy que la guarde). Se conservan
+    `loc`, `msg` y `type`, que es lo que necesita el frontend para pintar el error.
+
+    Args:
+        request: Request de FastAPI.
+        exc: Error de validacion.
+
+    Returns:
+        JSONResponse 422 con `error_code`, `message` y `detail` sin `input` ni `ctx`.
+    """
+    detalle = [
+        {"loc": list(e.get("loc", ())), "msg": str(e.get("msg", "")), "type": e.get("type", "")}
+        for e in exc.errors()
+    ]
+    # Mismo resumen que hacia el frontend con `detail` ("campo: motivo"), para que `message`
+    # siga siendo util: `errorMessage()` lo prefiere cuando existe.
+    resumen = "; ".join(
+        f"{'.'.join(str(p) for p in d['loc'] if p != 'body')}: {d['msg']}".lstrip(": ")
+        for d in detalle
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error_code": VALIDATION_ERROR,
+            "message": resumen or "Datos de entrada no validos",
+            "detail": detalle,
         },
     )

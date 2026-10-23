@@ -49,6 +49,7 @@ from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.parser import HeaderParser
 from email.utils import make_msgid, parseaddr, parsedate_to_datetime
+from itertools import islice
 from typing import Any
 
 import aiosmtplib
@@ -89,6 +90,10 @@ _LINEA_ORIGINAL = re.compile(
 _DIVISOR_OUTLOOK = re.compile(r"^\s*_{10,}\s*$")
 _CABECERA_CITADA = re.compile(r"^\s*(?:From|De|Sent|Enviado|Date|Fecha)\s*:", re.IGNORECASE)
 _ETIQUETAS = re.compile(r"<[^>]+>")
+_APERTURA_SCRIPT = re.compile(r"<(script|style)\b", re.IGNORECASE)
+#: Longitud maxima del cuerpo que se procesa: un email no necesita mas para la IA, y las
+#: expresiones de este modulo no deben recorrer megas de texto de un remitente cualquiera.
+MAX_CUERPO_CHARS = 100_000
 
 
 def recortar_cita(texto: str) -> str:
@@ -105,7 +110,7 @@ def recortar_cita(texto: str) -> str:
     Returns:
         Solo lo que el cliente escribio de nuevo, sin espacios sobrantes.
     """
-    lineas = texto.splitlines()
+    lineas = texto[:MAX_CUERPO_CHARS].splitlines()
     resultado: list[str] = []
     for i, linea in enumerate(lineas):
         if _LINEA_CITA.match(linea) or _LINEA_ORIGINAL.match(linea):
@@ -113,13 +118,41 @@ def recortar_cita(texto: str) -> str:
         if _DIVISOR_OUTLOOK.match(linea):
             # Solo es una cita de Outlook si lo siguiente es la cabecera de un
             # mensaje: una firma con una raya de guiones bajos no se recorta.
-            siguiente = next((x for x in lineas[i + 1 :] if x.strip()), "")
+            # `islice`, no `lineas[i + 1 :]`: copiar la cola en cada divisor es cuadratico.
+            siguiente = next((x for x in islice(lineas, i + 1, None) if x.strip()), "")
             if _CABECERA_CITADA.match(siguiente):
                 break
         if linea.lstrip().startswith(">"):
             continue
         resultado.append(linea)
     return "\n".join(resultado).strip()
+
+
+def _quitar_scripts(contenido: str) -> str:
+    """Quita los bloques `<script>` y `<style>` en tiempo lineal.
+
+    `(?is)<(script|style).*?</\1>` es cuadratico con muchos `<script` sin cerrar: cada uno
+    recorre el resto del texto buscando su cierre. Aqui cada busqueda empieza donde acabo la
+    anterior, y un bloque sin cierre se lleva el resto del texto.
+
+    Args:
+        contenido: HTML.
+
+    Returns:
+        El HTML sin esos bloques.
+    """
+    partes: list[str] = []
+    pos = 0
+    while (apertura := _APERTURA_SCRIPT.search(contenido, pos)) is not None:
+        partes.append(contenido[pos : apertura.start()])
+        cierre = re.compile(rf"</{apertura.group(1)}\s*>", re.IGNORECASE).search(
+            contenido, apertura.end()
+        )
+        if cierre is None:
+            return "".join(partes)
+        pos = cierre.end()
+    partes.append(contenido[pos:])
+    return "".join(partes)
 
 
 def _html_a_texto(contenido: str) -> str:
@@ -131,7 +164,7 @@ def _html_a_texto(contenido: str) -> str:
     Returns:
         Texto sin etiquetas y con las entidades resueltas.
     """
-    sin_bloques = re.sub(r"(?is)<(script|style).*?</\1>", "", contenido)
+    sin_bloques = _quitar_scripts(contenido[:MAX_CUERPO_CHARS])
     con_saltos = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>", "\n", sin_bloques)
     return html.unescape(_ETIQUETAS.sub("", con_saltos)).strip()
 
@@ -440,7 +473,8 @@ class EmailProvider(MessagingProvider):
         Args:
             to: Direccion del destinatario.
             content: Contenido. `metadata` puede traer `subject`, `in_reply_to` y
-                `references` para que el cliente de correo lo agrupe en el hilo.
+                `references` para que el cliente de correo lo agrupe en el hilo, o
+                `new_thread=True` para un correo que abre uno (asunto tal cual, sin `Re:`).
             channel_config: Debe traer `smtp_host` y `from_email`; opcionales
                 `smtp_port`, `smtp_user`, `smtp_password`, `from_name`.
 
@@ -464,10 +498,16 @@ class EmailProvider(MessagingProvider):
         mensaje = EmailMessage()
         mensaje["From"] = f"{channel_config.get('from_name') or 'Soporte'} <{from_email}>"
         mensaje["To"] = destino
-        mensaje["Subject"] = self._asunto(meta.get("subject"))
+        nuevo_hilo = bool(meta.get("new_thread"))
+        mensaje["Subject"] = (
+            _limpiar_cabecera(str(meta.get("subject") or ""))[:MAX_SUBJECT_CHARS]
+            if nuevo_hilo
+            else self._asunto(meta.get("subject"))
+        ) or "Mensaje de nuestro equipo"
         mensaje["Message-ID"] = message_id
-        # RFC 3834: evita que un autorespondedor del otro lado nos conteste.
-        mensaje["Auto-Submitted"] = "auto-replied"
+        # RFC 3834: evita que un autorespondedor del otro lado nos conteste. Un correo que abre
+        # un hilo (secuencias de seguimiento) no responde a nadie: es `auto-generated`.
+        mensaje["Auto-Submitted"] = "auto-generated" if nuevo_hilo else "auto-replied"
 
         en_respuesta_a = _limpiar_cabecera(str(meta.get("in_reply_to") or ""))
         if en_respuesta_a:

@@ -12,8 +12,8 @@ export interface LoginRequest {
   password: string;
 }
 
+/** El refresh token no va en el cuerpo: lo guarda el navegador en una cookie httpOnly. */
 export interface TokenResponse {
   access_token: string;
-  refresh_token: string;
   token_type: string;
 }

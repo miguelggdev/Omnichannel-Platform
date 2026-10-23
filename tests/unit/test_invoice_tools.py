@@ -28,8 +28,19 @@ CONFIG = {
         "client_id": CLIENT_ID,
         "contact_id": CONTACT_ID,
         "conversation_id": CONVERSATION_ID,
+        "channel": "whatsapp",
     }
 }
+
+
+@pytest.fixture(autouse=True)
+def _operador_financiero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Por defecto, quien escribe es operador financiero (los tests de acceso lo cambian)."""
+
+    async def _si(client_id: Any, contact_id: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(it, "es_operador_financiero", _si)
 
 
 class _Resultado:
@@ -545,7 +556,9 @@ class TestSinContactoIdentificado:
     el agente podia recitar las facturas de los demas clientes de la empresa.
     """
 
-    CONFIG_ANONIMO: ClassVar[dict[str, Any]] = {"configurable": {"client_id": CLIENT_ID}}
+    CONFIG_ANONIMO: ClassVar[dict[str, Any]] = {
+        "configurable": {"client_id": CLIENT_ID, "channel": "whatsapp"}
+    }
 
     @pytest.mark.asyncio
     async def test_get_invoice_status_no_consulta_la_base(self, monkeypatch) -> None:
@@ -581,3 +594,69 @@ class TestSinContactoIdentificado:
         )
 
         assert "FE-000007" in respuesta
+
+
+class TestAccesoFinanciero:
+    """Auditoria de seguridad: emitir facturas y consultar NIT es de operadores en canal
+    verificado; consultar facturas propias exige canal verificado."""
+
+    @staticmethod
+    def _config(canal: str | None) -> dict[str, Any]:
+        return {"configurable": {**CONFIG["configurable"], "channel": canal}}
+
+    async def test_un_cliente_no_emite_facturas(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _no(client_id: Any, contact_id: Any) -> bool:
+            return False
+
+        monkeypatch.setattr(it, "es_operador_financiero", _no)
+        enviar = AsyncMock()
+        monkeypatch.setattr(it, "enviar_factura", enviar)
+        resultado = await it.create_invoice.ainvoke(
+            {
+                "buyer_nit": "900123456",
+                "buyer_name": "ACME SAS",
+                "items": [{"description": "x", "quantity": 1, "unit_price": 1, "tax_rate": 0}],
+            },
+            config=CONFIG,
+        )
+        assert resultado == it.NO_AUTORIZADO
+        enviar.assert_not_called()
+
+    async def test_un_cliente_no_consulta_nits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _no(client_id: Any, contact_id: Any) -> bool:
+            return False
+
+        monkeypatch.setattr(it, "es_operador_financiero", _no)
+        consultar = AsyncMock()
+        monkeypatch.setattr(it, "consultar_contribuyente", consultar)
+        resultado = await it.validate_nit.ainvoke({"nit": "900123456"}, config=CONFIG)
+        assert resultado == it.NO_AUTORIZADO
+        consultar.assert_not_called()
+
+    @pytest.mark.parametrize("canal", ["email", "voice", "webchat", None])
+    async def test_ni_un_operador_por_canal_sin_identidad(
+        self, monkeypatch: pytest.MonkeyPatch, canal: str | None
+    ) -> None:
+        enviar = AsyncMock()
+        monkeypatch.setattr(it, "enviar_factura", enviar)
+        resultado = await it.create_invoice.ainvoke(
+            {
+                "buyer_nit": "900123456",
+                "buyer_name": "ACME SAS",
+                "items": [{"description": "x", "quantity": 1, "unit_price": 1, "tax_rate": 0}],
+            },
+            config=self._config(canal),
+        )
+        assert resultado == it.NO_AUTORIZADO
+        enviar.assert_not_called()
+
+    @pytest.mark.parametrize("canal", ["email", "voice"])
+    async def test_consultas_exigen_canal_verificado(self, canal: str) -> None:
+        estado = await it.get_invoice_status.ainvoke(
+            {"invoice_number": "FE-000001"}, config=self._config(canal)
+        )
+        lista = await it.list_invoices.ainvoke({}, config=self._config(canal))
+        assert estado == lista == it.CANAL_NO_VERIFICADO
+
+    def test_un_cliente_solo_recibe_tools_de_consulta(self) -> None:
+        assert {t.name for t in it.INVOICE_READ_TOOLS} == {"get_invoice_status", "list_invoices"}

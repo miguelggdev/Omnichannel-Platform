@@ -3,8 +3,9 @@
 import { Loader2, ShieldAlert } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { refreshAccessToken } from "@/lib/api";
 import { useAuthHydrated, useAuthStore } from "@/stores/authStore";
 import type { UserRole } from "@/types";
 
@@ -25,10 +26,19 @@ export function ProtectedRoute({ children, minRole = "agent" }: ProtectedRoutePr
   const hydrated = useAuthHydrated();
   const accessToken = useAuthStore((s) => s.accessToken);
   const allowed = useAuthStore((s) => s.hasMinRole(minRole));
+  // Una sola comprobacion por montaje: si la cookie no vale, no se reintenta en bucle.
+  const [intentado, setIntentado] = useState(false);
 
+  // Tras recargar no hay access token en memoria: se pide uno con la cookie de sesion. Solo si
+  // eso falla no hay sesion y se va a /login.
   useEffect(() => {
-    if (hydrated && !accessToken) router.replace("/login");
-  }, [hydrated, accessToken, router]);
+    if (!hydrated || accessToken || intentado) return;
+    setIntentado(true);
+    refreshAccessToken().catch(() => {
+      useAuthStore.getState().logout();
+      router.replace("/login");
+    });
+  }, [hydrated, accessToken, intentado, router]);
 
   if (!hydrated || !accessToken) {
     return (

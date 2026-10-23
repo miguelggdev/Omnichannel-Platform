@@ -349,5 +349,33 @@ async def send_test_webhook(
         success=bool(resultado["success"]),
         status_code=resultado.get("status_code"),
         duration_ms=resultado.get("duration_ms"),
-        error=resultado.get("error"),
+        error=_error_publico(resultado),
     )
+
+
+def _error_publico(resultado: dict[str, Any]) -> str | None:
+    """Motivo del fallo de la prueba, sin el cuerpo de la respuesta del destino (ADR-088).
+
+    El `error` del dispatcher trae el cuerpo de la respuesta y el texto de la excepcion de red.
+    Devolverlo convertia la prueba en un lector de servicios internos (SSRF con respuesta):
+    con DNS rebinding la URL pasa la validacion y luego apunta a la red interna. Al usuario le
+    basta con el codigo HTTP; el detalle completo queda en `outgoing_webhook_logs` de las
+    entregas reales.
+
+    Args:
+        resultado: Lo que devolvio `WebhookDispatcher.send_webhook`.
+
+    Returns:
+        Un motivo generico, o `None` si fue bien.
+    """
+    if resultado.get("success"):
+        return None
+    if resultado.get("status_code"):
+        return f"El destino respondio HTTP {resultado['status_code']}"
+    error = str(resultado.get("error") or "")
+    if error.startswith("Timeout"):
+        return error
+    if error.startswith("Error de red"):
+        return "No se pudo conectar con el destino"
+    # Lo que queda es el rechazo de `validar_destino` (mensaje propio, no del destino).
+    return error[:200] or "El destino no es valido"

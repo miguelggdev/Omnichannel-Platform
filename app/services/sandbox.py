@@ -49,6 +49,7 @@ from app.models.message import Message
 from app.models.quick_reply import QuickReply
 from app.models.sandbox import ConfigHistory, TenantSandbox
 from app.models.token_budget import TokenBudget
+from app.services.branding import sin_logo_subido
 
 logger = logging.getLogger(__name__)
 
@@ -479,7 +480,8 @@ async def _copiar_produccion(
             "slug": f"{cliente.slug}-sbx-{uuid4().hex[:8]}"[:100],
             "plan": cliente.plan,
             "settings": cliente.settings,
-            "theme_config": cliente.theme_config,
+            # Sin el logo subido: borrarlo desde el sandbox borraba el de produccion.
+            "theme_config": sin_logo_subido(cliente.theme_config),
             "lead_management_enabled": cliente.lead_management_enabled,
         }
 

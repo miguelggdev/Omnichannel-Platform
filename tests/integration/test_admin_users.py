@@ -14,7 +14,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
 from app.core.database import engine, tenant_session
-from app.core.security import create_access_token, create_refresh_token, decode_jwt, hash_password
+from app.core.security import create_access_token, create_refresh_token, hash_password
 from app.main import create_app
 
 pytestmark = [pytest.mark.db, pytest.mark.asyncio]
@@ -169,46 +169,35 @@ async def test_un_usuario_desactivado_no_puede_renovar_la_sesion(
     dos: tuple[Tenant, Tenant],
 ) -> None:
     a, _ = dos
-    refresh = create_refresh_token(
-        {
-            "user_id": str(a.agent_id),
-            "client_id": str(a.client_id),
-            "email": a.agent_email,
-            "role": "agent",
-        }
-    )
+    refresh = create_refresh_token(str(a.agent_id), str(a.client_id), 0)
     async with _cliente(a, a.admin_id, "admin", a.admin_email) as admin:
         await admin.put(f"{USERS}/{a.agent_id}", json={"is_active": False})
     async with AsyncClient(
         transport=ASGITransport(app=create_app()), base_url="http://test"
     ) as anon:
-        r = await anon.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
+        r = await anon.post("/api/v1/auth/refresh", cookies={"refresh_token": refresh})
 
     assert r.status_code == 401
 
 
-async def test_tras_cambiar_el_rol_el_refresh_emite_el_rol_nuevo(
+async def test_cambiar_el_rol_cierra_las_sesiones_abiertas(
     dos: tuple[Tenant, Tenant],
 ) -> None:
-    """El refresh viejo decia `agent`; tras ascender a supervisor el token nuevo lo refleja."""
+    """Tras cambiar el rol, el refresh emitido antes ya no vale (ADR-089): vuelve a entrar.
+
+    Antes el refresh viejo emitia un access con el rol nuevo; ahora el cambio sube
+    `token_version` y la sesion entera se renueva con el login.
+    """
     a, _ = dos
-    refresh = create_refresh_token(
-        {
-            "user_id": str(a.agent_id),
-            "client_id": str(a.client_id),
-            "email": a.agent_email,
-            "role": "agent",
-        }
-    )
+    refresh = create_refresh_token(str(a.agent_id), str(a.client_id), 0)
     async with _cliente(a, a.admin_id, "admin", a.admin_email) as admin:
         await admin.put(f"{USERS}/{a.agent_id}", json={"role": "supervisor"})
     async with AsyncClient(
         transport=ASGITransport(app=create_app()), base_url="http://test"
     ) as anon:
-        r = await anon.post("/api/v1/auth/refresh", json={"refresh_token": refresh})
+        r = await anon.post("/api/v1/auth/refresh", cookies={"refresh_token": refresh})
 
-    assert r.status_code == 200, r.text
-    assert decode_jwt(r.json()["access_token"])["role"] == "supervisor"
+    assert r.status_code == 401, r.text
 
 
 async def test_restablecer_la_contrasena_permite_entrar_con_la_nueva(

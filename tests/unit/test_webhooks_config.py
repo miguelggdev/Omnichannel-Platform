@@ -307,6 +307,41 @@ class TestEnvioDePrueba:
         assert response.json()["success"] is False
         assert response.json()["error"] == "Timeout"
 
+    @pytest.mark.parametrize(
+        ("resultado", "esperado"),
+        [
+            (
+                {"success": False, "status_code": 500, "error": "HTTP 500: secreto-interno"},
+                "El destino respondio HTTP 500",
+            ),
+            (
+                {"success": False, "error": "Error de red: 10.0.0.5:6379 refused"},
+                "No se pudo conectar con el destino",
+            ),
+        ],
+    )
+    async def test_no_refleja_lo_que_respondio_el_destino(
+        self,
+        authenticated_client: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        resultado: dict[str, Any],
+        esperado: str,
+    ) -> None:
+        """Con la respuesta en el error, la prueba leia servicios internos (SSRF)."""
+        webhook = FakeTenantWebhook()
+        _usa_sesion(monkeypatch, CrmSession(resultados=[webhook]))
+
+        with patch.object(
+            webhooks_config_module.WebhookDispatcher,
+            "send_webhook",
+            AsyncMock(return_value={"duration_ms": 5, **resultado}),
+        ):
+            response = await authenticated_client.post(f"{URL}/{webhook.id}/test")
+
+        assert response.json()["error"] == esperado
+        assert "secreto-interno" not in response.text
+        assert "10.0.0.5" not in response.text
+
     async def test_webhook_inexistente_es_404(
         self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:

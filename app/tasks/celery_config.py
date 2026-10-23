@@ -117,6 +117,30 @@ celery_app.conf.update(
             "schedule": 3600.0,  # cada hora
             "options": {"queue": "bulk"},
         },
+        "process-lead-sequences": {
+            # Sprint 18: avanza las inscripciones a secuencias de follow-up que ya les toca.
+            "task": "app.tasks.bulk_process_lead_sequences",
+            "schedule": 60.0,
+            "options": {"queue": "bulk"},
+        },
+        "send-call-reminders": {
+            # Sprint 19: recordatorios de 24 h y de 1 h de las llamadas agendadas.
+            "task": "app.tasks.bulk_send_call_reminders",
+            "schedule": 300.0,
+            "options": {"queue": "bulk"},
+        },
+        "start-due-ai-calls": {
+            # Sprint 19: inicia las llamadas de voz IA a su hora (solo con VOICE_AI_AUTO_START).
+            "task": "app.tasks.bulk_start_due_ai_calls",
+            "schedule": 60.0,
+            "options": {"queue": "bulk"},
+        },
+        "precompute-lead-analytics": {
+            # Sprint 19: analitica de leads de los ultimos 30 dias, lista antes de que abra el negocio.
+            "task": "app.tasks.bulk_precompute_lead_analytics",
+            "schedule": crontab(hour=6, minute=0),  # 06:00 UTC
+            "options": {"queue": "bulk"},
+        },
         "dispatch-scheduled-campaigns": {
             # Saca las campanas `scheduled` cuya `scheduled_for` ya llego. Un
             # minuto es la resolucion con la que se puede programar un envio.

@@ -31,6 +31,7 @@ from uuid import UUID
 from celery import shared_task
 from sqlalchemy import case, func, select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import run_isolated, tenant_session
 from app.models.call_record import CALL_FINAL_STATUSES, CALL_STATUSES, CallRecord
@@ -136,6 +137,30 @@ async def _conversacion_de_la_llamada(
     return (fila[0], fila[1]) if fila else None
 
 
+async def _enlazar_con_llamada_agendada(
+    session: AsyncSession, client_id: UUID, call_sid: str, call_record_id: UUID, estado: str
+) -> None:
+    """Si la llamada la origino una llamada agendada con voz IA, las enlaza (aislado).
+
+    En su SAVEPOINT y sin propagar: un fallo aqui no puede costar el registro de la llamada.
+    Import perezoso: el servicio importa modelos y proveedores que no hacen falta en el resto.
+    """
+    from app.services.scheduled_call_voice import enlazar_llamada
+
+    try:
+        async with session.begin_nested():
+            await enlazar_llamada(
+                session,
+                client_id=client_id,
+                call_sid=call_sid,
+                call_record_id=call_record_id,
+                estado=estado,
+                ahora=datetime.now(timezone.utc),
+            )
+    except Exception:
+        logger.exception("Voz: no se pudo enlazar %s con su llamada agendada", call_sid)
+
+
 async def guardar_llamada(client_id: UUID, call_sid: str, datos: dict[str, Any]) -> None:
     """Crea o completa la fila de una llamada.
 
@@ -218,7 +243,13 @@ async def guardar_llamada(client_id: UUID, call_sid: str, datos: dict[str, Any])
                 insercion.on_conflict_do_update(
                     index_elements=[actual.client_id, actual.call_sid],
                     set_=actualizacion,
-                ).returning(actual.id, actual.conversation_id, actual.started_at, actual.ended_at)
+                ).returning(
+                    actual.id,
+                    actual.conversation_id,
+                    actual.started_at,
+                    actual.ended_at,
+                    actual.status,
+                )
             )
         ).one()
         if guardada.conversation_id is not None:
@@ -232,6 +263,9 @@ async def guardar_llamada(client_id: UUID, call_sid: str, datos: dict[str, Any])
                 started_at=guardada.started_at,
                 ended_at=guardada.ended_at,
             )
+        await _enlazar_con_llamada_agendada(
+            session, client_id, call_sid, guardada.id, guardada.status
+        )
 
 
 @shared_task(

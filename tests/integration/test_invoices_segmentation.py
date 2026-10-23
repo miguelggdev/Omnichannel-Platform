@@ -39,7 +39,7 @@ async def tenant() -> AsyncGenerator[uuid.UUID, None]:
     yield client_id
 
     async with tenant_session(client_id) as session:
-        for tabla in ("invoices", "contacts"):
+        for tabla in ("invoices", "agent_configs", "contacts"):
             await session.execute(
                 text(f"DELETE FROM {tabla} WHERE client_id = :cid"),  # noqa: S608
                 {"cid": str(client_id)},
@@ -68,10 +68,48 @@ async def _facturas(client_id: uuid.UUID) -> list[Any]:
         )
 
 
+async def _operador_financiero(client_id: uuid.UUID) -> dict[str, Any]:
+    """Crea un contacto operador financiero (ADR-088) y devuelve la config del agente para el.
+
+    Solo los contactos de `agent_configs.config.financial.operator_contact_ids`, por un canal
+    que verifica identidad, pueden emitir facturas.
+    """
+    import json
+
+    from app.core.database import tenant_session
+
+    contacto = uuid.uuid4()
+    async with tenant_session(client_id) as session:
+        await session.execute(
+            text(
+                "INSERT INTO contacts (id, client_id, display_name) VALUES (:id, :cid, 'Contador')"
+            ),
+            {"id": str(contacto), "cid": str(client_id)},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO agent_configs (client_id, name, config) "
+                "VALUES (:cid, 'financiero', CAST(:config AS jsonb))"
+            ),
+            {
+                "cid": str(client_id),
+                "config": json.dumps({"financial": {"operator_contact_ids": [str(contacto)]}}),
+            },
+        )
+    return {
+        "configurable": {
+            "client_id": str(client_id),
+            "contact_id": str(contacto),
+            "channel": "whatsapp",
+        }
+    }
+
+
 async def test_una_factura_de_mas_de_21_millones_se_guarda(tenant: uuid.UUID) -> None:
     """En `INTEGER` de centavos el tope eran ~21,5 M COP."""
     from app.agents.tools import invoice_tools as it
 
+    config = await _operador_financiero(tenant)
     respuesta = await it.create_invoice.ainvoke(
         {
             "buyer_nit": "890903938",
@@ -85,7 +123,7 @@ async def test_una_factura_de_mas_de_21_millones_se_guarda(tenant: uuid.UUID) ->
                 },
             ],
         },
-        config=_config(tenant),
+        config=config,
     )
 
     filas = await _facturas(tenant)

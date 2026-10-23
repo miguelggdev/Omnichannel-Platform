@@ -16,11 +16,18 @@ export const ROLE_HIERARCHY: Record<UserRole, number> = {
   medical: 0,
 };
 
+/**
+ * Sesion del panel (ADR-089).
+ *
+ * El refresh token vive en una cookie `httpOnly` que JavaScript no puede leer, y el access
+ * token solo en memoria: ninguno de los dos va a `localStorage`, donde un XSS los leeria. Tras
+ * recargar la pagina no hay access token; `ProtectedRoute` (o el primer 401) pide uno nuevo
+ * a `/auth/refresh` con la cookie.
+ */
 interface AuthState {
   accessToken: string | null;
-  refreshToken: string | null;
   user: User | null;
-  setTokens: (accessToken: string, refreshToken: string) => void;
+  setTokens: (accessToken: string) => void;
   logout: () => void;
   hasMinRole: (minRole: UserRole) => boolean;
 }
@@ -29,13 +36,11 @@ export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
       accessToken: null,
-      refreshToken: null,
       user: null,
 
-      setTokens: (accessToken, refreshToken) =>
-        set({ accessToken, refreshToken, user: userFromToken(accessToken) }),
+      setTokens: (accessToken) => set({ accessToken, user: userFromToken(accessToken) }),
 
-      logout: () => set({ accessToken: null, refreshToken: null, user: null }),
+      logout: () => set({ accessToken: null, user: null }),
 
       hasMinRole: (minRole) => {
         const rol = get().user?.role;
@@ -44,7 +49,8 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: "auth-storage",
-      partialize: (s) => ({ accessToken: s.accessToken, refreshToken: s.refreshToken, user: s.user }),
+      // Solo el usuario (nombre y rol para la interfaz). Nunca tokens.
+      partialize: (s) => ({ user: s.user }),
     },
   ),
 );

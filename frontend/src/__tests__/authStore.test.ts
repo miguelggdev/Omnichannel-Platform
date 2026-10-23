@@ -13,15 +13,25 @@ beforeEach(() => useAuthStore.getState().logout());
 
 describe("authStore", () => {
   it("al guardar los tokens deduce el usuario del access token", () => {
-    useAuthStore.getState().setTokens(tokenDe("supervisor"), "refresh");
+    useAuthStore.getState().setTokens(tokenDe("supervisor"));
     expect(useAuthStore.getState().user?.role).toBe("supervisor");
   });
 
-  it("logout olvida tokens y usuario", () => {
-    useAuthStore.getState().setTokens(tokenDe("admin"), "refresh");
+  it("logout olvida token y usuario", () => {
+    useAuthStore.getState().setTokens(tokenDe("admin"));
     useAuthStore.getState().logout();
     const s = useAuthStore.getState();
-    expect([s.accessToken, s.refreshToken, s.user]).toEqual([null, null, null]);
+    expect([s.accessToken, s.user]).toEqual([null, null]);
+  });
+
+  it("no guarda ningun token en localStorage, solo el usuario", () => {
+    const token = tokenDe("admin");
+    useAuthStore.getState().setTokens(token);
+    const guardado = window.localStorage.getItem("auth-storage") ?? "";
+    expect(guardado).not.toContain(token);
+    expect(guardado).not.toContain("accessToken");
+    expect(guardado).not.toContain("refresh");
+    expect(JSON.parse(guardado).state.user.role).toBe("admin");
   });
 
   it("sin sesion nadie tiene ningun rol", () => {
@@ -39,7 +49,7 @@ describe("authStore", () => {
     // medical es un rol clinico: no lee conversaciones ni contactos, ni siquiera como agent.
     ["medical", "agent", false],
   ])("%s frente al minimo %s: %s", (rol, minimo, esperado) => {
-    useAuthStore.getState().setTokens(tokenDe(rol), "refresh");
+    useAuthStore.getState().setTokens(tokenDe(rol));
     expect(useAuthStore.getState().hasMinRole(minimo)).toBe(esperado);
   });
 });

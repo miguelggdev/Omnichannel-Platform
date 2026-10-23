@@ -37,3 +37,17 @@ export function contactName(c: {
   const nombre = [c.first_name, c.last_name].filter(Boolean).join(" ");
   return nombre || "—";
 }
+
+/**
+ * Devuelve la URL solo si es `http(s)`; cualquier otro esquema (`javascript:`, `data:`) o un
+ * valor que no es una URL da `null`. Los adjuntos vienen de canales externos: no se enlazan a ciegas.
+ */
+export function urlSegura(valor: string | null | undefined): string | null {
+  if (!valor) return null;
+  try {
+    const url = new URL(valor);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}

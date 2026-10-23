@@ -21,7 +21,7 @@ export function useAuth() {
     setError(null);
     try {
       const tokens = await apiPost<TokenResponse>("/auth/login", credenciales);
-      setTokens(tokens.access_token, tokens.refresh_token);
+      setTokens(tokens.access_token);
       await loadFromBackend();
       router.replace("/");
       router.refresh();
@@ -34,9 +34,10 @@ export function useAuth() {
     }
   }
 
-  function logout(): void {
-    // El backend no tiene /auth/logout: los JWT son sin estado y caducan solos. Cerrar sesion
-    // es olvidar los tokens y vaciar la cache para que no se vean datos del usuario anterior.
+  async function logout(): Promise<void> {
+    // El backend anula el refresh de este navegador y borra su cookie. Aunque falle (sin red),
+    // la sesion local se olvida igual y la cache se vacia para no ver datos del anterior.
+    await apiPost("/auth/logout", {}).catch(() => undefined);
     clearAuth();
     queryClient.clear();
     router.replace("/login");

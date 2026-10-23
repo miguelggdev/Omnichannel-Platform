@@ -27,7 +27,7 @@ export function useOnboarding() {
     setFailure(null);
     try {
       const res = await apiPost<OnboardingResponse>("/onboarding/register", datos);
-      setTokens(res.access_token, res.refresh_token);
+      setTokens(res.access_token);
       await loadFromBackend();
       router.replace("/");
       router.refresh();

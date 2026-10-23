@@ -44,9 +44,11 @@ from app.models.lead_pipeline_stage import LeadPipelineStage
 from app.models.lead_source import LeadSource
 from app.schemas.lead import LeadCapture
 from app.services.lead_activity import registrar_actividad
+from app.services.lead_assignment import asignar_automaticamente
 from app.services.lead_batch import insertar_lote
 from app.services.lead_import import FilaImportada, campos_de_objeto, validar_campos
 from app.services.lead_pipeline import FIRST_STAGE_SLUG, hash_capture_token
+from app.services.lead_sequence_triggers import disparar_inscripciones
 from app.services.phantombuster import MAX_PERFILES, extraer_perfiles
 
 logger = logging.getLogger(__name__)
@@ -185,6 +187,8 @@ async def capture_lead(source_token: str, data: LeadCapture, request: Request) -
                 tipo=ACTIVITY_CAPTURED,
                 source_id=origen.id,
             )
+            await asignar_automaticamente(session, lead)
+            await disparar_inscripciones(session, lead, "lead_created")
     except IntegrityError:
         # Dos capturas del mismo email a la vez: la segunda es un duplicado y se trata como tal.
         logger.info("Captura duplicada por carrera (fuente %s)", fuente.source_id)

@@ -24,6 +24,5 @@ export interface OnboardingResponse {
   client_id: string;
   user_id: string;
   access_token: string;
-  refresh_token: string;
   token_type: string;
 }

@@ -199,6 +199,7 @@ class TestSchedulingNode:
                 "client_id": str(client_id),
                 "conversation_id": str(conversation_id),
                 "contact_id": str(contact_id),
+                "channel": None,
             }
         }
 

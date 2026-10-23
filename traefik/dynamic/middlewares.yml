@@ -20,9 +20,23 @@ http:
         stsIncludeSubdomains: true
         stsPreload: true
         stsSeconds: 31536000
-        customFrameOptionsValue: "SAMEORIGIN"
         referrerPolicy: "strict-origin-when-cross-origin"
         contentSecurityPolicy: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+        permissionsPolicy: "camera=(), microphone=(), geolocation=()"
+
+    # Igual que `security-headers` pero SIN Content-Security-Policy: el frontend (Next.js) la
+    # pone el mismo con un nonce por peticion (`frontend/src/middleware.ts`). Una CSP estatica
+    # aqui (`script-src 'self'`) bloquearia sus scripts en linea, y dos CSP se combinan por
+    # interseccion.
+    security-headers-web:
+      headers:
+        browserXssFilter: true
+        contentTypeNosniff: true
+        frameDeny: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 31536000
+        referrerPolicy: "strict-origin-when-cross-origin"
         permissionsPolicy: "camera=(), microphone=(), geolocation=()"
 
     # ─── Compresion ────────────────────────────────────────────────────────

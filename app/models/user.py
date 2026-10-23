@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID as _UUID
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,6 +31,8 @@ class User(TenantBaseModel):
         role: Rol del usuario (super_admin, admin, supervisor, agent, medical).
         is_active: Si el usuario está activo.
         last_login_at: Último login exitoso.
+        token_version: Version de sus sesiones; subirla revoca todos sus refresh tokens
+            (ADR-089).
         settings: Preferencias del usuario (JSONB): `ui_language` y `theme`.
     """
 
@@ -59,6 +61,7 @@ class User(TenantBaseModel):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, server_default="true")
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    token_version: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
     # Preferencias de interfaz (Sprint 14b, migracion 021): `ui_language` y `theme`.
     settings: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default="{}", nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

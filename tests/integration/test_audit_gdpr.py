@@ -874,7 +874,9 @@ class TestLoginBajoRls:
         )
         cuerpo = respuesta.json()
         assert cuerpo["access_token"]
-        assert cuerpo["refresh_token"]
+        # El refresh va en la cookie `httpOnly`, no en el cuerpo (ADR-089).
+        assert "refresh_token" not in cuerpo
+        assert respuesta.cookies.get("refresh_token")
 
     async def test_el_token_emitido_sirve_para_operar(self, escenario: Escenario) -> None:
         """El JWT del login abre la API: lleva el tenant y el rol correctos.

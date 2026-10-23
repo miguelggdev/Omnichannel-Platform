@@ -296,9 +296,10 @@ async def se_dio_de_baja(session: AsyncSession, lead: Lead) -> bool:
         lead: Lead.
 
     Returns:
-        `True` si tiene alguna inscripcion cerrada con un motivo de `OPT_OUT_EXITS`.
+        `True` si tiene alguna inscripcion cerrada con un motivo de `OPT_OUT_EXITS` o si escribio
+        pidiendo la baja (`sequence_reply`), aunque no estuviera en ninguna secuencia.
     """
-    return bool(
+    cerrada_por_baja = bool(
         (
             await session.execute(
                 select(
@@ -311,6 +312,12 @@ async def se_dio_de_baja(session: AsyncSession, lead: Lead) -> bool:
             )
         ).scalar_one()
     )
+    if cerrada_por_baja:
+        return True
+    # Import perezoso: `lead_sequence_replies` importa este modulo.
+    from app.services.lead_sequence_replies import pidio_la_baja
+
+    return await pidio_la_baja(session, lead.client_id, lead.id)
 
 
 async def inscribir(

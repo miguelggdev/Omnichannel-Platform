@@ -27,8 +27,8 @@ marca del panel) los lean; hasta entonces no cambian el comportamiento de la pla
 """
 
 import logging
-from typing import TYPE_CHECKING, Any
-from uuid import uuid4
+from typing import Any
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, File, Response, UploadFile
 from sqlalchemy import select
@@ -51,15 +51,13 @@ from app.schemas.business_profile import (
     DaySchedule,
     _horario_por_defecto,
 )
+from app.services.branding import ruta_de_logo_propia
 from app.services.storage import (
     StorageError,
     delete_from_storage,
     download_from_storage,
     upload_to_storage,
 )
-
-if TYPE_CHECKING:
-    from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +86,16 @@ LOGO_MAX_BYTES = 512 * 1024
 _PNG = b"\x89PNG\r\n\x1a\n"
 
 
-async def _agente_activo(session: Any) -> AgentConfig | None:
-    """El `agent_configs` que lee el asistente: el activo mas antiguo (como `get_agent_settings`)."""
+async def _agente_activo(session: Any, client_id: UUID) -> AgentConfig | None:
+    """El `agent_configs` que lee el asistente: el activo mas antiguo (como `get_agent_settings`).
+
+    `client_id` explicito ademas de RLS (BUG-020/022): si la conexion tuviera `BYPASSRLS`,
+    sin el filtro se leeria el agente de otro tenant.
+    """
     agente: AgentConfig | None = (
         await session.execute(
             select(AgentConfig)
-            .where(AgentConfig.is_active.is_(True))
+            .where(AgentConfig.client_id == client_id, AgentConfig.is_active.is_(True))
             .order_by(AgentConfig.created_at.asc())
             .limit(1)
         )
@@ -165,7 +167,7 @@ async def get_business_profile(
     client_id: UUID = user["client_id"]
     async with tenant_session(client_id) as session:
         cliente = await _cargar_cliente(session, client_id)
-        agente = await _agente_activo(session)
+        agente = await _agente_activo(session, client_id)
         return _componer(cliente, agente)
 
 
@@ -201,7 +203,7 @@ async def update_business_profile(
 
     async with tenant_session(client_id) as session:
         cliente = await _cargar_cliente(session, client_id)
-        agente = await _agente_activo(session)
+        agente = await _agente_activo(session, client_id)
 
         if any(c in enviados for c in _CAMPOS_DE_AGENTE) and agente is None:
             raise AppException(
@@ -244,7 +246,7 @@ async def update_business_profile(
         logo_a_borrar: str | None = None
         if cambios.get("logo_url") and tema.get("logo_path"):
             # Una sola fuente de logo: poner una URL externa descarta el archivo subido.
-            logo_a_borrar = tema.pop("logo_path")
+            logo_a_borrar = ruta_de_logo_propia(tema.pop("logo_path"), client_id)
             tema.pop("logo_content_type", None)
         cliente.theme_config = {k: v for k, v in tema.items() if v is not None}
 
@@ -316,9 +318,9 @@ async def upload_logo(
     try:
         async with tenant_session(client_id) as session:
             cliente = await _cargar_cliente(session, client_id)
-            agente = await _agente_activo(session)
+            agente = await _agente_activo(session, client_id)
             tema = dict(cliente.theme_config or {})
-            anterior = tema.get("logo_path")
+            anterior = ruta_de_logo_propia(tema.get("logo_path"), client_id)
             tema["logo_path"] = ruta
             tema["logo_content_type"] = mime
             # Una sola fuente de logo: el archivo subido sustituye a la URL externa.
@@ -353,7 +355,8 @@ async def get_logo(user: dict[str, Any] = Depends(require_role(*_ROLES))) -> Res
     client_id: UUID = user["client_id"]
     async with tenant_session(client_id) as session:
         tema = dict((await _cargar_cliente(session, client_id)).theme_config or {})
-    ruta = tema.get("logo_path")
+    # Solo rutas bajo el prefijo del tenant: un `theme_config` copiado de otro no lee su logo.
+    ruta = ruta_de_logo_propia(tema.get("logo_path"), client_id)
     if not ruta:
         raise AppException(status_code=404, error_code=NOT_FOUND, message="No hay logo subido")
     try:
@@ -382,9 +385,9 @@ async def delete_logo(user: dict[str, Any] = Depends(require_role(*_ROLES))) -> 
     client_id: UUID = user["client_id"]
     async with tenant_session(client_id) as session:
         cliente = await _cargar_cliente(session, client_id)
-        agente = await _agente_activo(session)
+        agente = await _agente_activo(session, client_id)
         tema = dict(cliente.theme_config or {})
-        ruta = tema.pop("logo_path", None)
+        ruta = ruta_de_logo_propia(tema.pop("logo_path", None), client_id)
         tema.pop("logo_content_type", None)
         cliente.theme_config = tema
         await session.flush()

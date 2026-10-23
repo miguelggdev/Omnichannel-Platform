@@ -726,6 +726,38 @@ class TestMetaVerification:
         assert response.status_code == 403
 
 
+class TestVerificacionMetaTiempoConstante:
+    async def test_compara_el_token_con_compare_digest(
+        self, api_client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`==` filtra por tiempo cuantos caracteres coinciden; `compare_digest` no."""
+        import hmac as hmac_mod
+
+        from app.api.v1 import webhooks as wh
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "META_WEBHOOK_VERIFY_TOKEN", "token-de-prueba")
+        llamadas: list[tuple[bytes, bytes]] = []
+        original = hmac_mod.compare_digest
+
+        def espia(a: bytes, b: bytes) -> bool:
+            llamadas.append((a, b))
+            return original(a, b)
+
+        monkeypatch.setattr(wh.hmac, "compare_digest", espia)
+        response = await api_client.get(
+            WEBHOOK_URL,
+            params={
+                "hub.mode": "subscribe",
+                "hub.verify_token": "token-de-prueba",
+                "hub.challenge": "42",
+            },
+        )
+
+        assert response.status_code == 200
+        assert llamadas == [(b"token-de-prueba", b"token-de-prueba")]
+
+
 class TestYCloudVerification:
     """YCloud usa un challenge simple en query param."""
 

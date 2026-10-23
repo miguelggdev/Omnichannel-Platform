@@ -49,6 +49,7 @@ from app.core.exceptions import (
     VALIDATION_ERROR,
     AppException,
 )
+from app.core.like import ESCAPE, patron_contiene
 from app.core.security import hash_password
 from app.models.contact import Contact
 from app.models.contact_identifier import ContactIdentifier
@@ -908,7 +909,9 @@ async def create_user(
 
 @router.get("/users", response_model=UserListResponse)
 async def list_users(
-    search: str | None = Query(default=None, description="Busca en nombre, apellido y email"),
+    search: str | None = Query(
+        default=None, max_length=100, description="Busca en nombre, apellido y email"
+    ),
     role: str | None = Query(default=None, description="Filtra por rol"),
     is_active: bool | None = Query(default=None, description="Solo activos o solo inactivos"),
     page: int = Query(default=1, ge=1),
@@ -931,9 +934,11 @@ async def list_users(
     client_id: UUID = user["client_id"]
     filtros = [User.client_id == client_id]
     if search:
-        patron = f"%{search.strip()}%"
+        patron = patron_contiene(search)
         filtros.append(
-            User.first_name.ilike(patron) | User.last_name.ilike(patron) | User.email.ilike(patron)
+            User.first_name.ilike(patron, escape=ESCAPE)
+            | User.last_name.ilike(patron, escape=ESCAPE)
+            | User.email.ilike(patron, escape=ESCAPE)
         )
     if role:
         filtros.append(User.role == role)
@@ -1059,6 +1064,10 @@ async def update_user(
             objetivo.is_active = data.is_active
         if password_hash is not None:
             objetivo.password_hash = password_hash
+        # Contrasena nueva, otro rol o desactivado: las sesiones abiertas no deben seguir con
+        # lo de antes (ADR-089). El access token vigente caduca solo en minutos.
+        if password_hash is not None or cambia_rol or se_desactiva:
+            objetivo.token_version = User.token_version + 1
         await session.flush()
         await session.refresh(objetivo)
         respuesta = UserResponse.model_validate(objetivo)

@@ -2,7 +2,7 @@
 
 from uuid import UUID as _UUID
 
-from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy import ForeignKey, Index, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -20,6 +20,8 @@ class TokenBudget(TenantBaseModel):
     """
 
     __tablename__ = "token_budgets"
+    #: Una fila por tenant y mes: el presupuesto del mes se crea bajo demanda (migracion 030).
+    __table_args__ = (Index("uq_token_budget_month", "client_id", "month", unique=True),)
 
     client_id: Mapped[_UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("clients.id"), nullable=False, index=True

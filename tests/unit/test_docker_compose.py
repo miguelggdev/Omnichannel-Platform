@@ -61,3 +61,10 @@ class TestPuertosPublicados:
         ]
 
         assert not expuestos, f"puertos publicados en todas las interfaces: {expuestos}"
+
+
+def test_el_router_publico_de_la_api_no_expone_internal() -> None:
+    """`/internal/metrics` y `/internal/health` solo por la red interna (ADR-088)."""
+    etiquetas = _servicios()["api"]["labels"]
+    [regla] = [e for e in etiquetas if e.startswith("traefik.http.routers.api.rule=")]
+    assert "!PathPrefix(`/internal`)" in regla
