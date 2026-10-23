@@ -4,7 +4,7 @@ import { Bot, User } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useAppLocale } from "@/hooks/useAppLocale";
 import { formatTime } from "@/lib/format";
-import { cn } from "@/lib/utils";
+import { cn, urlSegura } from "@/lib/utils";
 import type { Message } from "@/types";
 
 const SENDERS = ["contact", "bot", "agent", "system"] as const;
@@ -37,9 +37,9 @@ export function MessageBubble({ message }: { message: Message }) {
           {message.content ?? (
             <span className="italic opacity-80">{t("noText", { type: message.message_type })}</span>
           )}
-          {message.media_url && (
+          {urlSegura(message.media_url) && (
             <a
-              href={message.media_url}
+              href={urlSegura(message.media_url) ?? undefined}
               target="_blank"
               rel="noopener noreferrer"
               className="mt-1 block text-xs underline"

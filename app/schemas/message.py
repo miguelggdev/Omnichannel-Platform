@@ -7,6 +7,39 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+#: Esquemas que puede tener un `media_url`: URLs web y la referencia interna de Telegram
+#: (`telegram-file:<file_id>`, que se resuelve en el worker, no se abre en el navegador).
+ESQUEMAS_MEDIA_URL = ("http", "https", "telegram-file")
+#: Largo de la columna `messages.media_url`.
+MAX_CHARS_MEDIA_URL = 1000
+
+
+def sanear_media_url(valor: str | None) -> str | None:
+    """Deja pasar un `media_url` solo si su esquema es conocido.
+
+    Un adjunto viene de un canal externo: un `javascript:` o `data:` guardado aqui se
+    ejecutaria al abrirse en el navegador de un agente. Un valor invalido no rechaza el
+    mensaje (el texto sigue siendo valido): solo se descarta el adjunto.
+
+    Args:
+        valor: `media_url` tal como llego del canal o del cliente.
+
+    Returns:
+        El valor recortado si es valido; `None` si falta, es demasiado largo, tiene
+        caracteres de control o un esquema fuera de `ESQUEMAS_MEDIA_URL`.
+    """
+    if valor is None:
+        return None
+    limpio = valor.strip()
+    if not limpio or len(limpio) > MAX_CHARS_MEDIA_URL:
+        return None
+    if any(ord(c) < 32 or ord(c) == 127 for c in limpio):
+        return None
+    esquema, separador, _ = limpio.partition(":")
+    if not separador or esquema.lower() not in ESQUEMAS_MEDIA_URL:
+        return None
+    return limpio
+
 
 class MessageCreate(BaseModel):
     """Schema para crear un mensaje."""
@@ -19,6 +52,12 @@ class MessageCreate(BaseModel):
     sender_type: str = Field(max_length=20)
     sender_id: UUID | None = None
     metadata: dict[str, Any] = {}
+
+    @field_validator("media_url")
+    @classmethod
+    def media_url_segura(cls, v: str | None) -> str | None:
+        """Descarta un adjunto con esquema no permitido (ver `sanear_media_url`)."""
+        return sanear_media_url(v)
 
 
 class MessageUpdate(BaseModel):
@@ -129,6 +168,12 @@ class NormalizedMessage(BaseModel):
     interactive_response: dict[str, Any] | None = None
     sender_name: str | None = None
     verified_phone: str | None = None
+
+    @field_validator("media_url")
+    @classmethod
+    def media_url_segura(cls, v: str | None) -> str | None:
+        """Descarta un adjunto con esquema no permitido (ver `sanear_media_url`)."""
+        return sanear_media_url(v)
 
     @field_validator("sender_identifier")
     @classmethod
