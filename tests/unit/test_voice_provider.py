@@ -304,7 +304,7 @@ def test_get_channel_config_de_voz_solo_exige_client_id() -> None:
             TWILIO_PHONE_NUMBER="",
             TWILIO_API_BASE_URL="https://api.twilio.com",
         )
-        proveedor, config = get_channel_config("voice")
+        proveedor, config = get_channel_config("voice", client_id=tenant)
 
     assert proveedor == "twilio"
     assert config["client_id"] == tenant
@@ -313,6 +313,7 @@ def test_get_channel_config_de_voz_solo_exige_client_id() -> None:
 
 
 def test_get_channel_config_de_voz_exige_client_id() -> None:
+    """Sin `DEFAULT_CLIENT_ID` no hay tenant duenio del numero: no lo usa nadie."""
     from app.agents.nodes._tenant import ChannelNotConfiguredError, get_channel_config
 
     with patch("app.agents.nodes._tenant.get_settings") as settings:
@@ -323,8 +324,8 @@ def test_get_channel_config_de_voz_exige_client_id() -> None:
             TWILIO_PHONE_NUMBER="+1",
             TWILIO_API_BASE_URL="https://api.twilio.com",
         )
-        with pytest.raises(ChannelNotConfiguredError, match="client_id"):
-            get_channel_config("voice")
+        with pytest.raises(ChannelNotConfiguredError, match="no esta habilitado"):
+            get_channel_config("voice", client_id=str(uuid4()))
 
 
 async def test_start_call_sin_credenciales_no_llama_a_twilio() -> None:

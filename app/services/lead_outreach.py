@@ -187,6 +187,7 @@ def _clasificar(exc: Exception) -> EnvioError:
 
 async def enviar_texto(
     *,
+    client_id: UUID,
     canal: str,
     destino: str,
     texto: str,
@@ -201,6 +202,8 @@ async def enviar_texto(
     lleva variables: Meta exige declararlas al aprobarla y cada tenant tiene las suyas.
 
     Args:
+        client_id: Tenant que envia. Las cuentas de canal son las de `DEFAULT_CLIENT_ID`: para
+            otro tenant es `CanalNoDisponibleError` (run-2 #3).
         canal: `whatsapp`, `email`, `instagram`, `facebook` o `telegram`.
         destino: Resultado de `destino_del_lead()`.
         texto: Cuerpo (ya con el pie de baja si toca).
@@ -217,7 +220,7 @@ async def enviar_texto(
         EnvioTemporalError: Si fallo de forma pasajera.
     """
     try:
-        nombre, config = get_channel_config(canal)
+        nombre, config = get_channel_config(canal, client_id=client_id)
     except ChannelNotConfiguredError as exc:
         raise CanalNoDisponibleError("channel_not_configured") from exc
     try:

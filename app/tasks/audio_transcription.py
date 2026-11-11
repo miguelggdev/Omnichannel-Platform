@@ -58,12 +58,13 @@ HUMAN_OWNED_STATUSES = ("human_active", "waiting_human")
 RETRY_COUNTDOWN_SECONDS = 10
 
 
-async def resolve_media_url(media_url: str, channel: str) -> str:
+async def resolve_media_url(media_url: str, channel: str, client_id: UUID) -> str:
     """Convierte el `media_url` del mensaje en una URL de descarga.
 
     Args:
         media_url: `NormalizedMessage.media_url`.
         channel: Canal de origen.
+        client_id: Tenant del mensaje, el que usa las credenciales del canal.
 
     Returns:
         URL descargable. Para Telegram (`telegram-file:<file_id>`) se resuelve con
@@ -80,7 +81,7 @@ async def resolve_media_url(media_url: str, channel: str) -> str:
         return media_url
 
     try:
-        _, config = get_channel_config(channel)
+        _, config = get_channel_config(channel, client_id=client_id)
     except ChannelNotConfiguredError as exc:
         raise PermanentTranscriptionError(str(exc)) from exc
     # La URL devuelta lleva el token del bot: no se registra en ningun log.
@@ -187,7 +188,7 @@ async def _transcribir(
 
     texto = await _leer_transcripcion_previa(tenant, mensaje_id)
     if texto is None:
-        url = await resolve_media_url(media_url, channel)
+        url = await resolve_media_url(media_url, channel, tenant)
         medio = await download_media(
             url,
             max_bytes=settings.WHISPER_MAX_AUDIO_BYTES,

@@ -144,7 +144,7 @@ def instalar_proveedor_falso(monkeypatch: pytest.MonkeyPatch) -> ProveedorFalso:
     """Sustituye el canal real por un `ProveedorFalso` (todos los canales, sin credenciales)."""
     falso = ProveedorFalso()
 
-    def config(canal: str) -> tuple[str, dict[str, Any]]:
+    def config(canal: str, **_: Any) -> tuple[str, dict[str, Any]]:
         falso.canal = canal
         return "falso", {}
 

@@ -26,6 +26,17 @@ from tests.unit.crm_doubles import AHORA, CrmSession
 URL = "/api/v1/campaigns"
 
 
+@pytest.fixture(autouse=True)
+def _tenant_de_los_canales(monkeypatch: pytest.MonkeyPatch, tenant_a_id: Any) -> None:
+    """El tenant del token es el duenio de las cuentas de canal (`DEFAULT_CLIENT_ID`).
+
+    Si no, toda campana se rechazaria con 400 (run-2 #3, ver `TestCanalDeOtroTenant`).
+    """
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "DEFAULT_CLIENT_ID", str(tenant_a_id))
+
+
 class FakeCampaign:
     """Sustituto de Campaign con lo que leen los endpoints y schemas."""
 
@@ -414,3 +425,42 @@ class TestBorrado:
         response = await authenticated_client.delete(f"{URL}/{uuid.uuid4()}")
 
         assert response.status_code == 404
+
+
+class TestCanalDeOtroTenant:
+    """Run-2 #3: un tenant que no es el duenio de las cuentas no crea ni envia campanas."""
+
+    @pytest.fixture(autouse=True)
+    def _otro_tenant_es_el_duenio(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.core.config import get_settings
+
+        monkeypatch.setattr(get_settings(), "DEFAULT_CLIENT_ID", str(uuid.uuid4()))
+
+    async def test_crear_da_400_y_no_crea_nada(
+        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        session = _usa_sesion(monkeypatch, CrmSession())
+
+        response = await authenticated_client.post(URL, json=TestAlta._BODY)
+
+        assert response.status_code == 400
+        assert "no esta habilitado" in response.text
+        assert session.added == []
+
+    async def test_enviar_un_borrador_de_antes_da_400_y_no_encola(
+        self, authenticated_client: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        campana = FakeCampaign(channel="telegram")
+        _usa_sesion(monkeypatch, CrmSession(resultados=[campana, None]))
+        encolados = _sin_encolar(monkeypatch)
+
+        response = await authenticated_client.post(f"{URL}/{campana.id}/send")
+
+        assert response.status_code == 400
+        assert "no esta habilitado" in response.text
+        assert encolados == []
+        assert campana.status == CAMPAIGN_DRAFT
+
+    async def test_el_sandbox_no_sale_por_ninguna_cuenta(self) -> None:
+        """`_exigir_canal_del_tenant` deja pasar lo que no usa una cuenta compartida."""
+        campaigns_module._exigir_canal_del_tenant(uuid.uuid4(), "sandbox")

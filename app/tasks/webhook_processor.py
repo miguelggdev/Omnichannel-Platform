@@ -357,7 +357,7 @@ def _parse_timestamp(value: Any) -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def _responder_callback_de_telegram(normalized: NormalizedMessage) -> None:
+async def _responder_callback_de_telegram(normalized: NormalizedMessage, client_id: UUID) -> None:
     """Apaga el reloj de carga del boton que el usuario toco en Telegram.
 
     Solo Telegram tiene este concepto (`answerCallbackQuery`); el resto de
@@ -372,6 +372,7 @@ async def _responder_callback_de_telegram(normalized: NormalizedMessage) -> None
 
     Args:
         normalized: Mensaje entrante ya validado.
+        client_id: Tenant del mensaje.
     """
     if normalized.channel.value != "telegram":
         return
@@ -384,7 +385,7 @@ async def _responder_callback_de_telegram(normalized: NormalizedMessage) -> None
         from app.agents.nodes._tenant import get_channel_config
         from app.services.messaging.telegram import TelegramProvider
 
-        _, config = get_channel_config("telegram")
+        _, config = get_channel_config("telegram", client_id=client_id)
         await TelegramProvider().answer_callback_query(callback_id, config)
     except Exception:
         logger.warning("No se pudo responder el callback_query de Telegram", exc_info=True)
@@ -417,7 +418,7 @@ async def _process_message(provider: str, channel: str, message_data: dict[str, 
 
     # Antes de la transaccion y de proposito lo primero: el callback_query_id
     # de Telegram caduca al minuto.
-    await _responder_callback_de_telegram(normalized)
+    await _responder_callback_de_telegram(normalized, client_id)
 
     async with tenant_session(client_id) as session:
         # Dedup nivel 2: si Redis perdio la clave, aqui se corta igual.

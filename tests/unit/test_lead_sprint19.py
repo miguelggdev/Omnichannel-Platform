@@ -225,7 +225,7 @@ def twilio_configurado(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         voice_ai_twilio,
         "get_channel_config",
-        lambda canal: (
+        lambda canal, **_: (
             "twilio",
             {
                 "account_sid": "AC1",
@@ -286,7 +286,7 @@ class TestTwilioIa:
     async def test_sin_credenciales_salientes_no_llama(
         self, twilio_configurado: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(voice_ai_twilio, "get_channel_config", lambda c: ("twilio", {}))
+        monkeypatch.setattr(voice_ai_twilio, "get_channel_config", lambda c, **_: ("twilio", {}))
         with pytest.raises(VoiceProviderNotConfiguredError):
             await voice_ai_twilio.TwilioAiVoiceProvider().start_call(_peticion())
 

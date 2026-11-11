@@ -36,7 +36,7 @@ def envios(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
             return f"ext-{len(enviados)}"
 
     monkeypatch.setattr(
-        delivery_module, "get_channel_config", lambda canal: ("ycloud", {"api_key": "k"})
+        delivery_module, "get_channel_config", lambda canal, **_: ("ycloud", {"api_key": "k"})
     )
     monkeypatch.setattr(delivery_module, "get_messaging_provider", lambda n, c: FakeProvider())
     return enviados
@@ -90,7 +90,7 @@ async def test_si_el_proveedor_falla_no_queda_mensaje_pero_si_la_conversacion_to
         async def send_message(self, to: str, content: Any, channel_config: Any) -> str:
             raise RuntimeError("boom con https://secreto.example")
 
-    monkeypatch.setattr(delivery_module, "get_channel_config", lambda c: ("ycloud", {"a": 1}))
+    monkeypatch.setattr(delivery_module, "get_channel_config", lambda c, **_: ("ycloud", {"a": 1}))
     monkeypatch.setattr(delivery_module, "get_messaging_provider", lambda n, c: Roto())
 
     async with _cliente(escenario, role="agent") as client:
@@ -152,7 +152,7 @@ async def test_el_contacto_sin_identificador_en_el_canal_es_409(
             {"id": str(escenario.conversation_id)},
         )
     monkey = pytest.MonkeyPatch()
-    monkey.setattr(delivery_module, "get_channel_config", lambda c: ("telegram", {"a": 1}))
+    monkey.setattr(delivery_module, "get_channel_config", lambda c, **_: ("telegram", {"a": 1}))
     try:
         async with _cliente(escenario, role="admin") as client:
             r = await client.post(

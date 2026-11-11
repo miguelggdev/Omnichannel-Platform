@@ -476,7 +476,7 @@ class TestFallos:
         from app.agents.nodes._tenant import ChannelNotConfiguredError
         from app.services import lead_outreach
 
-        def sin_canal(canal: str) -> Any:
+        def sin_canal(canal: str, **_: Any) -> Any:
             raise ChannelNotConfiguredError("falta")
 
         monkeypatch.setattr(lead_outreach, "get_channel_config", sin_canal)

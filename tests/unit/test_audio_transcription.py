@@ -167,7 +167,7 @@ def _pipeline(monkeypatch: pytest.MonkeyPatch, *, previo: str | None = None) -> 
     async def _previa(client_id: Any, message_id: Any) -> str | None:
         return previo
 
-    async def _resolver(media_url: str, channel: str) -> str:
+    async def _resolver(media_url: str, channel: str, client_id: Any) -> str:
         return media_url
 
     async def _descargar(url: str, **kw: Any) -> DownloadedMedia:
@@ -404,7 +404,9 @@ class TestResolverUrl:
     """Telegram entrega una referencia, no una URL."""
 
     async def test_una_url_normal_pasa_tal_cual(self) -> None:
-        url = await tarea.resolve_media_url("https://cdn.example.com/a.ogg", "whatsapp")
+        url = await tarea.resolve_media_url(
+            "https://cdn.example.com/a.ogg", "whatsapp", uuid.UUID(CLIENT_ID)
+        )
 
         assert url == "https://cdn.example.com/a.ogg"
 
@@ -419,11 +421,13 @@ class TestResolverUrl:
             return "https://api.telegram.org/file/botT/voice/1.oga"
 
         monkeypatch.setattr(
-            _tenant, "get_channel_config", lambda canal: ("telegram", {"bot_token": "T"})
+            _tenant, "get_channel_config", lambda canal, **_: ("telegram", {"bot_token": "T"})
         )
         monkeypatch.setattr(telegram.TelegramProvider, "get_file_url", _get_file_url)
 
-        url = await tarea.resolve_media_url("telegram-file:AbC123", "telegram")
+        url = await tarea.resolve_media_url(
+            "telegram-file:AbC123", "telegram", uuid.UUID(CLIENT_ID)
+        )
 
         assert url == "https://api.telegram.org/file/botT/voice/1.oga"
         assert visto == {"file_id": "AbC123", "config": {"bot_token": "T"}}
@@ -433,13 +437,13 @@ class TestResolverUrl:
     ) -> None:
         from app.agents.nodes import _tenant
 
-        def _sin_config(canal: str) -> Any:
+        def _sin_config(canal: str, **_: Any) -> Any:
             raise _tenant.ChannelNotConfiguredError("faltan credenciales")
 
         monkeypatch.setattr(_tenant, "get_channel_config", _sin_config)
 
         with pytest.raises(PermanentTranscriptionError):
-            await tarea.resolve_media_url("telegram-file:AbC123", "telegram")
+            await tarea.resolve_media_url("telegram-file:AbC123", "telegram", uuid.UUID(CLIENT_ID))
 
 
 class TestPersistencia:

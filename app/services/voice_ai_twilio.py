@@ -78,7 +78,7 @@ class TwilioAiVoiceProvider(VoiceCallProvider):
                 "El canal de voz no esta habilitado para este tenant"
             )
         try:
-            _, config = get_channel_config("voice")
+            _, config = get_channel_config("voice", client_id=request_client)
         except ChannelNotConfiguredError as exc:
             raise VoiceProviderNotConfiguredError("Canal de voz no configurado") from exc
         base = ajustes.VOICE_PUBLIC_BASE_URL.rstrip("/")
