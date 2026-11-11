@@ -1342,6 +1342,11 @@ Cuatro agentes en paralelo (RLS/multi-tenancy, async/concurrencia, seguridad, l�
   5. `_validar()` exige números finitos, `last_active_days` entre 0 y 36 500, `tags` solo de strings y valores de `metadata` finitos.
 - **Tests:** `tests/integration/test_active_tenants.py` (falla con el código anterior: el tenant no por defecto no aparece) y unitarios de operador de marketing, tools caídas, DIAN no-JSON y criterios fuera de rango.
 
+
+### BUG-046: El texto de un `DBAPIError` incluía la `ENCRYPTION_KEY` (run-2 #28/#29)
+- **Descripción:** sin `hide_parameters`, `str(DBAPIError)` termina en `[parameters: (...)]` con los bind params de la sentencia que falló. Toda consulta sobre una columna `EncryptedString`/`EncryptedJSON` pasa la `ENCRYPTION_KEY` como bind param de `pgp_sym_decrypt`/`pgp_sym_encrypt`, así que un error de red o de pooler en esa consulta dejaba la clave maestra en `agent_action_logs.error_message` (lo lee el admin del tenant en `/agent-logs/errors`) y en los logs de los workers (`logger.exception`). Mismo mecanismo que BUG-027, por otro camino. Reproducido en `run-2/validacion-scripts/r28_key.py`.
+- **Estado:** CERRADO. `hide_parameters=True` en los tres engines: `app/core/database.py`, `migrations/env.py` (las migraciones 008/009/019 pasan la clave como bind param) y `scripts/load_clinical_catalogs.py`. Test en `tests/unit/test_database.py::TestHideParameters`.
+- **Lección transferible:** `echo=False` no basta para que los bind params no salgan del proceso; el mensaje de las excepciones es el otro canal, y viaja a donde sea que se persista o loguee un `str(exc)`.
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.
 - **Razón:** Los proveedores de mensajería (YCloud, Twilio, Meta) pueden reenviar webhooks por timeouts o errores de red.
