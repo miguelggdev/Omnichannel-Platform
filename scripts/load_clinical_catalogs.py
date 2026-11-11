@@ -72,7 +72,9 @@ async def main(cie10: Path | None, cups: Path | None) -> None:
         cups: CSV del CUPS, si se quiere cargar.
     """
     ajustes = get_settings()
-    engine = create_async_engine(ajustes.DATABASE_URL_DIRECT or ajustes.DATABASE_URL)
+    engine = create_async_engine(
+        ajustes.DATABASE_URL_DIRECT or ajustes.DATABASE_URL, hide_parameters=True
+    )
     fabrica = async_sessionmaker(engine, expire_on_commit=False)
     try:
         for tipo, ruta in (("cie10", cie10), ("cups", cups)):

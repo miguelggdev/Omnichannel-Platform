@@ -110,9 +110,12 @@ def run_migrations_online() -> None:
 
     Crea un Engine y asocia la conexión con el contexto.
     """
+    # hide_parameters: las migraciones de datos cifrados (008, 009, 019...) pasan la
+    # ENCRYPTION_KEY como bind param; sin esto, un error la imprime en la salida de alembic.
     connectable = create_engine(
         get_url(),
         poolclass=pool.NullPool,
+        hide_parameters=True,
     )
 
     with connectable.connect() as connection:

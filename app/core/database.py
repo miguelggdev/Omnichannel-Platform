@@ -56,6 +56,14 @@ current_user_id: ContextVar[UUID | None] = ContextVar("current_user_id", default
 # se está cifrando y la propia `ENCRYPTION_KEY` — quedarían en stdout sin
 # cifrar. La visibilidad de queries la da la instrumentación de OpenTelemetry
 # (`app/core/telemetry.py::SQLAlchemyInstrumentor`), que no expone bind params.
+#
+# hide_parameters SIEMPRE en True, por la misma razon. Sin el, el texto de
+# cualquier `DBAPIError` (`str(exc)`) incluye `[parameters: (...)]` con los bind
+# params de la sentencia que fallo, y en una consulta sobre una columna cifrada
+# uno de ellos es la `ENCRYPTION_KEY`. Ese texto acaba en
+# `agent_action_logs.error_message` (que lee el admin del tenant) y en los logs
+# de los workers (`logger.exception`). Con True, SQLAlchemy lo sustituye por
+# "[SQL parameters hidden due to hide_parameters=True]".
 engine = create_async_engine(
     get_settings().DATABASE_URL,
     pool_size=20,
@@ -63,6 +71,7 @@ engine = create_async_engine(
     pool_pre_ping=True,
     pool_recycle=300,
     echo=False,
+    hide_parameters=True,
 )
 
 AsyncSessionLocal = async_sessionmaker(

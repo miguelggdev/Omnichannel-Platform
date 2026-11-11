@@ -38,6 +38,50 @@ class TestEcho:
         assert engine.echo is False
 
 
+class TestHideParameters:
+    """`hide_parameters` del engine: los bind params nunca van en el texto de un error.
+
+    Run-2 #28/#29: `str(DBAPIError)` incluye `[parameters: (...)]`, y en una consulta
+    sobre una columna cifrada uno de esos parametros es la `ENCRYPTION_KEY`. Ese texto
+    llega a `agent_action_logs.error_message` (visible para el admin del tenant) y a
+    los logs de los workers.
+    """
+
+    def test_engine_oculta_los_parametros(self) -> None:
+        """El engine de la app se crea con `hide_parameters=True`."""
+        assert engine.sync_engine.hide_parameters is True
+
+    def test_error_de_consulta_cifrada_no_contiene_la_clave(self) -> None:
+        """Un `DBAPIError` de una consulta con `EncryptedString` no expone la clave."""
+        import os
+        import uuid
+
+        from sqlalchemy import exc, select
+
+        import app.models  # noqa: F401  (registra todos los modelos)
+        from app.models.contact_identifier import ContactIdentifier
+
+        clave = os.environ["ENCRYPTION_KEY"]
+        stmt = select(ContactIdentifier.identifier_value).where(
+            ContactIdentifier.contact_id == uuid.uuid4()
+        )
+        compilado = stmt.compile(dialect=engine.dialect)
+        params = tuple(compilado.construct_params().values())
+        # Precondicion: la clave si viaja como bind param de esta consulta.
+        assert clave in [str(v) for v in params]
+
+        error = exc.DBAPIError.instance(
+            str(compilado),
+            params,
+            Exception("connection was closed in the middle of operation"),
+            exc.DBAPIError,
+            hide_parameters=engine.sync_engine.hide_parameters,
+        )
+
+        assert clave not in str(error)
+        assert "hide_parameters" in str(error)
+
+
 class TestRunIsolated:
     """Contrato de `run_isolated`: ejecuta y siempre dispone el engine."""
 
