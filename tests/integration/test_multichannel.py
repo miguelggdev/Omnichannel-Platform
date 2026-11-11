@@ -308,7 +308,9 @@ class TestRespuestaEnElHilo:
                 return "<bot-1@empresa.com>"
 
         monkeypatch.setattr(
-            delivery_module, "get_channel_config", lambda canal: ("email", {"from_email": "a@b.c"})
+            delivery_module,
+            "get_channel_config",
+            lambda canal, **_: ("email", {"from_email": "a@b.c"}),
         )
         monkeypatch.setattr(delivery_module, "get_messaging_provider", lambda n, c: ProviderFalso())
 
@@ -511,7 +513,7 @@ class TestUnificacionPorTelefonoVerificado:
         from app.agents.nodes._tenant import ChannelNotConfiguredError, get_channel_config
 
         with pytest.raises(ChannelNotConfiguredError):
-            get_channel_config("verified_phone")
+            get_channel_config("verified_phone", client_id=webhook_tenant)
 
     async def test_el_telefono_verificado_se_guarda_cifrado(
         self, webhook_tenant: uuid.UUID

@@ -363,10 +363,10 @@ async def start_outbound_call(
     if str(user["client_id"]) != client_id:
         raise AppException(403, FORBIDDEN, "El canal de voz no esta habilitado para este tenant")
     try:
-        _, config = get_channel_config("voice")
+        _, config = get_channel_config("voice", client_id=client_id)
     except ChannelNotConfiguredError as exc:
         raise AppException(503, VOICE_NOT_CONFIGURED, "Canal de voz no configurado") from exc
-    # `get_channel_config("voice")` solo exige `client_id`, que es lo que hace
+    # `get_channel_config("voice", ...)` solo exige `client_id`, que es lo que hace
     # falta para responder dentro de una llamada. Llamar hacia fuera si necesita
     # las credenciales REST, y que falten es un problema de configuracion (503),
     # no un rechazo de Twilio (502).

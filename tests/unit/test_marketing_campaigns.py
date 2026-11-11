@@ -508,7 +508,7 @@ class TestEnvioMasivo:
         monkeypatch.setattr(ct, "_guardar_progreso", AsyncMock())
         monkeypatch.setattr(ct, "tenant_session", _sesion(_SesionFalsa()))
         monkeypatch.setattr(ct, "resolver_segmento", AsyncMock(return_value=contactos))
-        monkeypatch.setattr(ct, "get_channel_config", lambda canal: ("telegram", {}))
+        monkeypatch.setattr(ct, "get_channel_config", lambda canal, **_: ("telegram", {}))
         monkeypatch.setattr(ct, "get_messaging_provider", lambda nombre, conf: object())
         monkeypatch.setattr(ct, "_enviar_a_contacto", AsyncMock())
         monkeypatch.setattr(ct.asyncio, "sleep", AsyncMock(side_effect=lambda s: esperas.append(s)))
@@ -542,7 +542,7 @@ class TestEnvioMasivo:
         )
         monkeypatch.setattr(ct, "tenant_session", _sesion(_SesionFalsa()))
         monkeypatch.setattr(ct, "resolver_segmento", AsyncMock(return_value=contactos))
-        monkeypatch.setattr(ct, "get_channel_config", lambda canal: ("telegram", {}))
+        monkeypatch.setattr(ct, "get_channel_config", lambda canal, **_: ("telegram", {}))
         monkeypatch.setattr(ct, "get_messaging_provider", lambda nombre, conf: object())
         monkeypatch.setattr(ct, "_enviar_a_contacto", _enviar)
 
@@ -577,7 +577,7 @@ class TestEnvioMasivo:
         monkeypatch.setattr(ct, "tenant_session", _sesion(_SesionFalsa()))
         monkeypatch.setattr(ct, "resolver_segmento", AsyncMock(return_value=[_contacto()]))
 
-        def _sin_canal(canal):
+        def _sin_canal(canal, **_):
             raise ct.ChannelNotConfiguredError("telegram sin token")
 
         monkeypatch.setattr(ct, "get_channel_config", _sin_canal)

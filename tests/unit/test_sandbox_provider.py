@@ -1,5 +1,6 @@
 """`SandboxProvider`: el canal de las conversaciones de prueba (Sprint 14c, ADR-078)."""
 
+import uuid
 from typing import Any
 
 import pytest
@@ -17,8 +18,8 @@ def test_la_factory_lo_resuelve_por_nombre() -> None:
 
 
 def test_el_canal_no_necesita_credenciales() -> None:
-    """Sin `DEFAULT_CLIENT_ID` ni nada: el webchat si los exigiria."""
-    assert get_channel_config("sandbox") == ("sandbox", {})
+    """Sin `DEFAULT_CLIENT_ID` ni nada, y para cualquier tenant: no sale por ninguna cuenta."""
+    assert get_channel_config("sandbox", client_id=uuid.uuid4()) == ("sandbox", {})
 
 
 async def test_enviar_no_toca_redis_ni_la_red(monkeypatch: pytest.MonkeyPatch) -> None:

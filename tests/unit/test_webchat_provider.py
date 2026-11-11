@@ -230,7 +230,7 @@ class TestContrato:
     ) -> None:
         monkeypatch.setattr(get_settings(), "DEFAULT_CLIENT_ID", str(TENANT))
 
-        nombre, config = get_channel_config("webchat")
+        nombre, config = get_channel_config("webchat", client_id=TENANT)
 
         assert nombre == "webchat"
         assert config == {"client_id": str(TENANT)}
@@ -243,4 +243,4 @@ class TestContrato:
         monkeypatch.setattr(get_settings(), "DEFAULT_CLIENT_ID", "")
 
         with pytest.raises(ChannelNotConfiguredError):
-            get_channel_config("webchat")
+            get_channel_config("webchat", client_id=TENANT)

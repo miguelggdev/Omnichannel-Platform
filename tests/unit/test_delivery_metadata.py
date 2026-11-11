@@ -55,7 +55,7 @@ def envio(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             return None
 
     monkeypatch.setattr(_delivery, "get_contact_identifier", _identificador)
-    monkeypatch.setattr(_delivery, "get_channel_config", lambda canal: ("telegram", {}))
+    monkeypatch.setattr(_delivery, "get_channel_config", lambda canal, **_: ("telegram", {}))
     monkeypatch.setattr(_delivery, "get_messaging_provider", lambda nombre, cfg: _Provider())
     monkeypatch.setattr(_delivery, "tenant_session", lambda cid: _Ctx())
     monkeypatch.setattr(_delivery, "record_message", lambda *a, **k: None)

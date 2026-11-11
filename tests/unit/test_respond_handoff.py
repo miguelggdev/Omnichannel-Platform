@@ -331,7 +331,7 @@ class TestDelivery:
         monkeypatch.setattr(
             delivery_module,
             "get_channel_config",
-            lambda channel: ("ycloud", {"api_key": "k", "phone_number_id": "1"}),
+            lambda channel, **_: ("ycloud", {"api_key": "k", "phone_number_id": "1"}),
         )
         monkeypatch.setattr(
             delivery_module, "get_messaging_provider", lambda nombre, config: FakeProvider()
@@ -382,7 +382,9 @@ class TestDelivery:
 
         monkeypatch.setattr(delivery_module, "get_contact_identifier", _identifier)
         monkeypatch.setattr(
-            delivery_module, "get_channel_config", lambda channel: (canal, {"from_email": "a@b.c"})
+            delivery_module,
+            "get_channel_config",
+            lambda channel, **_: (canal, {"from_email": "a@b.c"}),
         )
         monkeypatch.setattr(
             delivery_module, "get_messaging_provider", lambda nombre, config: FakeProvider()
@@ -476,6 +478,10 @@ class TestDelivery:
         assert not any("messages.metadata" in s for s in sentencias)
 
 
+#: `DEFAULT_CLIENT_ID` en las pruebas de `get_channel_config`: el tenant duenio de las cuentas.
+_TENANT_DE_LOS_CANALES = uuid.uuid4()
+
+
 class TestChannelConfig:
     """Resolucion de canal a proveedor y credenciales."""
 
@@ -492,6 +498,7 @@ class TestChannelConfig:
             "EMAIL_SMTP_PASSWORD": "s3cret",
             "EMAIL_FROM_ADDRESS": "soporte@empresa.com",
             "EMAIL_FROM_NAME": "Soporte",
+            "DEFAULT_CLIENT_ID": str(_TENANT_DE_LOS_CANALES),
         }
         base.update(valores)
         monkeypatch.setattr(tenant_module, "get_settings", lambda: SimpleNamespace(**base))
@@ -500,7 +507,9 @@ class TestChannelConfig:
         """El canal de WhatsApp resuelve al proveedor YCloud con sus credenciales."""
         self._settings(monkeypatch)
 
-        provider, config = tenant_module.get_channel_config("whatsapp")
+        provider, config = tenant_module.get_channel_config(
+            "whatsapp", client_id=_TENANT_DE_LOS_CANALES
+        )
 
         assert provider == "ycloud"
         assert config == {"api_key": "api-key", "phone_number_id": "573009999999"}
@@ -510,7 +519,7 @@ class TestChannelConfig:
         """Instagram y Facebook resuelven a Meta, con el sub-canal dentro."""
         self._settings(monkeypatch)
 
-        provider, config = tenant_module.get_channel_config(canal)
+        provider, config = tenant_module.get_channel_config(canal, client_id=_TENANT_DE_LOS_CANALES)
 
         assert provider == "meta"
         assert config["channel"] == canal
@@ -520,13 +529,15 @@ class TestChannelConfig:
         self._settings(monkeypatch)
 
         with pytest.raises(ChannelNotConfiguredError, match="linkedin"):
-            tenant_module.get_channel_config("linkedin")
+            tenant_module.get_channel_config("linkedin", client_id=_TENANT_DE_LOS_CANALES)
 
     def test_telegram_sale_por_su_propio_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Telegram resuelve al bot del canal de clientes, con su token."""
         self._settings(monkeypatch)
 
-        provider, config = tenant_module.get_channel_config("telegram")
+        provider, config = tenant_module.get_channel_config(
+            "telegram", client_id=_TENANT_DE_LOS_CANALES
+        )
 
         assert provider == "telegram"
         assert config == {"bot_token": "123456:bot-token"}
@@ -535,7 +546,9 @@ class TestChannelConfig:
         """El email resuelve a su provider, con las credenciales SMTP."""
         self._settings(monkeypatch)
 
-        provider, config = tenant_module.get_channel_config("email")
+        provider, config = tenant_module.get_channel_config(
+            "email", client_id=_TENANT_DE_LOS_CANALES
+        )
 
         assert provider == "email"
         assert config["smtp_host"] == "smtp.empresa.com"
@@ -546,7 +559,7 @@ class TestChannelConfig:
         """Un relay interno puede no pedir autenticacion: solo host y origen son obligatorios."""
         self._settings(monkeypatch, EMAIL_SMTP_USER="", EMAIL_SMTP_PASSWORD="")
 
-        _, config = tenant_module.get_channel_config("email")
+        _, config = tenant_module.get_channel_config("email", client_id=_TENANT_DE_LOS_CANALES)
 
         assert config["smtp_user"] == ""
 
@@ -561,18 +574,85 @@ class TestChannelConfig:
         self._settings(monkeypatch, **{ajuste: ""})
 
         with pytest.raises(ChannelNotConfiguredError, match=faltante):
-            tenant_module.get_channel_config("email")
+            tenant_module.get_channel_config("email", client_id=_TENANT_DE_LOS_CANALES)
 
     def test_telegram_sin_token_no_intenta_enviar(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Sin `TELEGRAM_CHANNEL_BOT_TOKEN` falla antes de llamar a la API."""
         self._settings(monkeypatch, TELEGRAM_CHANNEL_BOT_TOKEN="")
 
         with pytest.raises(ChannelNotConfiguredError, match="bot_token"):
-            tenant_module.get_channel_config("telegram")
+            tenant_module.get_channel_config("telegram", client_id=_TENANT_DE_LOS_CANALES)
 
     def test_credenciales_faltantes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Sin el numero de WhatsApp configurado no se intenta enviar."""
         self._settings(monkeypatch, YCLOUD_PHONE_NUMBER_ID="")
 
         with pytest.raises(ChannelNotConfiguredError, match="phone_number_id"):
-            tenant_module.get_channel_config("whatsapp")
+            tenant_module.get_channel_config("whatsapp", client_id=_TENANT_DE_LOS_CANALES)
+
+
+class TestCanalesDelTenantPorDefecto:
+    """Run-2 #3: las cuentas de canal son del tenant por defecto y ningun otro puede usarlas."""
+
+    @pytest.fixture(autouse=True)
+    def _settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        TestChannelConfig()._settings(monkeypatch)
+
+    @pytest.mark.parametrize(
+        "canal", ["whatsapp", "instagram", "facebook", "telegram", "email", "webchat", "voice"]
+    )
+    def test_otro_tenant_no_puede_usar_las_cuentas_compartidas(self, canal: str) -> None:
+        otro = uuid.uuid4()
+
+        assert not tenant_module.canal_habilitado_para(otro, canal)
+        with pytest.raises(tenant_module.ChannelNotEnabledForTenantError, match="habilitado"):
+            tenant_module.get_channel_config(canal, client_id=otro)
+
+    def test_el_rechazo_es_un_canal_sin_configurar_para_los_llamadores(self) -> None:
+        """Campanas, secuencias y respuestas ya manejan `ChannelNotConfiguredError`."""
+        with pytest.raises(ChannelNotConfiguredError):
+            tenant_module.get_channel_config("whatsapp", client_id=uuid.uuid4())
+
+    def test_el_tenant_por_defecto_si_puede_y_da_igual_uuid_o_texto(self) -> None:
+        assert tenant_module.canal_habilitado_para(_TENANT_DE_LOS_CANALES, "whatsapp")
+        assert tenant_module.canal_habilitado_para(str(_TENANT_DE_LOS_CANALES).upper(), "email")
+        nombre, _ = tenant_module.get_channel_config(
+            "telegram", client_id=str(_TENANT_DE_LOS_CANALES)
+        )
+        assert nombre == "telegram"
+
+    def test_el_sandbox_lo_usa_cualquier_tenant(self) -> None:
+        otro = uuid.uuid4()
+        assert tenant_module.canal_habilitado_para(otro, "sandbox")
+        assert tenant_module.get_channel_config("sandbox", client_id=otro) == ("sandbox", {})
+
+    def test_sin_tenant_por_defecto_nadie_usa_las_cuentas(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        TestChannelConfig()._settings(monkeypatch, DEFAULT_CLIENT_ID="")
+        assert not tenant_module.canal_habilitado_para(_TENANT_DE_LOS_CANALES, "whatsapp")
+
+    def test_deliver_message_de_otro_tenant_no_envia(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """La respuesta del agente en una conversacion de otro tenant no sale por la cuenta."""
+        import asyncio
+
+        enviados: list[Any] = []
+
+        async def _identificador(*_: Any) -> str:
+            return "573001112233"
+
+        monkeypatch.setattr(delivery_module, "get_contact_identifier", _identificador)
+        monkeypatch.setattr(
+            delivery_module, "get_messaging_provider", lambda *a, **k: enviados.append(a)
+        )
+        with pytest.raises(tenant_module.ChannelNotEnabledForTenantError):
+            asyncio.run(
+                delivery_module.deliver_message(
+                    client_id=uuid.uuid4(),
+                    conversation_id=uuid.uuid4(),
+                    contact_id=uuid.uuid4(),
+                    channel="whatsapp",
+                    text="hola",
+                )
+            )
+        assert enviados == []

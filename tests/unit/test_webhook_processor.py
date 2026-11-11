@@ -990,7 +990,7 @@ class TestRespuestaDelCallbackDeTelegram:
         from app.agents.nodes import _tenant
 
         config = {"bot_token": "T"}
-        monkeypatch.setattr(_tenant, "get_channel_config", lambda canal: ("telegram", config))
+        monkeypatch.setattr(_tenant, "get_channel_config", lambda canal, **_: ("telegram", config))
         return config
 
     @pytest.fixture
@@ -1020,7 +1020,7 @@ class TestRespuestaDelCallbackDeTelegram:
             interactive={"type": "button_reply", "id": "si", "callback_query_id": "cb-1"}
         )
 
-        await wp._responder_callback_de_telegram(mensaje)
+        await wp._responder_callback_de_telegram(mensaje, uuid.uuid4())
 
         assert respondido == [("cb-1", canal_configurado)]
 
@@ -1033,14 +1033,14 @@ class TestRespuestaDelCallbackDeTelegram:
             interactive={"type": "button_reply", "id": "si", "callback_query_id": "cb-1"},
         )
 
-        await wp._responder_callback_de_telegram(mensaje)
+        await wp._responder_callback_de_telegram(mensaje, uuid.uuid4())
 
         assert respondido == []
 
     async def test_sin_interactive_response_no_llama(
         self, respondido: list[tuple[str, dict[str, Any]]]
     ) -> None:
-        await wp._responder_callback_de_telegram(self._mensaje(interactive=None))
+        await wp._responder_callback_de_telegram(self._mensaje(interactive=None), uuid.uuid4())
 
         assert respondido == []
 
@@ -1055,7 +1055,9 @@ class TestRespuestaDelCallbackDeTelegram:
     async def test_datos_incompletos_no_llaman(
         self, respondido: list[tuple[str, dict[str, Any]]], interactive: dict[str, Any]
     ) -> None:
-        await wp._responder_callback_de_telegram(self._mensaje(interactive=interactive))
+        await wp._responder_callback_de_telegram(
+            self._mensaje(interactive=interactive), uuid.uuid4()
+        )
 
         assert respondido == []
 
@@ -1073,12 +1075,12 @@ class TestRespuestaDelCallbackDeTelegram:
             interactive={"type": "button_reply", "id": "si", "callback_query_id": "cb-1"}
         )
 
-        await wp._responder_callback_de_telegram(mensaje)  # no debe lanzar
+        await wp._responder_callback_de_telegram(mensaje, uuid.uuid4())  # no debe lanzar
 
     async def test_canal_no_configurado_no_propaga(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from app.agents.nodes import _tenant
 
-        def _sin_config(canal: str) -> Any:
+        def _sin_config(canal: str, **_: Any) -> Any:
             raise _tenant.ChannelNotConfiguredError("faltan credenciales")
 
         monkeypatch.setattr(_tenant, "get_channel_config", _sin_config)
@@ -1086,7 +1088,7 @@ class TestRespuestaDelCallbackDeTelegram:
             interactive={"type": "button_reply", "id": "si", "callback_query_id": "cb-1"}
         )
 
-        await wp._responder_callback_de_telegram(mensaje)  # no debe lanzar
+        await wp._responder_callback_de_telegram(mensaje, uuid.uuid4())  # no debe lanzar
 
     async def test_process_message_lo_llama_antes_de_persistir(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1097,7 +1099,7 @@ class TestRespuestaDelCallbackDeTelegram:
 
         llamadas: list[Any] = []
 
-        async def _capturar(normalized: Any) -> None:
+        async def _capturar(normalized: Any, tenant: Any) -> None:
             llamadas.append(normalized)
 
         monkeypatch.setattr(wp, "_responder_callback_de_telegram", _capturar)

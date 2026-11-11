@@ -199,6 +199,7 @@ async def _entregar(
             continue
         try:
             await enviar_texto(
+                client_id=llamada.client_id,
                 canal=canal,
                 destino=destino,
                 texto=cuerpo,
@@ -369,7 +370,11 @@ async def _avisar_al_agente(
         datos = {"lead": quien, "cuando": formatear_cuando(llamada.scheduled_at, llamada.timezone)}
         asunto = t["asunto_nueva" if cual == "nueva" else "asunto_1h"].format(**datos)
         await enviar_texto(
-            canal="email", destino=str(correo), texto=t[cual].format(**datos), asunto=asunto
+            client_id=llamada.client_id,
+            canal="email",
+            destino=str(correo),
+            texto=t[cual].format(**datos),
+            asunto=asunto,
         )
     except Exception as exc:
         logger.warning(

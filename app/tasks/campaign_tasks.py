@@ -361,7 +361,7 @@ async def _ejecutar(client_id_str: str, campaign_id_str: str) -> dict[str, Any]:
 
         await _guardar_progreso(client_id, campaign_id, target_count=len(contactos))
 
-        provider_name, channel_config = get_channel_config(campana.channel)
+        provider_name, channel_config = get_channel_config(campana.channel, client_id=client_id)
         provider = get_messaging_provider(provider_name, {"channel": campana.channel})
 
         for inicio in range(0, len(contactos), por_segundo):

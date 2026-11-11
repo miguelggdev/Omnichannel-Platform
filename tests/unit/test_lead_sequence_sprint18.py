@@ -1,6 +1,7 @@
 """Sprint 18, Dev B: clasificador de respuestas, envio al lead y schemas de la API (sin base)."""
 
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -30,6 +31,10 @@ from app.services.lead_sequence_templates import PLANTILLAS
 from app.services.messaging.base import MessageContent, TemplateMessage, TemplateNotSupportedError
 
 # ── Clasificador de respuestas ───────────────────────────────────────────────────────────────
+
+
+#: Tenant de los envios; `get_channel_config` esta sustituido, asi que cualquiera sirve.
+_TENANT = uuid4()
 
 
 class TestClasificador:
@@ -147,7 +152,7 @@ class _Proveedor:
 @pytest.fixture
 def proveedor(monkeypatch: pytest.MonkeyPatch) -> _Proveedor:
     falso = _Proveedor()
-    monkeypatch.setattr(lead_outreach, "get_channel_config", lambda canal: ("falso", {}))
+    monkeypatch.setattr(lead_outreach, "get_channel_config", lambda canal, **_: ("falso", {}))
     monkeypatch.setattr(lead_outreach, "get_messaging_provider", lambda nombre, cfg=None: falso)
     return falso
 
@@ -164,6 +169,7 @@ class TestEnvio:
 
     async def test_whatsapp_con_plantilla_manda_la_plantilla(self, proveedor: _Proveedor) -> None:
         externo = await enviar_texto(
+            client_id=_TENANT,
             canal="whatsapp",
             destino="573001112233",
             texto="no se usa",
@@ -179,13 +185,17 @@ class TestEnvio:
         assert plantilla.language == "es"
 
     async def test_whatsapp_sin_plantilla_manda_texto(self, proveedor: _Proveedor) -> None:
-        await enviar_texto(canal="whatsapp", destino="573001112233", texto="Hola")
+        await enviar_texto(
+            client_id=_TENANT, canal="whatsapp", destino="573001112233", texto="Hola"
+        )
 
         assert proveedor.mensajes[0][1].text == "Hola"
         assert proveedor.mensajes[0][1].metadata is None
 
     async def test_email_abre_un_hilo_con_su_asunto(self, proveedor: _Proveedor) -> None:
-        await enviar_texto(canal="email", destino="a@b.com", texto="Hola", asunto="Bienvenido")
+        await enviar_texto(
+            client_id=_TENANT, canal="email", destino="a@b.com", texto="Hola", asunto="Bienvenido"
+        )
 
         meta = proveedor.mensajes[0][1].metadata
         assert meta == {"subject": "Bienvenido", "new_thread": True}
@@ -193,7 +203,13 @@ class TestEnvio:
     async def test_plantilla_de_whatsapp_se_ignora_en_otro_canal(
         self, proveedor: _Proveedor
     ) -> None:
-        await enviar_texto(canal="email", destino="a@b.com", texto="Hola", plantilla_whatsapp="x")
+        await enviar_texto(
+            client_id=_TENANT,
+            canal="email",
+            destino="a@b.com",
+            texto="Hola",
+            plantilla_whatsapp="x",
+        )
 
         assert proveedor.mensajes
         assert not proveedor.plantillas
@@ -227,11 +243,11 @@ class TestEnvio:
         codigo: str,
     ) -> None:
         falso = _Proveedor(falla=falla)
-        monkeypatch.setattr(lead_outreach, "get_channel_config", lambda canal: ("falso", {}))
+        monkeypatch.setattr(lead_outreach, "get_channel_config", lambda canal, **_: ("falso", {}))
         monkeypatch.setattr(lead_outreach, "get_messaging_provider", lambda n, cfg=None: falso)
 
         with pytest.raises(tipo) as info:
-            await enviar_texto(canal="email", destino="a@b.com", texto="Hola")
+            await enviar_texto(client_id=_TENANT, canal="email", destino="a@b.com", texto="Hola")
 
         assert info.value.code == codigo  # type: ignore[attr-defined]
 
@@ -240,23 +256,25 @@ class TestEnvio:
     ) -> None:
         """El detalle de la excepcion del proveedor puede traer el destino: no se copia."""
         falso = _Proveedor(falla=ValueError("Destinatario invalido: secreto@privado.com"))
-        monkeypatch.setattr(lead_outreach, "get_channel_config", lambda canal: ("falso", {}))
+        monkeypatch.setattr(lead_outreach, "get_channel_config", lambda canal, **_: ("falso", {}))
         monkeypatch.setattr(lead_outreach, "get_messaging_provider", lambda n, cfg=None: falso)
 
         with pytest.raises(EnvioPermanenteError) as info:
-            await enviar_texto(canal="email", destino="secreto@privado.com", texto="Hola")
+            await enviar_texto(
+                client_id=_TENANT, canal="email", destino="secreto@privado.com", texto="Hola"
+            )
 
         assert "secreto" not in str(info.value)
         assert "secreto" not in info.value.code
 
     async def test_canal_sin_configurar(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def sin_canal(canal: str) -> Any:
+        def sin_canal(canal: str, **_: Any) -> Any:
             raise ChannelNotConfiguredError("sin credenciales")
 
         monkeypatch.setattr(lead_outreach, "get_channel_config", sin_canal)
 
         with pytest.raises(CanalNoDisponibleError) as info:
-            await enviar_texto(canal="email", destino="a@b.com", texto="Hola")
+            await enviar_texto(client_id=_TENANT, canal="email", destino="a@b.com", texto="Hola")
 
         assert info.value.code == "channel_not_configured"
 
@@ -266,11 +284,11 @@ class TestEnvio:
         def no_registrado(nombre: str, cfg: Any = None) -> Any:
             raise ValueError("Provider no registrado")
 
-        monkeypatch.setattr(lead_outreach, "get_channel_config", lambda canal: ("x", {}))
+        monkeypatch.setattr(lead_outreach, "get_channel_config", lambda canal, **_: ("x", {}))
         monkeypatch.setattr(lead_outreach, "get_messaging_provider", no_registrado)
 
         with pytest.raises(CanalNoDisponibleError):
-            await enviar_texto(canal="email", destino="a@b.com", texto="Hola")
+            await enviar_texto(client_id=_TENANT, canal="email", destino="a@b.com", texto="Hola")
 
 
 class TestPieDeBaja:

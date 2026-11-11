@@ -367,6 +367,7 @@ async def _enviar_paso(
     cuerpo = con_pie_de_baja(texto, ctx.idioma)
     try:
         externo = await enviar_texto(
+            client_id=lead.client_id,
             canal=canal,
             destino=destino,
             texto=cuerpo,

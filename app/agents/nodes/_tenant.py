@@ -68,6 +68,15 @@ class ChannelNotConfiguredError(RuntimeError):
     """El canal no tiene proveedor asociado o le faltan credenciales."""
 
 
+class ChannelNotEnabledForTenantError(ChannelNotConfiguredError):
+    """El canal sale por la cuenta compartida del despliegue y el tenant no es el suyo.
+
+    Hereda de `ChannelNotConfiguredError` para que todo llamador que ya maneja un canal sin
+    configurar (campanas, secuencias, respuestas del agente) trate igual este caso: para ese
+    tenant el canal no esta configurado.
+    """
+
+
 class ContactIdentifierNotFoundError(RuntimeError):
     """El contacto no tiene identificador registrado en ese canal.
 
@@ -245,17 +254,58 @@ async def get_contact_identifier(client_id: UUID, contact_id: UUID, channel: str
     return str(identifier)
 
 
-def get_channel_config(channel: str) -> tuple[str, dict[str, Any]]:
-    """Resuelve el proveedor y las credenciales de un canal.
+#: Proveedores que no salen por una cuenta del despliegue y puede usar cualquier tenant.
+_PROVEEDORES_SIN_CUENTA_COMPARTIDA = frozenset({"sandbox"})
+
+
+def _es_tenant_de_los_canales(client_id: UUID | str) -> bool:
+    """Si `client_id` es el tenant duenio de las credenciales de canal (`DEFAULT_CLIENT_ID`)."""
+    try:
+        return UUID(str(client_id)) == UUID(str(get_settings().DEFAULT_CLIENT_ID))
+    except ValueError:
+        return False  # DEFAULT_CLIENT_ID vacio o invalido: no hay tenant duenio
+
+
+def canal_habilitado_para(client_id: UUID | str, channel: str) -> bool:
+    """Si el tenant puede enviar por el canal, sin mirar si las credenciales estan puestas.
+
+    Las credenciales de canal son del despliegue, no de cada tenant (ADR-030): las cuentas de
+    WhatsApp, Meta, Telegram, el remitente SMTP y el numero de Twilio son las de
+    `DEFAULT_CLIENT_ID`, y las respuestas a esas cuentas entran en ese tenant. Hasta que exista
+    configuracion de canal por tenant, solo el puede usarlas; otro tenant que enviara por ellas
+    hablaria con sus contactos con la identidad del tenant por defecto, y las respuestas
+    caerian en el (run-2 #3). El sandbox no envia nada y lo puede usar cualquiera.
+
+    Args:
+        client_id: Tenant que quiere enviar.
+        channel: Canal.
+
+    Returns:
+        `True` si el canal no tiene proveedor (de eso avisa `get_channel_config`), si no sale
+        por una cuenta compartida o si el tenant es el duenio de las cuentas.
+    """
+    provider_name = CHANNEL_PROVIDERS.get(channel)
+    if provider_name is None or provider_name in _PROVEEDORES_SIN_CUENTA_COMPARTIDA:
+        return True
+    return _es_tenant_de_los_canales(client_id)
+
+
+def get_channel_config(channel: str, *, client_id: UUID | str) -> tuple[str, dict[str, Any]]:
+    """Resuelve el proveedor y las credenciales de un canal para un tenant.
 
     Args:
         channel: Canal de la conversacion (whatsapp, instagram, facebook, telegram).
+        client_id: Tenant que va a usar el canal. Obligatorio: las credenciales son las de
+            `DEFAULT_CLIENT_ID` y ningun otro tenant puede usarlas (ver
+            `canal_habilitado_para`).
 
     Returns:
         Tupla `(provider_name, channel_config)` lista para la factory de
         `MessagingProvider` y para `send_message()`.
 
     Raises:
+        ChannelNotEnabledForTenantError: Si el canal sale por la cuenta compartida y el
+            tenant no es `DEFAULT_CLIENT_ID`.
         ChannelNotConfiguredError: Si el canal no tiene proveedor registrado o le
             faltan credenciales en el entorno.
     """
@@ -263,6 +313,11 @@ def get_channel_config(channel: str) -> tuple[str, dict[str, Any]]:
     if provider_name is None:
         raise ChannelNotConfiguredError(
             f"Canal {channel!r} sin proveedor registrado. Disponibles: {sorted(CHANNEL_PROVIDERS)}"
+        )
+    if not canal_habilitado_para(client_id, channel):
+        raise ChannelNotEnabledForTenantError(
+            f"El canal {channel!r} no esta habilitado para este tenant: sus credenciales son "
+            "las del tenant por defecto (ADR-030)"
         )
 
     settings = get_settings()

@@ -914,7 +914,11 @@ async def send_manual_message(
         )
     try:
         externo = await enviar_texto(
-            canal=data.channel, destino=destino, texto=data.text, asunto=data.subject
+            client_id=client_id,
+            canal=data.channel,
+            destino=destino,
+            texto=data.text,
+            asunto=data.subject,
         )
     except CanalNoDisponibleError as exc:
         raise AppException(

@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.nodes._tenant import canal_habilitado_para
 from app.core.database import tenant_session
 from app.core.dependencies import require_role
 from app.core.exceptions import NOT_FOUND, VALIDATION_ERROR, AppException
@@ -151,6 +152,31 @@ async def list_campaigns(
         )
 
 
+def _exigir_canal_del_tenant(client_id: UUID, canal: str) -> None:
+    """400 si el canal sale por las cuentas del tenant por defecto y este tenant no es el.
+
+    Las cuentas de canal son del despliegue (ADR-030): una campana de otro tenant saldria con la
+    identidad del tenant por defecto y las respuestas entrarian en el (run-2 #3). El worker
+    tambien lo rechaza (`get_channel_config`); aqui se avisa antes, al crearla o enviarla.
+
+    Args:
+        client_id: Tenant de la campana.
+        canal: Canal de la campana.
+
+    Raises:
+        AppException: 400 si el tenant no puede usar el canal.
+    """
+    if not canal_habilitado_para(client_id, canal):
+        raise AppException(
+            status_code=400,
+            error_code=VALIDATION_ERROR,
+            message=(
+                f"El canal {canal} no esta habilitado para este negocio: las cuentas de canal "
+                "del despliegue son del tenant por defecto"
+            ),
+        )
+
+
 @router.post("", status_code=201, response_model=CampaignResponse)
 async def create_campaign(
     data: CampaignCreate,
@@ -172,7 +198,8 @@ async def create_campaign(
         La campana creada.
 
     Raises:
-        AppException: 400 si el canal o los criterios no son validos.
+        AppException: 400 si el canal o los criterios no son validos, o si el canal no esta
+            habilitado para el tenant.
     """
     client_id: UUID = user["client_id"]
 
@@ -182,6 +209,7 @@ async def create_campaign(
             error_code=VALIDATION_ERROR,
             message=f"Canal invalido: {data.channel}. Validos: {', '.join(CANALES_VALIDOS)}",
         )
+    _exigir_canal_del_tenant(client_id, data.channel)
 
     async with tenant_session(client_id) as session:
         try:
@@ -295,6 +323,9 @@ async def send_campaign(
                     f"solo se puede enviar desde '{CAMPAIGN_DRAFT}'"
                 ),
             )
+
+        # Tambien aqui y no solo al crearla: una campana en borrador de antes del cambio.
+        _exigir_canal_del_tenant(client_id, campana.channel)
 
         if campana.channel == "whatsapp" and not await plantilla_aprobada(
             session, client_id, campana.message_template
