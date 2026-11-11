@@ -29,13 +29,46 @@ _FAQ_PATTERNS = (
 )
 _FAQ_MIN_MATCHES = 2
 
-# Patron de pares pregunta/respuesta: "P: ... R: ...", "Pregunta: ... Respuesta: ...",
-# "Q: ... A: ...". El lookahead corta antes del siguiente marcador o al final.
-_FAQ_PAIR_PATTERN = re.compile(
-    r"(?:P(?:regunta)?|Q)\s*[:.]\s*(.*?)\s*(?:R(?:espuesta)?|A)\s*[:.]\s*(.*?)"
-    r"(?=(?:P(?:regunta)?|Q)\s*[:.]|$)",
-    re.DOTALL | re.IGNORECASE,
-)
+# Marcadores de los pares pregunta/respuesta: "P: ... R: ...", "Pregunta: ... Respuesta: ...",
+# "Q: ... A: ...".
+#
+# Los pares NO se sacan con un solo regex `P:(.*?)R:(.*?)(?=P:|$)`: con muchos marcadores de
+# pregunta sin respuesta, cada uno recorre el resto del texto buscando su "R:" y el coste es
+# cuadratico (run-2 #37: 51 KiB de "P: ...\n" ocupaban 24 s un worker de `documents`).
+# `_extraer_pares_faq()` busca cada marcador una sola vez, desde donde acabo el anterior.
+_FAQ_PREGUNTA = re.compile(r"(?:P(?:regunta)?|Q)\s*[:.]", re.IGNORECASE)
+_FAQ_RESPUESTA = re.compile(r"(?:R(?:espuesta)?|A)\s*[:.]", re.IGNORECASE)
+
+
+def _extraer_pares_faq(text: str) -> list[tuple[str, str]]:
+    """Pares (pregunta, respuesta) del texto, en tiempo lineal.
+
+    Mismo resultado que el antiguo `findall` de
+    `P:\\s*(.*?)\\s*R:\\s*(.*?)(?=P:|$)` (con DOTALL e IGNORECASE): la pregunta va del
+    marcador de pregunta al primer marcador de respuesta, y la respuesta hasta el siguiente
+    marcador de pregunta o el final. Una pregunta sin respuesta detras termina la busqueda,
+    porque ninguna pregunta posterior podria tenerla.
+
+    Args:
+        text: Texto con estructura de FAQ.
+
+    Returns:
+        Los pares, sin espacios en los extremos y en el orden del texto.
+    """
+    pares: list[tuple[str, str]] = []
+    pos = 0
+    while (pregunta := _FAQ_PREGUNTA.search(text, pos)) is not None:
+        respuesta = _FAQ_RESPUESTA.search(text, pregunta.end())
+        if respuesta is None:
+            break
+        siguiente = _FAQ_PREGUNTA.search(text, respuesta.end())
+        fin = siguiente.start() if siguiente is not None else len(text)
+        pares.append(
+            (text[pregunta.end() : respuesta.start()].strip(), text[respuesta.end() : fin].strip())
+        )
+        pos = fin
+    return pares
+
 
 # Minimo de lineas con "|" o tabulador para considerar que hay una tabla.
 _TABLE_MIN_LINES = 3
@@ -163,7 +196,7 @@ class DocumentChunker:
             Un chunk por par detectado; si no se detecta ninguno, cae al
             chunking estandar en vez de perder el contenido.
         """
-        matches = _FAQ_PAIR_PATTERN.findall(text)
+        matches = _extraer_pares_faq(text)
         if not matches:
             return self._chunk_text(text, page_number)
 
