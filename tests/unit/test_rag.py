@@ -300,6 +300,52 @@ class TestChunking:
         assert chunker._chunk_text("", page_number=1) == []
 
 
+class TestParesFaq:
+    """`_extraer_pares_faq`: mismo resultado que el regex de antes, en tiempo lineal (run-2 #37)."""
+
+    #: El regex que se usaba hasta run-2 #37, como referencia del comportamiento esperado.
+    _REGEX_ANTERIOR = re.compile(
+        r"(?:P(?:regunta)?|Q)\s*[:.]\s*(.*?)\s*(?:R(?:espuesta)?|A)\s*[:.]\s*(.*?)"
+        r"(?=(?:P(?:regunta)?|Q)\s*[:.]|$)",
+        re.DOTALL | re.IGNORECASE,
+    )
+
+    def _anterior(self, texto: str) -> list[tuple[str, str]]:
+        return [(p.strip(), r.strip()) for p, r in self._REGEX_ANTERIOR.findall(texto)]
+
+    def test_extrae_los_pares_de_una_faq(self) -> None:
+        texto = (
+            "Preguntas frecuentes\n"
+            "Pregunta: ¿Abren los domingos?\nRespuesta: No, de lunes a sabado.\n"
+            "P: ¿Hacen envios?\nR: Si, a todo el pais.\n"
+            "Q: Do you ship abroad?\nA: Not yet."
+        )
+        assert chunker_mod._extraer_pares_faq(texto) == [
+            ("¿Abren los domingos?", "No, de lunes a sabado."),
+            ("¿Hacen envios?", "Si, a todo el pais."),
+            ("Do you ship abroad?", "Not yet."),
+        ]
+
+    def test_equivale_al_regex_anterior_en_textos_aleatorios(self) -> None:
+        import random
+
+        piezas = ["P", "p", "Q", "R", "r", "A", "a", "Pregunta", "RESPUESTA", "Preg", "Resp"]
+        piezas += [":", ".", " ", "\n", "\t", "x", "hola", chr(0xA0)]
+        azar = random.Random(37)  # noqa: S311  (datos de prueba, no cripto)
+        for _ in range(20_000):
+            texto = "".join(azar.choice(piezas) for _ in range(azar.randint(0, 25)))
+            assert chunker_mod._extraer_pares_faq(texto) == self._anterior(texto), repr(texto)
+
+    def test_muchas_preguntas_sin_respuesta_es_lineal(self) -> None:
+        """Con el regex anterior, 2000 marcadores (51 KiB) tardaban ~24 s; aqui 20 000, < 1 s."""
+        import time
+
+        texto = "FAQ\n" + "P: pregunta sin respuesta\n" * 20_000
+        inicio = time.perf_counter()
+        assert chunker_mod._extraer_pares_faq(texto) == []
+        assert time.perf_counter() - inicio < 1
+
+
 # ─── Embeddings ──────────────────────────────────────────────────────────────
 
 

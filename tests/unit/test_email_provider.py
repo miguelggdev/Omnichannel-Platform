@@ -479,6 +479,35 @@ class TestEntradasHostiles:
         email_module.recortar_cita(texto)
         assert time.perf_counter() - inicio < 1
 
+    def test_muchos_menor_que_sin_cerrar_es_lineal(self) -> None:
+        """Run-2 #38: `<[^>]+>` tardaba ~19 s con 100k `<` (el tope de `MAX_CUERPO_CHARS`)."""
+        import time
+
+        html = "<" * email_module.MAX_CUERPO_CHARS
+        inicio = time.perf_counter()
+        assert email_module._html_a_texto(html) == html  # ningun "<" tiene cierre: no hay etiquetas
+        assert time.perf_counter() - inicio < 1
+
+    @pytest.mark.parametrize(
+        "html",
+        [
+            "",
+            "sin etiquetas",
+            "<b>negrita</b> y <i>cursiva</i>",
+            "<>vacia<>",
+            "a < b y c > d",
+            "<a<b>c>",
+            "<<b>>",
+            "abierta <sin cierre",
+            "<p>uno</p><<x",
+            ">solo cierres>",
+        ],
+    )
+    def test_quitar_etiquetas_equivale_al_regex_de_siempre(self, html: str) -> None:
+        import re
+
+        assert email_module._quitar_etiquetas(html) == re.sub(r"<[^>]+>", "", html)
+
 
 class TestValidateSignature:
     """El Inbound Parse no va firmado: se autentica con Basic auth en la URL."""

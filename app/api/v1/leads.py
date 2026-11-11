@@ -28,6 +28,7 @@ Decisiones:
   sus datos hasta que se anonimiza (`DELETE /admin/leads/{id}/gdpr-delete`).
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -639,7 +640,9 @@ async def import_leads(
             status_code=413, error_code=VALIDATION_ERROR, message="El archivo supera 2 MB"
         )
     try:
-        parseado = parsear_archivo(contenido)
+        # En un hilo: openpyxl y el parseo son CPU puro, y aqui bloquearian el event loop de
+        # la API para todos los tenants mientras dura (run-2 #47).
+        parseado = await asyncio.to_thread(parsear_archivo, contenido)
     except CsvError as exc:
         raise AppException(status_code=400, error_code=VALIDATION_ERROR, message=str(exc)) from exc
 
