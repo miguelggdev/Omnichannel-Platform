@@ -1342,6 +1342,11 @@ Cuatro agentes en paralelo (RLS/multi-tenancy, async/concurrencia, seguridad, l�
   5. `_validar()` exige números finitos, `last_active_days` entre 0 y 36 500, `tags` solo de strings y valores de `metadata` finitos.
 - **Tests:** `tests/integration/test_active_tenants.py` (falla con el código anterior: el tenant no por defecto no aparece) y unitarios de operador de marketing, tools caídas, DIAN no-JSON y criterios fuera de rango.
 
+
+### BUG-048: Las campañas y mensajes de cualquier tenant salían por las cuentas del tenant por defecto (run-2 #3)
+- **Descripción:** las credenciales de canal son del despliegue (ADR-030): YCloud, Meta, el bot de Telegram, el remitente SMTP (`EMAIL_FROM_ADDRESS`), el número de Twilio y el webchat pertenecen a `DEFAULT_CLIENT_ID`, y lo que responden los contactos entra en ese tenant. Pero `get_channel_config(channel)` no recibía el tenant: una campaña, una secuencia de leads, un aviso de llamada o una respuesta del agente de **otro** tenant salía con la identidad del tenant por defecto, a destinatarios que ese otro tenant elegía (con el módulo de leads crea identificadores con cualquier email o teléfono), y las respuestas caían en el tenant por defecto.
+- **Estado:** CERRADO. `get_channel_config(channel, *, client_id)` exige el tenant y lanza `ChannelNotEnabledForTenantError` (subclase de `ChannelNotConfiguredError`, así que campañas, secuencias y respuestas lo tratan como canal sin configurar) si el tenant no es `DEFAULT_CLIENT_ID`. El sandbox no sale por ninguna cuenta y lo usa cualquiera. `canal_habilitado_para()` permite preguntarlo antes; `POST /campaigns` y `/campaigns/{id}/send` responden 400. Cuando exista configuración de canal por tenant, es el único sitio que hay que cambiar.
+- **Lección transferible:** si un recurso es de un solo tenant, la función que lo entrega tiene que pedir el tenant aunque hoy no lo use para elegir nada; sin ese parámetro, nadie se pregunta quién lo está usando.
 ### PAT-001: Webhook idempotency con deduplicación
 - **Patrón:** Antes de procesar un webhook entrante, verificar `(channel, external_message_id)` en tabla `webhook_dedup`. Si existe, retornar 200 sin procesar. Si no, insertar y procesar.
 - **Razón:** Los proveedores de mensajería (YCloud, Twilio, Meta) pueden reenviar webhooks por timeouts o errores de red.
