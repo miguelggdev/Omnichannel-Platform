@@ -49,7 +49,6 @@ from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.parser import HeaderParser
 from email.utils import make_msgid, parseaddr, parsedate_to_datetime
-from itertools import islice
 from typing import Any
 
 import aiosmtplib
@@ -89,7 +88,6 @@ _LINEA_ORIGINAL = re.compile(
 )
 _DIVISOR_OUTLOOK = re.compile(r"^\s*_{10,}\s*$")
 _CABECERA_CITADA = re.compile(r"^\s*(?:From|De|Sent|Enviado|Date|Fecha)\s*:", re.IGNORECASE)
-_ETIQUETAS = re.compile(r"<[^>]+>")
 _APERTURA_SCRIPT = re.compile(r"<(script|style)\b", re.IGNORECASE)
 #: Longitud maxima del cuerpo que se procesa: un email no necesita mas para la IA, y las
 #: expresiones de este modulo no deben recorrer megas de texto de un remitente cualquiera.
@@ -118,8 +116,13 @@ def recortar_cita(texto: str) -> str:
         if _DIVISOR_OUTLOOK.match(linea):
             # Solo es una cita de Outlook si lo siguiente es la cabecera de un
             # mensaje: una firma con una raya de guiones bajos no se recorta.
-            # `islice`, no `lineas[i + 1 :]`: copiar la cola en cada divisor es cuadratico.
-            siguiente = next((x for x in islice(lineas, i + 1, None) if x.strip()), "")
+            # Ni `lineas[i + 1 :]` (copia la cola) ni `islice(lineas, i + 1, None)` (recorre
+            # la lista desde el principio): con miles de divisores ambos son cuadraticos.
+            # Se avanza por indice solo hasta la siguiente linea no vacia.
+            j = i + 1
+            while j < len(lineas) and not lineas[j].strip():
+                j += 1
+            siguiente = lineas[j] if j < len(lineas) else ""
             if _CABECERA_CITADA.match(siguiente):
                 break
         if linea.lstrip().startswith(">"):
@@ -155,6 +158,37 @@ def _quitar_scripts(contenido: str) -> str:
     return "".join(partes)
 
 
+def _quitar_etiquetas(contenido: str) -> str:
+    """Quita las etiquetas HTML en tiempo lineal; mismo resultado que `<[^>]+>` -> "".
+
+    `re.sub(r"<[^>]+>", "", ...)` es cuadratico con muchos `<` sin `>` detras: desde cada uno
+    recorre el resto del texto buscando el cierre (run-2 #38: 98 KiB de `<` bloqueaban el event
+    loop ~19 s). Aqui, si un `<` no tiene ningun `>` despues, ninguno de los siguientes lo tiene
+    y el resto del texto se queda tal cual.
+
+    Args:
+        contenido: HTML.
+
+    Returns:
+        El texto sin etiquetas.
+    """
+    partes: list[str] = []
+    pos = 0
+    while (apertura := contenido.find("<", pos)) != -1:
+        cierre = contenido.find(">", apertura + 1)
+        if cierre == -1:
+            break
+        if cierre == apertura + 1:
+            # "<>" no es una etiqueta (`[^>]+` pide al menos un caracter): el "<" se queda.
+            partes.append(contenido[pos : apertura + 1])
+            pos = apertura + 1
+            continue
+        partes.append(contenido[pos:apertura])
+        pos = cierre + 1
+    partes.append(contenido[pos:])
+    return "".join(partes)
+
+
 def _html_a_texto(contenido: str) -> str:
     """Convierte HTML a texto plano de forma burda, para emails sin parte `text`.
 
@@ -166,7 +200,7 @@ def _html_a_texto(contenido: str) -> str:
     """
     sin_bloques = _quitar_scripts(contenido[:MAX_CUERPO_CHARS])
     con_saltos = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>", "\n", sin_bloques)
-    return html.unescape(_ETIQUETAS.sub("", con_saltos)).strip()
+    return html.unescape(_quitar_etiquetas(con_saltos)).strip()
 
 
 def _decodificar(valor: str) -> str:
