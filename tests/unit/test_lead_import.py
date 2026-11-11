@@ -170,6 +170,7 @@ class TestLimites:
 # ── Excel ─────────────────────────────────────────────────────────────────────────────────────
 
 import io  # noqa: E402
+import re  # noqa: E402
 import time  # noqa: E402
 import zipfile  # noqa: E402
 
@@ -177,6 +178,7 @@ from openpyxl import Workbook  # noqa: E402
 
 from app.services.lead_import import (  # noqa: E402
     MAX_COLUMNAS,
+    MAX_FILAS_RECORRIDAS,
     es_xlsx,
     parsear_archivo,
     parsear_xlsx,
@@ -290,6 +292,60 @@ class TestExcel:
         ]
         with pytest.raises(CsvError, match="filas"):
             parsear_xlsx(_xlsx(filas))
+
+
+class TestExcelDisperso:
+    """Run-2 #47: filas con datos muy separadas obligaban a recorrer millones de filas vacias."""
+
+    @staticmethod
+    def _sin_dimension(filas_con_dato: list[int]) -> bytes:
+        """Un libro con un email en cada fila indicada y sin `<dimension>` en la hoja.
+
+        Sin `<dimension>`, openpyxl en modo `read_only` no sabe cuantas filas hay y genera una de
+        relleno por cada indice saltado.
+        """
+        libro = Workbook()
+        hoja = libro.active
+        assert hoja is not None
+        hoja["A1"] = "email"
+        for k, fila in enumerate(filas_con_dato, start=1):
+            hoja.cell(row=fila, column=1, value=f"u{k}@example.com")
+        crudo = io.BytesIO()
+        libro.save(crudo)
+        entrada, salida = zipfile.ZipFile(io.BytesIO(crudo.getvalue())), io.BytesIO()
+        with zipfile.ZipFile(salida, "w", zipfile.ZIP_DEFLATED) as z:
+            for item in entrada.infolist():
+                datos = entrada.read(item.filename)
+                if item.filename.startswith("xl/worksheets/sheet"):
+                    datos = re.sub(rb"<dimension[^>]*/>", b"", datos)
+                z.writestr(item, datos)
+        return salida.getvalue()
+
+    def test_datos_cada_mil_filas_se_rechazan_sin_recorrer_la_hoja(self) -> None:
+        """1000 emails separados por 1000 filas vacias: ~1M filas; antes, ~22 s de event loop."""
+        contenido = self._sin_dimension([1 + 1001 * k for k in range(1, 1001)])
+        assert len(contenido) < 50 * 1024
+        inicio = time.monotonic()
+        with pytest.raises(CsvError, match="mas alla de la fila"):
+            parsear_xlsx(contenido)
+        assert time.monotonic() - inicio < 5
+
+    def test_filas_en_blanco_intercaladas_dentro_del_tope_se_importan(self) -> None:
+        r = parsear_xlsx(self._sin_dimension([2 + 2 * k for k in range(200)]))
+        assert len(r.filas) == 200
+
+    @staticmethod
+    def _hasta(ultima: int) -> list[int]:
+        """Filas cada 900 (menos de 1000 vacias seguidas, que es el otro corte) hasta `ultima`."""
+        return sorted(range(ultima, 1, -900))
+
+    def test_un_dato_en_la_ultima_fila_permitida_entra(self) -> None:
+        filas = self._hasta(MAX_FILAS_RECORRIDAS + 1)  # la cabecera es la fila 1
+        assert len(parsear_xlsx(self._sin_dimension(filas)).filas) == len(filas)
+
+    def test_un_dato_justo_despues_del_tope_se_rechaza(self) -> None:
+        with pytest.raises(CsvError, match="mas alla de la fila"):
+            parsear_xlsx(self._sin_dimension(self._hasta(MAX_FILAS_RECORRIDAS + 2)))
 
 
 class TestExcelMalicioso:

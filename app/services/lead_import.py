@@ -304,6 +304,11 @@ def _procesar(cabeceras: list[str], registros: Iterable[list[str]]) -> CsvParsea
 MAX_DESCOMPRIMIDO = 20 * 1024 * 1024
 MAX_ENTRADAS_ZIP = 200
 MAX_COLUMNAS = 60
+#: Filas de la hoja que se recorren como mucho, contando las vacias. openpyxl en modo `read_only`
+#: genera una fila de relleno por cada indice saltado, asi que un `.xlsx` de pocos KB con datos
+#: en las filas 1, 1002, 2003... obligaria a recorrer millones (run-2 #47). El doble de
+#: `MAX_FILAS` deja sitio de sobra a las filas en blanco intercaladas de un archivo real.
+MAX_FILAS_RECORRIDAS = 2 * MAX_FILAS
 _FIRMA_ZIP = b"PK\x03\x04"
 
 
@@ -385,13 +390,20 @@ def parsear_xlsx(contenido: bytes) -> CsvParseado:
 
         def registros() -> Iterable[list[str]]:
             consecutivas_en_blanco = 0
-            for fila in filas:
+            for recorridas, fila in enumerate(filas, start=1):
                 valores = [_texto_de_celda(c) for c in fila]
                 # Una hoja con "formato hasta la fila 1.048.576" se lee entera; se corta en
                 # cuanto hay mas filas vacias seguidas de las que cabria en un archivo real.
                 consecutivas_en_blanco = 0 if any(valores) else consecutivas_en_blanco + 1
                 if consecutivas_en_blanco > 1000:
                     return
+                # Pasado el tope solo se toleran las filas vacias del final (que el corte de
+                # arriba acota a 1000 mas): un dato tan abajo es un archivo que no se importa.
+                if recorridas > MAX_FILAS_RECORRIDAS and consecutivas_en_blanco == 0:
+                    raise CsvError(
+                        f"El archivo Excel tiene datos mas alla de la fila "
+                        f"{MAX_FILAS_RECORRIDAS + 1}: quita las filas en blanco intermedias"
+                    )
                 yield valores
 
         return _procesar(cabeceras, registros())
